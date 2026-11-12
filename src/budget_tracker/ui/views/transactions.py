@@ -185,7 +185,9 @@ class TransactionsView:
             self.ctx.notify("Transaction deleted")
             self.ctx.data_changed()
 
-        name = tx.description or tx.category_name or f"Transfer to {tx.transfer_account_name}"
+        name = tx.description or tx.category_name or (
+            "Adjustment" if tx.type == TransactionType.ADJUSTMENT else f"Transfer to {tx.transfer_account_name}"
+        )
         confirm_dialog(
             self.ctx.page,
             "Delete transaction?",

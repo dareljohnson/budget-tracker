@@ -343,6 +343,7 @@ class TestEditors(unittest.TestCase):
     def test_adjustment_editor_saves_signed_amount_and_keeps_type(self):
         from budget_tracker.ui.components import _transaction_subtitle, amount_text, transaction_row
         from budget_tracker.ui.theme import EXPENSE_COLOR, INCOME_COLOR
+        from budget_tracker.ui.views.transactions import TransactionsView
 
         tx = self.repo.add_transaction(
             Transaction(
@@ -378,6 +379,10 @@ class TestEditors(unittest.TestCase):
         row = transaction_row(saved)
         self.assertEqual(row.content.controls[1].controls[0].value, "corrected")
         self.assertEqual(_transaction_subtitle(saved), "Adjustment  •  Checking  •  Nov 04, 2026")
+
+        TransactionsView(self.ctx)._confirm_delete(saved)
+        self.assertIn("corrected (-$20.50) will be permanently removed", self.page.open_dialogs[-1].content.value)
+        self.page.pop_dialog()
 
         self.repo.add_transaction(
             Transaction(

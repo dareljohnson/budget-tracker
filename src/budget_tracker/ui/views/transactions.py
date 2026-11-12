@@ -14,6 +14,7 @@ from ...repository import RepositoryError
 from ..components import card, confirm_dialog, date_field, empty_state, page_header, transaction_row
 from ..context import AppContext
 from ..theme import EXPENSE_COLOR, GAP, INCOME_COLOR
+from .statement_import import StatementImportDialog, open_imported_statements
 
 ALL = "all"
 
@@ -47,6 +48,12 @@ class TransactionsView:
         )
         self.list_column = ft.Column(spacing=2)
         self.footer = ft.Row(spacing=24)
+        self.import_button = ft.FilledTonalButton(
+            content="Import statement",
+            icon=ft.Icons.UPLOAD_FILE,
+            tooltip="Review a Regions checking statement PDF before importing it",
+            on_click=self._import_statement,
+        )
 
         self.control = ft.Column(
             [
@@ -54,6 +61,13 @@ class TransactionsView:
                     "Transactions",
                     "Track every dollar coming in and going out",
                     [
+                        self.import_button,
+                        ft.OutlinedButton(
+                            content="Imported statements…",
+                            icon=ft.Icons.HISTORY,
+                            tooltip="Undo a statement import",
+                            on_click=lambda _: open_imported_statements(self.ctx),
+                        ),
                         ft.OutlinedButton(
                             content="Export CSV",
                             icon=ft.Icons.DOWNLOAD,
@@ -155,6 +169,16 @@ class TransactionsView:
         ]
 
     # ---------- actions ----------
+    async def _import_statement(self, _: ft.Event) -> None:
+        """Open the import review; the button stays disabled while it is open."""
+        self.import_button.disabled = True
+        self.import_button.update()
+        try:
+            await StatementImportDialog(self.ctx).open()
+        finally:
+            self.import_button.disabled = False
+            self.import_button.update()
+
     def _confirm_delete(self, tx: Transaction) -> None:
         def delete() -> None:
             self.ctx.repo.delete_transaction(tx.id)

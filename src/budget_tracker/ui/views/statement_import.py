@@ -503,6 +503,7 @@ class StatementImportDialog:
             self.opening_balance.visible = False
             self.remember.visible = False
             _notify_parse_error(self.ctx, exc)
+            self.ctx.page.update()
             return
         self._install_preview(preview)
 
@@ -545,6 +546,10 @@ class StatementImportDialog:
     # ---------- commit ----------
     def _commit(self, _: ft.Event) -> None:
         if self.preview is None or not self.account.value:
+            return
+        if int(self.account.value) != self.preview.account_id:
+            # Defensive: never commit a preview built for a different account than the dropdown shows.
+            self.ctx.notify("Choose the account again so the preview can refresh", error=True)
             return
         included = [row for row in self.preview.rows if row.include]
         if not included:

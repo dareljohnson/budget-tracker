@@ -91,6 +91,15 @@ class TestAccountNumber(Base):
         self.assertEqual(self.repo.get_account(acct.id).number_last4, "060")
 
 
+class TestCategoryRules(Base):
+    def test_add_category_rule_is_idempotent(self):
+        cat = self.cats["Groceries"]
+        first = self.repo.add_category_rule("Kroger", cat.id)
+        second = self.repo.add_category_rule("kroger", cat.id)
+        self.assertEqual(first.id, second.id)
+        self.assertEqual(len(self.repo.list_category_rules()), 1)
+
+
 class TestBalanceCheck(Base):
     def test_check_balance_computes_as_of_difference(self):
         self.repo.add_transaction(Transaction(5000, TransactionType.INCOME, self.cats["Salary"].id,

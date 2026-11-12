@@ -636,6 +636,16 @@ class Repository:
             raise RepositoryError("Rule text is required")
         if self.get_category(category_id) is None:
             raise RepositoryError("Selected category does not exist")
+        # Saving the same mapping twice must not create a duplicate rule. Compare with
+        # casefold so "Kroger" and "kroger" are treated as the same rule, matching the
+        # case-insensitive lookup used by suggest_category_id.
+        wanted = match_text.casefold()
+        for row in self.conn.execute(
+            "SELECT id, match_text, category_id, priority FROM category_rules WHERE category_id = ?",
+            (category_id,),
+        ):
+            if row["match_text"].casefold() == wanted:
+                return self._row_to_category_rule(row)
         with self.conn:
             cur = self.conn.execute(
                 "INSERT INTO category_rules (match_text, category_id, priority) VALUES (?, ?, ?)",

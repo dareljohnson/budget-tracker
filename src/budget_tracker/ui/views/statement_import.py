@@ -26,6 +26,7 @@ AMOUNT_WIDTH = 92
 TYPE_WIDTH = 124
 CATEGORY_WIDTH = 148
 DESTINATION_WIDTH = 148
+RULE_WIDTH = 40
 DUPLICATE_WIDTH = 76
 
 
@@ -57,6 +58,70 @@ class _RowWidgets:
     type_dd: ft.Dropdown
     category_dd: ft.Dropdown
     destination_dd: ft.Dropdown
+    save_rule: ft.IconButton
+
+
+class SaveCategoryRuleDialog:
+    """Remember one row's description -> category mapping for future imports."""
+
+    def __init__(self, ctx: AppContext, match_text: str, category: Category) -> None:
+        self.ctx = ctx
+        self.category = category
+        self.match_text = ft.TextField(
+            label="Match text",
+            value=match_text,
+            hint_text="Text to look for in imported descriptions",
+            autofocus=True,
+            on_submit=self._save,
+        )
+        self.dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Save category rule"),
+            content=ft.Container(
+                width=420,
+                content=ft.Column(
+                    [
+                        ft.Text(
+                            "Future imports whose description contains this text use the category below.",
+                            size=12,
+                            color=ft.Colors.ON_SURFACE_VARIANT,
+                        ),
+                        self.match_text,
+                        ft.Row(
+                            [
+                                ft.Text("Category", size=12, color=ft.Colors.ON_SURFACE_VARIANT),
+                                ft.Text(category.name, weight=ft.FontWeight.W_500),
+                            ],
+                            spacing=8,
+                        ),
+                    ],
+                    spacing=12,
+                    tight=True,
+                ),
+            ),
+            actions=[
+                ft.TextButton(content="Cancel", on_click=lambda _: ctx.page.pop_dialog()),
+                ft.FilledButton(content="Save rule", icon=ft.Icons.CHECK, on_click=self._save),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+
+    def open(self) -> None:
+        self.ctx.page.show_dialog(self.dialog)
+
+    def _save(self, _: ft.Event) -> None:
+        text = (self.match_text.value or "").strip()
+        if not text:
+            self.match_text.error = "Rule text is required"
+            self.dialog.update()
+            return
+        try:
+            self.ctx.repo.add_category_rule(text, self.category.id)
+        except RepositoryError as exc:
+            self.ctx.notify(str(exc), error=True)
+            return
+        self.ctx.page.pop_dialog()
+        self.ctx.notify("Rule saved")
 
 
 class StatementImportDialog:
@@ -267,6 +332,7 @@ class StatementImportDialog:
                     ft.Text("Type", width=TYPE_WIDTH, **header_style),
                     ft.Text("Category", width=CATEGORY_WIDTH, **header_style),
                     ft.Text("Destination", width=DESTINATION_WIDTH, **header_style),
+                    ft.Text("", width=RULE_WIDTH, **header_style),
                     ft.Text("", width=DUPLICATE_WIDTH, **header_style),
                 ],
                 spacing=8,
@@ -298,6 +364,13 @@ class StatementImportDialog:
         destination_dd = ft.Dropdown(
             width=DESTINATION_WIDTH, dense=True, text_size=12, hint_text="Destination account", visible=False
         )
+        save_rule = ft.IconButton(
+            icon=ft.Icons.RULE,
+            tooltip="Save a category rule for this description",
+            icon_size=18,
+            width=RULE_WIDTH,
+            disabled=True,
+        )
         widgets = _RowWidgets(
             row=row,
             include=include,
@@ -305,6 +378,7 @@ class StatementImportDialog:
             type_dd=type_dd,
             category_dd=category_dd,
             destination_dd=destination_dd,
+            save_rule=save_rule,
         )
         self._sync_category(widgets)
         self._sync_destination(widgets)
@@ -313,6 +387,7 @@ class StatementImportDialog:
         type_dd.on_select = lambda _: self._type_changed(widgets)
         category_dd.on_select = lambda _: self._category_changed(widgets)
         destination_dd.on_select = lambda _: self._destination_changed(widgets)
+        save_rule.on_click = lambda _: self._save_rule(widgets)
 
         duplicate_badge: ft.Control
         if row.duplicate:
@@ -344,6 +419,7 @@ class StatementImportDialog:
                     type_dd,
                     category_dd,
                     destination_dd,
+                    save_rule,
                     duplicate_badge,
                 ],
                 spacing=8,
@@ -386,6 +462,7 @@ class StatementImportDialog:
         if category_type is None:
             tx.category_id = None
             widgets.category_dd.value = None
+            widgets.save_rule.disabled = True
             return
         options = self._category_options(category_type)
         widgets.category_dd.options = options
@@ -396,6 +473,7 @@ class StatementImportDialog:
         else:
             tx.category_id = self._default_category_id(category_type)
             widgets.category_dd.value = str(tx.category_id) if tx.category_id is not None else None
+        widgets.save_rule.disabled = tx.category_id is None
 
     def _sync_destination(self, widgets: _RowWidgets) -> None:
         tx = widgets.row.transaction
@@ -453,6 +531,18 @@ class StatementImportDialog:
         widgets.row.transaction.category_id = (
             int(widgets.category_dd.value) if widgets.category_dd.value else None
         )
+        widgets.save_rule.disabled = widgets.row.transaction.category_id is None
+        self.ctx.page.update()
+
+    def _save_rule(self, widgets: _RowWidgets) -> None:
+        tx = widgets.row.transaction
+        if tx.category_id is None:
+            return
+        category = self.ctx.repo.get_category(tx.category_id)
+        if category is None:
+            self.ctx.notify("That category no longer exists", error=True)
+            return
+        SaveCategoryRuleDialog(self.ctx, tx.description or "", category).open()
 
     def _destination_changed(self, widgets: _RowWidgets) -> None:
         widgets.row.transaction.transfer_account_id = (
@@ -478,6 +568,7 @@ class StatementImportDialog:
                 continue
             widgets.row.transaction.category_id = category.id
             widgets.category_dd.value = str(category.id)
+            widgets.save_rule.disabled = False
             applied += 1
         self.ctx.page.update()
         message = f"Applied {category.name} to {applied} selected row(s)"

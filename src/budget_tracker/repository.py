@@ -301,9 +301,8 @@ class Repository:
         with self.conn:
             self.conn.execute(
                 "UPDATE transactions SET amount_cents = ?, type = ?, account_id = ?, category_id = ?, "
-                "transfer_account_id = ?, occurred_on = ?, description = ?, statement_id = ?, import_ref = ? "
-                "WHERE id = ?",
-                (*self._tx_params(tx), tx.statement_id, tx.import_ref, tx.id),
+                "transfer_account_id = ?, occurred_on = ?, description = ? WHERE id = ?",
+                (*self._tx_params(tx), tx.id),
             )
 
     def delete_transaction(self, tx_id: int) -> None:

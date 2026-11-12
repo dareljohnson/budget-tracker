@@ -412,7 +412,7 @@ class BillEditor:
             category_id=None if is_card else int(self.category.value),
             pay_to_account_id=int(self.pay_to.value) if is_card else None,
             anchor_day=self.bill.anchor_day if keep_anchor else None,
-            active=True,
+            active=self.bill.active if self.bill else True,
         )
         try:
             if bill.id:

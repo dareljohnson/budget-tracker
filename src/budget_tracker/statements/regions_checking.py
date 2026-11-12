@@ -27,7 +27,6 @@ _HEADINGS = {
     "WITHDRAWALS (CONTINUED)": "withdrawals",
     "FEES": "fees",
     "FEES (CONTINUED)": "fees",
-    "DAILY BALANCE": "stop",
 }
 
 _LINE_TOLERANCE = 2.0
@@ -54,7 +53,11 @@ def _heading(line: Sequence[Word]) -> str | None:
     """Return the section a heading line opens, or ``None`` for ordinary lines."""
     if not line or line[0].x0 < 150:
         return None
-    return _HEADINGS.get(_collapsed(line).upper())
+    text = _collapsed(line).upper()
+    # The real template prints "DAILY BALANCE SUMMARY"; the table below it is not transaction data.
+    if text.startswith("DAILY BALANCE"):
+        return "stop"
+    return _HEADINGS.get(text)
 
 
 def _cents(text: str) -> int:
@@ -230,6 +233,12 @@ def parse_statement(words: Sequence[Word]) -> ParsedStatement:
     ) = _summary_amounts(lines, first_heading_top)
 
     parsed, errors = _parse_transactions(lines, period_start)
+    for _section, transaction in parsed:
+        if not period_start <= transaction.occurred_on <= period_end:
+            errors.append(
+                f"Transaction dated {transaction.occurred_on.isoformat()} is outside the statement period "
+                f"{period_start.isoformat()}..{period_end.isoformat()}"
+            )
     if errors:
         raise StatementValidationError(errors)
 

@@ -99,28 +99,35 @@ class DashboardView:
         if not totals:
             return ft.Column([header, empty_state(ft.Icons.PIE_CHART_OUTLINE, "No spending yet", "Expenses for this month will appear here.")])
 
-        stacked = ft.Container(
-            content=ft.Row(
-                [ft.Container(bgcolor=t.color, expand=max(1, round(t.total_cents / total_expense * 1000)), tooltip=t.name) for t in totals],
-                spacing=2,
-            ),
-            height=14,
-            border_radius=7,
-            clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
-        )
+        denominator = sum(t.total_cents for t in totals if t.total_cents > 0)
+        stacked = None
+        if denominator:
+            stacked = ft.Container(
+                content=ft.Row(
+                    [ft.Container(bgcolor=t.color, expand=max(1, round(t.total_cents / denominator * 1000)), tooltip=t.name) for t in totals],
+                    spacing=2,
+                ),
+                height=14,
+                border_radius=7,
+                clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
+            )
         legend = [
             ft.Row(
                 [
                     ft.Container(width=10, height=10, border_radius=5, bgcolor=t.color),
                     ft.Text(t.name, expand=True, size=13),
-                    ft.Text(f"{t.total_cents / total_expense:.0%}", size=12, color=ft.Colors.ON_SURFACE_VARIANT, width=44, text_align=ft.TextAlign.RIGHT),
+                    ft.Text(f"{t.total_cents / denominator:.0%}" if denominator else "—", size=12, color=ft.Colors.ON_SURFACE_VARIANT, width=44, text_align=ft.TextAlign.RIGHT),
                     ft.Text(format_money(t.total_cents), size=13, weight=ft.FontWeight.W_600, width=100, text_align=ft.TextAlign.RIGHT),
                 ],
                 spacing=10,
             )
             for t in totals[:6]
         ]
-        return ft.Column([header, stacked, ft.Container(height=4), *legend], spacing=10)
+        controls = [header]
+        if stacked is not None:
+            controls.append(stacked)
+        controls += [ft.Container(height=4), *legend]
+        return ft.Column(controls, spacing=10)
 
     @staticmethod
     def _trend(trend: list[MonthTotal]) -> ft.Column:

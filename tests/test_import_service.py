@@ -155,6 +155,20 @@ class TestImport(Base):
         self.repo.delete_category_rule(self.repo.list_category_rules()[0].id)
         self.assertIsNone(self.repo.suggest_category_id("Card Purchase Kroger #443", TransactionType.EXPENSE))
 
+    def test_editing_a_transaction_preserves_import_metadata(self):
+        self.preview()
+        imported = self.repo.list_transactions(account_id=self.accts["Checking"].id)[0]
+        self.assertIsNotNone(imported.statement_id)
+        self.assertIsNotNone(imported.import_ref)
+        edited = Transaction(imported.amount_cents, imported.type, imported.category_id,
+                             imported.occurred_on, "edited description",
+                             id=imported.id, account_id=imported.account_id)
+        self.repo.update_transaction(edited)
+        again = next(t for t in self.repo.list_transactions(account_id=self.accts["Checking"].id)
+                     if t.id == imported.id)
+        self.assertEqual((again.statement_id, again.import_ref),
+                         (imported.statement_id, imported.import_ref))
+
     def test_deposit_can_be_retyped_as_refund(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "statement.pdf"

@@ -64,15 +64,28 @@ class TestRegionsParser(unittest.TestCase):
         self.assertEqual(stmt.transactions[0].description, "Card Purchase Merchant")
         self.assertEqual(stmt.transactions[0].amount_cents, 20_000)
 
-    def test_december_transaction_uses_start_year(self):
+    def test_daily_balance_summary_heading_is_skipped(self):
+        words = [w for w in sample_words() if not (w.text in ("DAILY", "BALANCE") and w.top == 660)]
+        words += [W("DAILY", 260, 660), W("BALANCE", 292, 660), W("SUMMARY", 345, 660)]
+        self.assertEqual(len(parse_statement(words).transactions), 4)
+
+    def test_out_of_period_date_is_rejected(self):
+        from budget_tracker.statements.model import StatementValidationError
+        words = [W("08/20", w.x0, w.top) if w.text == "09/25" else w for w in sample_words()]
+        with self.assertRaises(StatementValidationError) as ctx:
+            parse_statement(words)
+        self.assertTrue(any("outside the statement period" in e for e in ctx.exception.errors))
+
+    def _december_words(self):
         words = sample_words(period=("December", "16,", "2025", "January", "15,", "2026"))
-        words = [W("12/20", w.x0, w.top) if w.text == "09/25" else w for w in words]
-        self.assertEqual(parse_statement(words).transactions[2].occurred_on, date(2025, 12, 20))
+        swaps = {"09/20": "12/18", "10/02": "01/03", "09/25": "12/25", "09/30": "01/05"}
+        return [W(swaps[w.text], w.x0, w.top) if w.text in swaps else w for w in words]
+
+    def test_december_transaction_uses_start_year(self):
+        self.assertEqual(parse_statement(self._december_words()).transactions[2].occurred_on, date(2025, 12, 25))
 
     def test_january_transaction_uses_next_year(self):
-        words = sample_words(period=("December", "16,", "2025", "January", "15,", "2026"))
-        words = [W("01/03", w.x0, w.top) if w.text == "10/02" else w for w in words]
-        self.assertEqual(parse_statement(words).transactions[1].occurred_on, date(2026, 1, 3))
+        self.assertEqual(parse_statement(self._december_words()).transactions[1].occurred_on, date(2026, 1, 3))
 
     def test_validation_rejects_total_mismatch(self):
         from budget_tracker.statements.model import StatementValidationError

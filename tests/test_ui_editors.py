@@ -11,7 +11,7 @@ except ImportError:  # pragma: no cover - UI tests need Flet installed
     ft = None
 
 from budget_tracker.db import connect
-from budget_tracker.models import Transaction, TransactionType
+from budget_tracker.models import Bill, BillFrequency, CategoryTotal, Transaction, TransactionType
 from budget_tracker.repository import Repository
 from budget_tracker.services import BudgetService
 
@@ -198,6 +198,27 @@ class TestEditors(unittest.TestCase):
         [alert] = self.page.open_dialogs
         alert.actions[-1].on_click(None)
         self.assertEqual((opened, self.page.open_dialogs), ([True], []))
+
+    def test_bill_editor_preserves_inactive_state(self):
+        from budget_tracker.ui.views.bills import BillEditor
+        self.repo.add_bill(Bill(
+            name="Gym", amount_cents=4000, frequency=BillFrequency.ONCE,
+            next_due=date(2026, 3, 1), account_id=self.accts["Checking"].id,
+            category_id=self.repo.list_categories(TransactionType.EXPENSE)[0].id,
+            active=False,
+        ))
+        bill = self.repo.list_bills()[0]
+        editor = BillEditor(self.ctx, bill)
+        editor.open()
+        editor.name.value = "Gym (renamed)"
+        editor._save(None)
+        self.assertFalse(self.repo.get_bill(bill.id).active)
+
+    def test_dashboard_breakdown_survives_zero_net_spending(self):
+        from budget_tracker.ui.views.dashboard import DashboardView
+        self.assertIsNotNone(
+            DashboardView._breakdown([CategoryTotal(1, "Groceries", "#43A047", 5000)], 0)
+        )
 
 
 if __name__ == "__main__":

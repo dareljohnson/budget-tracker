@@ -75,9 +75,20 @@ the venv launcher fail silently.
 
 1. `flet build <platform>` creates a Flutter project in `build/flutter`. It packages `src/main.py`, the
    `budget_tracker` package and `src/assets/icon.png`, along with a **Python 3.13** runtime (pinned with
-   `--python-version 3.13`) and the dependencies listed in `[project].dependencies` (just `flet`).
+   `--python-version 3.13`) and the dependencies listed in `[project].dependencies` (`flet` and
+   `pdfplumber`).
 2. Flutter compiles a native executable into `build/<platform>/`.
 3. The scripts in `packaging/<platform>/build.*` wrap that folder in an installer under `build/installer/`.
+
+### Runtime dependencies
+
+The statement importer uses **pdfplumber** to read PDFs. It is a normal runtime dependency in
+`pyproject.toml`, so `flet build` bundles it automatically. The packaging scripts need no change for it.
+
+Import has limits: it supports **Regions checking statements only** — no OCR or scanned images, no bank
+feeds, and no OFX/QIF/CAMT/CSV import. PDFs are never stored; only the file's SHA-256 hash and, at most, the
+last four digits of the account number are kept. See
+[Importing bank statements](README.md#importing-bank-statements) in the README.
 
 Flutter is **downloaded automatically** to `~/flutter/<version>` on the first build, which is a large one-time
 download. App metadata comes from `pyproject.toml`:

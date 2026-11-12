@@ -1,9 +1,13 @@
 """UI logic tests: drive the editors with real Flet controls against an in-memory page stub."""
 
+import tempfile
 import unittest
 import unittest.mock
 from datetime import date
+from pathlib import Path
 from types import SimpleNamespace
+
+from statement_fixture import make_statement_pdf
 
 try:
     import flet as ft
@@ -17,10 +21,11 @@ from budget_tracker.models import (
     Bill,
     BillFrequency,
     CategoryTotal,
+    Statement,
     Transaction,
     TransactionType,
 )
-from budget_tracker.repository import Repository
+from budget_tracker.repository import Repository, RepositoryError
 from budget_tracker.services import BudgetService
 
 
@@ -71,6 +76,102 @@ class TestEditors(unittest.TestCase):
         editor = TransactionEditor(self.ctx, kwargs.pop("tx", None), **kwargs)
         editor.open()
         return editor
+
+    def _import_row(self, type_: TransactionType, cents: int, day: int, description: str,
+                    *, duplicate: bool = False) -> "object":
+        from budget_tracker.statements.model import ImportRow
+
+        category_type = type_.category_type or TransactionType.EXPENSE
+        category = self.repo.list_categories(category_type)[0]
+        account = self.accts["Checking"]
+        return ImportRow(
+            transaction=Transaction(
+                cents, type_, category.id, date(2026, 9, day), description,
+                account_id=account.id,
+            ),
+            duplicate=duplicate,
+            direction="income" if type_ is TransactionType.INCOME else "expense",
+        )
+
+    def _import_dialog(self, rows: list):
+        from budget_tracker.statements.model import ImportPreview
+        from budget_tracker.ui.views.statement_import import StatementImportDialog
+
+        account = self.accts["Checking"]
+        statement = Statement(
+            account_id=account.id,
+            institution="Regions Bank",
+            account_label="62+ LIFEGREEN CHECKING",
+            period_start=date(2026, 9, 16),
+            period_end=date(2026, 10, 15),
+            beginning_cents=100_000,
+            deposits_cents=50_000,
+            withdrawals_cents=30_000,
+            fees_cents=1_000,
+            ending_cents=119_000,
+            file_sha256="c" * 64,
+        )
+        dialog = StatementImportDialog(self.ctx)
+        dialog.account.value = str(account.id)
+        dialog._install_preview(ImportPreview(statement=statement, account_id=account.id, rows=rows))
+        return dialog
+
+    def _widget_for(self, dialog, description: str):
+        return next(
+            widgets for widgets in dialog._row_widgets
+            if widgets.row.transaction.description == description
+        )
+
+    def test_statement_import_dialog_commits_only_included_rows(self):
+        dialog = self._import_dialog([
+            self._import_row(TransactionType.EXPENSE, 2_000, 20, "Groceries"),
+            self._import_row(TransactionType.EXPENSE, 3_000, 25, "Rent"),
+        ])
+        groceries = self._widget_for(dialog, "Groceries")
+        groceries.include.value = False
+        dialog._row_toggled(groceries)
+
+        with unittest.mock.patch.object(self.ctx.service, "commit_import") as commit:
+            commit.return_value = dialog.preview.statement
+            dialog._commit(None)
+
+        payload = commit.call_args.args[1]
+        self.assertEqual([row.transaction.description for row in payload], ["Rent"])
+        self.assertEqual(len(self.repo.list_transactions()), 0)
+
+    def test_statement_import_dialog_bulk_category_applies_to_selected_rows(self):
+        dialog = self._import_dialog([
+            self._import_row(TransactionType.EXPENSE, 2_000, 20, "Groceries"),
+            self._import_row(TransactionType.EXPENSE, 3_000, 25, "Rent"),
+            self._import_row(TransactionType.INCOME, 4_000, 2, "Payroll"),
+        ])
+        category = next(c for c in self.repo.list_categories(TransactionType.EXPENSE) if c.name == "Groceries")
+        dialog.apply_category.value = str(category.id)
+        dialog._apply_category(None)
+
+        self.assertEqual(
+            [self._widget_for(dialog, name).row.transaction.category_id for name in ("Groceries", "Rent")],
+            [category.id, category.id],
+        )
+        self.assertNotEqual(self._widget_for(dialog, "Payroll").row.transaction.category_id, category.id)
+
+    def test_statement_import_dialog_flags_duplicates_for_user_choice(self):
+        dialog = self._import_dialog([
+            self._import_row(TransactionType.EXPENSE, 2_000, 20, "Groceries", duplicate=True),
+        ])
+        duplicate = self._widget_for(dialog, "Groceries")
+        self.assertFalse(duplicate.include.value)
+        self.assertFalse(duplicate.row.include)
+        row_container = dialog.rows_column.controls[1]
+        self.assertIn("Duplicate", str(row_container.content.controls[-1].content.value))
+
+        # The user may deliberately include a duplicate; only then is it part of the payload.
+        duplicate.include.value = True
+        dialog._row_toggled(duplicate)
+        with unittest.mock.patch.object(self.ctx.service, "commit_import") as commit:
+            commit.return_value = dialog.preview.statement
+            dialog._commit(None)
+        self.assertEqual([row.transaction.description for row in commit.call_args.args[1]], ["Groceries"])
 
     def test_refund_on_card_then_pay_card_from_accounts_view(self):
         from budget_tracker.ui.views.accounts import AccountsView
@@ -243,6 +344,105 @@ class TestEditors(unittest.TestCase):
         self.assertEqual(dialog.stated.error, "Enter the amount owed as a positive number")
         self.assertEqual(self.repo.list_reconciliations(self.accts["Credit Card"].id), [])
 
+    def test_deposit_retyped_as_transfer_credits_statement_account(self):
+        """A deposit retyped as a transfer must add money to the statement account.
+
+        The ledger debits ``account_id`` and credits ``transfer_account_id``, so an income-origin
+        transfer is oriented counterparty -> statement account, the opposite of an expense transfer.
+        """
+        from budget_tracker.ui.views.statement_import import StatementImportDialog
+
+        checking = self.accts["Checking"]
+        cash = self.accts["Cash"]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "statement.pdf"
+            make_statement_pdf(path)
+            preview = self.ctx.service.prepare_import(path, checking.id)
+        dialog = StatementImportDialog(self.ctx)
+        dialog._path = path
+        dialog.account.value = str(checking.id)
+        dialog._install_preview(preview)
+        # Isolate the transfer: include only the $300 payroll deposit and do not set an opening balance.
+        deposit = next(
+            widgets
+            for widgets in dialog._row_widgets
+            if widgets.row.transaction.type is TransactionType.INCOME
+            and widgets.row.transaction.amount_cents == 30_000
+        )
+        for widgets in dialog._row_widgets:
+            widgets.include.value = widgets is deposit
+            dialog._row_toggled(widgets)
+        dialog.opening_balance.value = False
+
+        deposit.type_dd.value = TransactionType.TRANSFER.value
+        dialog._type_changed(deposit)
+        self.assertEqual(deposit.destination_dd.label, "From account")
+        deposit.destination_dd.value = str(cash.id)
+        dialog._destination_changed(deposit)
+
+        dialog._commit(None)
+        self.assertEqual(self.page.errors, [])
+        balances = {b.account.name: b.balance_cents for b in self.repo.account_balances()}
+        self.assertEqual(balances["Checking"], 30_000)
+        self.assertEqual(balances["Cash"], -30_000)
+        [imported] = self.repo.list_transactions(account_id=cash.id)
+        self.assertEqual(
+            (imported.account_id, imported.transfer_account_id),
+            (cash.id, checking.id),
+        )
+
+    def test_statement_import_dialog_confirms_account_switch_after_edits(self):
+        dialog = self._import_dialog([self._import_row(TransactionType.EXPENSE, 2_000, 20, "Groceries")])
+        dialog._path = Path("unused.pdf")
+        widgets = self._widget_for(dialog, "Groceries")
+        other = next(c for c in self.repo.list_categories(TransactionType.EXPENSE) if c.id != widgets.row.transaction.category_id)
+        widgets.category_dd.value = str(other.id)
+        dialog._category_changed(widgets)
+
+        dialog.account.value = str(self.accts["Cash"].id)
+        dialog._account_changed(None)
+        [confirm] = self.page.open_dialogs
+        self.assertEqual(confirm.title.value, "Discard row changes?")
+        confirm.actions[0].on_click(None)
+        self.assertEqual(dialog.account.value, str(self.accts["Checking"].id))
+
+        dialog.account.value = str(self.accts["Cash"].id)
+        with unittest.mock.patch.object(dialog, "_load_for_account") as load:
+            dialog._account_changed(None)
+            [confirm] = self.page.open_dialogs
+            confirm.actions[1].on_click(None)
+        load.assert_called_once_with(self.accts["Cash"].id)
+
+    def test_balance_check_adjustment_refreshes_when_follow_up_check_fails(self):
+        from budget_tracker.ui.views.reconcile import BalanceCheckDialog
+
+        dialog = BalanceCheckDialog(self.ctx, self.accts["Checking"])
+        dialog.open()
+        dialog.date.value = "2026-10-05"
+        dialog.stated.value = "45"
+        with unittest.mock.patch.object(type(dialog.dialog), "update"):
+            dialog._save(None)
+        dialog.adjustment.value = "-5.00"
+        changes: list[bool] = []
+        self.ctx.on_data_changed(lambda: changes.append(True))
+        with unittest.mock.patch.object(
+            self.ctx.service, "check_balance", side_effect=RepositoryError("follow-up failed")
+        ):
+            dialog._adjust(None)
+
+        self.assertEqual(changes, [True])
+        self.assertEqual(self.page.errors, ["follow-up failed"])
+        self.assertEqual(
+            {b.account.name: b.balance_cents for b in self.repo.account_balances()}["Checking"], -500
+        )
+
+    def test_import_dialog_maps_read_error_to_message(self):
+        from budget_tracker.statements.model import StatementReadError
+        from budget_tracker.ui.views.statement_import import _notify_parse_error
+
+        _notify_parse_error(self.ctx, StatementReadError("library detail"))
+        self.assertEqual(self.page.errors, ["Could not read this PDF. Nothing was imported."])
+
     def test_views_render(self):
         from budget_tracker.ui.views.accounts import AccountsView
         from budget_tracker.ui.views.dashboard import DashboardView
@@ -337,8 +537,21 @@ class TestEditors(unittest.TestCase):
     def test_dashboard_breakdown_survives_zero_net_spending(self):
         from budget_tracker.ui.views.dashboard import DashboardView
         self.assertIsNotNone(
-            DashboardView._breakdown([CategoryTotal(1, "Groceries", "#43A047", 5000)], 0)
+            DashboardView._breakdown([CategoryTotal(1, "Groceries", "#43A047", 5000)])
         )
+
+    def test_dashboard_breakdown_skips_stacked_bar_without_positive_totals(self):
+        from budget_tracker.ui.views.dashboard import DashboardView
+        totals = [
+            CategoryTotal(1, "Groceries", "#43A047", 0),
+            CategoryTotal(2, "Refunded", "#E53935", -500),
+        ]
+        controls = DashboardView._breakdown(totals).controls
+        self.assertFalse(
+            any(isinstance(control, ft.Container) and control.height == 14 for control in controls)
+        )
+        legend = controls[-1]
+        self.assertEqual(legend.controls[2].value, "—")
 
     def test_adjustment_editor_saves_signed_amount_and_keeps_type(self):
         from budget_tracker.ui.components import _transaction_subtitle, amount_text, transaction_row

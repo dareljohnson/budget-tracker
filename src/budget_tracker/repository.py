@@ -183,6 +183,10 @@ class Repository:
             raise RepositoryError(f"An account named '{name}' already exists") from exc
 
     def set_account_number(self, account_id: int, digits: str | None) -> None:
+        if digits is not None and not (
+            isinstance(digits, str) and digits.isascii() and digits.isdigit() and len(digits) <= 4
+        ):
+            raise RepositoryError("Account number digits must be 1 to 4 ASCII digits")
         with self.conn:
             self.conn.execute("UPDATE accounts SET number_last4 = ? WHERE id = ?", (digits, account_id))
 

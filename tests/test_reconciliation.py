@@ -90,6 +90,15 @@ class TestAccountNumber(Base):
         self.repo.set_account_number(acct.id, "060")
         self.assertEqual(self.repo.get_account(acct.id).number_last4, "060")
 
+    def test_rejects_malformed_digits(self):
+        acct = self.repo.add_account(Account("Joint", AccountKind.CHECKING, number_last4="3060"))
+        for invalid in ("12a4", "12345", "", "٠٦٠", " 060"):
+            with self.assertRaises(RepositoryError):
+                self.repo.set_account_number(acct.id, invalid)
+            self.assertEqual(self.repo.get_account(acct.id).number_last4, "3060")
+        self.repo.set_account_number(acct.id, None)
+        self.assertIsNone(self.repo.get_account(acct.id).number_last4)
+
 
 class TestCategoryRules(Base):
     def test_add_category_rule_is_idempotent(self):

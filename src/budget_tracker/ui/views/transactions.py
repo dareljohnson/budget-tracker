@@ -170,14 +170,15 @@ class TransactionsView:
 
     # ---------- actions ----------
     async def _import_statement(self, _: ft.Event) -> None:
-        """Open the import review; the button stays disabled while it is open."""
+        """Open the import review; the button is re-enabled when that dialog closes."""
         self.import_button.disabled = True
         self.import_button.update()
-        try:
-            await StatementImportDialog(self.ctx).open()
-        finally:
-            self.import_button.disabled = False
-            self.import_button.update()
+        dialog = StatementImportDialog(self.ctx, on_close=self._import_closed)
+        await dialog.open()
+
+    def _import_closed(self) -> None:
+        self.import_button.disabled = False
+        self.import_button.update()
 
     def _confirm_delete(self, tx: Transaction) -> None:
         def delete() -> None:

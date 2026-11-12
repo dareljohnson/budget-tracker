@@ -8,11 +8,12 @@ A personal budget tracker desktop app built with **Python 3.13**, **[Flet](https
 - **Accounts**: checking, savings, credit card, cash, and other accounts, each with a live balance. Credit cards show the amount owed, and **Pay card** records a payment from your checking account.
 - **Balance checks and adjustments**: check any account against the balance your bank shows and see the difference. If they disagree, record a signed correction that changes the account balance only — adjustments are excluded from income, spending, and budgets. Earlier checks are kept in a history.
 - **Bills and reminders**: recurring bills (one-time, weekly, monthly, yearly) and credit card payments, each with a due date. Overdue and soon-due bills show on the Bills page, on the Dashboard, and in a pop-up when the app starts. **Mark paid** records the payment and moves the bill to its next due date. Windows notifications can also remind you when the app is closed (see below).
-- **Transactions**: four types, each tied to an account:
+- **Transactions**: five types, each tied to an account:
   - **Expense**: money spent, e.g. groceries paid with a credit card.
   - **Income**: money received into an account.
   - **Refund**: money returned for a purchase. It reduces spending (and budget usage) in its category.
   - **Transfer**: money moved between your own accounts, e.g. a credit card payment or moving money to savings. Transfers change balances but are **not** counted as income or spending, so card purchases aren't counted twice.
+  - **Adjustment**: a signed correction recorded from a balance check. It changes the account balance only and is excluded from income, spending, and budgets.
 
   Search and filter by type, account, category, or month, and export the current view to CSV.
 - **Statement import**: import a Regions checking statement PDF from the Transactions page. The PDF is parsed locally and verified against the statement's own summary totals, and nothing is written until you review it. When exactly one saved account number ending matches, that account is preselected, and a mismatch blocks the import. Each row has its own type, category, and (for transfers) destination account; a category can be applied to all selected rows at once, duplicate rows are flagged and left unchecked, and an opening balance can be set when the account has no earlier history. You can also remember the account's last four digits and save a category rule from a row. **Imported statements…** lets you undo an import. See [Importing bank statements](#importing-bank-statements) for the supported files and limits.

@@ -266,10 +266,17 @@ class BalanceCheckDialog:
             return
         note = (self.note.value or "").strip()
         as_of = self.last_check.as_of
+        recorded = False
         try:
             self.ctx.service.adjust_balance(self.account.id, as_of, amount, note)
+            recorded = True
             follow_up = self.ctx.service.check_balance(self.account.id, as_of, self._stated_cents, note)
         except RepositoryError as exc:
+            if recorded:
+                # The correction is already in the ledger; refresh even though the follow-up failed.
+                self._refresh_status()
+                self._render_history()
+                self.ctx.data_changed()
             self.ctx.notify(str(exc), error=True)
             return
         self._show_result(follow_up)

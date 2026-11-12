@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import flet as ft
 
 from ...formatting import format_money
-from ...models import Category, Statement, TransactionType
+from ...models import Account, Category, Reconciliation, Statement, TransactionType
 from ...repository import RepositoryError
 from ...statements.model import (
     ImportPreview,
     ImportRow,
+    StatementReadError,
     StatementValidationError,
     UnsupportedStatementError,
 )
@@ -40,6 +42,8 @@ def _notify_parse_error(ctx: AppContext, exc: Exception) -> None:
             "This doesn't look like a supported Regions checking statement. Nothing was imported.",
             error=True,
         )
+    elif isinstance(exc, StatementReadError):
+        ctx.notify("Could not read this PDF. Nothing was imported.", error=True)
     elif isinstance(exc, OSError):
         ctx.notify(f"Could not read this PDF: {exc.strerror or exc}. Nothing was imported.", error=True)
     else:
@@ -127,8 +131,11 @@ class SaveCategoryRuleDialog:
 class StatementImportDialog:
     """Review dialog for one statement PDF. Nothing is written until Import is pressed."""
 
-    def __init__(self, ctx: AppContext) -> None:
+    def __init__(self, ctx: AppContext, *, on_close: Callable[[], None] | None = None) -> None:
         self.ctx = ctx
+        self.on_close = on_close
+        self._closed_notified = False
+        self._edited = False
         self._file_picker = ft.FilePicker()
         self._path: Path | None = None
         self.preview: ImportPreview | None = None
@@ -146,6 +153,36 @@ class StatementImportDialog:
         self.match_note = ft.Text("", size=12, color=INCOME_COLOR, weight=ft.FontWeight.W_600, visible=False)
         self.mismatch_note = ft.Text("", size=12, color=EXPENSE_COLOR, weight=ft.FontWeight.W_600, visible=False)
         self.statement_meta = ft.Text("", size=12, color=ft.Colors.ON_SURFACE_VARIANT)
+        self.projection_statement = ft.Text("", weight=ft.FontWeight.W_600)
+        self.projection_balance_label = ft.Text("", size=12, color=ft.Colors.ON_SURFACE_VARIANT)
+        self.projection_balance = ft.Text("", weight=ft.FontWeight.W_600)
+        self.projection_difference = ft.Text("", weight=ft.FontWeight.W_600)
+        self.projection_note = ft.Text("", size=11, color=ft.Colors.ON_SURFACE_VARIANT, visible=False)
+        self.projection_panel = ft.Container(
+            content=ft.Column(
+                [
+                    ft.Text("Reconciliation preview", size=12, weight=ft.FontWeight.W_600),
+                    ft.Row(
+                        [ft.Text("Statement ending", size=12, color=ft.Colors.ON_SURFACE_VARIANT, expand=True),
+                         self.projection_statement],
+                        spacing=8,
+                    ),
+                    ft.Row([self.projection_balance_label, self.projection_balance], spacing=8),
+                    ft.Row(
+                        [ft.Text("Projected difference", size=12, color=ft.Colors.ON_SURFACE_VARIANT, expand=True),
+                         self.projection_difference],
+                        spacing=8,
+                    ),
+                    self.projection_note,
+                ],
+                spacing=4,
+                tight=True,
+            ),
+            padding=ft.Padding.symmetric(horizontal=12, vertical=10),
+            border_radius=10,
+            bgcolor=ft.Colors.with_opacity(0.06, INCOME_COLOR),
+            visible=False,
+        )
         self.summary_holder = ft.Row([], spacing=28, wrap=True, vertical_alignment=ft.CrossAxisAlignment.CENTER)
         self.rows_count = ft.Text("", size=12, color=ft.Colors.ON_SURFACE_VARIANT)
         self.rows_column = ft.Column(spacing=2, tight=True)
@@ -161,7 +198,7 @@ class StatementImportDialog:
         self.apply_button = ft.FilledTonalButton(
             content="Apply", icon=ft.Icons.CHECK, on_click=self._apply_category
         )
-        self.opening_balance = ft.Checkbox(value=True, visible=False)
+        self.opening_balance = ft.Checkbox(value=True, visible=False, on_change=lambda _: self._refresh_projection())
         self.remember = ft.Checkbox(value=True, visible=False)
         self.import_button = ft.FilledButton(
             content="Import", icon=ft.Icons.UPLOAD_FILE, disabled=True, on_click=self._commit
@@ -182,6 +219,7 @@ class StatementImportDialog:
                             vertical_alignment=ft.CrossAxisAlignment.CENTER,
                         ),
                         self.statement_meta,
+                        self.projection_panel,
                         ft.Container(
                             content=self.summary_holder,
                             padding=14,
@@ -220,11 +258,21 @@ class StatementImportDialog:
         while self.dialog.open:
             if self.ctx.page.pop_dialog() is None:
                 break
+        self._finish()
+
+    def _finish(self) -> None:
+        """Release the opener exactly once, whether the dialog was shown, cancelled, or failed."""
+        if self._closed_notified:
+            return
+        self._closed_notified = True
+        if self.on_close is not None:
+            self.on_close()
 
     # ---------- opening ----------
     async def open(self) -> None:
         if not self._accounts:
             self.ctx.notify("Create an account first, then import a statement", error=True)
+            self._finish()
             return
         try:
             files = await self._file_picker.pick_files(
@@ -234,9 +282,11 @@ class StatementImportDialog:
             )
         except Exception as exc:  # noqa: BLE001 - native picker can be unavailable
             self.ctx.notify(f"Could not open the file picker: {exc}", error=True)
+            self._finish()
             return
         chosen = next((f for f in files or [] if f.path), None) if files else None
         if chosen is None:
+            self._finish()
             return
         self._path = Path(chosen.path)
 
@@ -244,8 +294,10 @@ class StatementImportDialog:
         # account reveals the statement's account digits, which then select the real account.
         try:
             preview = self.ctx.service.prepare_import(self._path, self._accounts[0].id)
-        except (StatementValidationError, UnsupportedStatementError, OSError, RepositoryError) as exc:
+        except (StatementValidationError, UnsupportedStatementError, StatementReadError, OSError,
+                RepositoryError) as exc:
             _notify_parse_error(self.ctx, exc)
+            self._finish()
             return
 
         matched = self.ctx.service.match_account(preview.statement.account_last4)
@@ -254,8 +306,10 @@ class StatementImportDialog:
             if matched.id != preview.account_id:
                 try:
                     preview = self.ctx.service.prepare_import(self._path, matched.id)
-                except (StatementValidationError, UnsupportedStatementError, OSError, RepositoryError) as exc:
+                except (StatementValidationError, UnsupportedStatementError, StatementReadError, OSError,
+                        RepositoryError) as exc:
                     _notify_parse_error(self.ctx, exc)
+                    self._finish()
                     return
         self._install_preview(preview)
         self.ctx.page.show_dialog(self.dialog)
@@ -298,6 +352,7 @@ class StatementImportDialog:
             count_text += f"  •  {duplicates} flagged as duplicate(s)"
         self.rows_count.value = count_text
         self.select_all.value = bool(preview.rows) and all(row.include for row in preview.rows)
+        self._edited = False
         self._refresh_account_dependent()
         self.ctx.page.update()
 
@@ -352,12 +407,7 @@ class StatementImportDialog:
             value=tx.type.value,
             options=[
                 ft.DropdownOption(key=type_.value, text=type_.label)
-                for type_ in (
-                    TransactionType.EXPENSE,
-                    TransactionType.INCOME,
-                    TransactionType.REFUND,
-                    TransactionType.TRANSFER,
-                )
+                for type_ in self._allowed_types(row)
             ],
         )
         category_dd = ft.Dropdown(width=CATEGORY_WIDTH, dense=True, text_size=12, hint_text="Category")
@@ -432,6 +482,19 @@ class StatementImportDialog:
         return container, widgets
 
     # ---------- row helpers ----------
+    @staticmethod
+    def _income_origin(row: ImportRow) -> bool:
+        """Whether the statement printed this row in the deposits/credits section."""
+        if row.direction is not None:
+            return row.direction == "income"
+        return row.transaction.type is TransactionType.INCOME
+
+    def _allowed_types(self, row: ImportRow) -> tuple[TransactionType, ...]:
+        """Conversions the spec allows, based on the row's parsed direction."""
+        if self._income_origin(row):
+            return (TransactionType.INCOME, TransactionType.REFUND, TransactionType.TRANSFER)
+        return (TransactionType.EXPENSE, TransactionType.TRANSFER)
+
     def _categories_for(self, category_type: TransactionType) -> list[Category]:
         if category_type not in self._categories:
             self._categories[category_type] = self.ctx.repo.list_categories(category_type)
@@ -483,6 +546,11 @@ class StatementImportDialog:
             tx.transfer_account_id = None
             widgets.destination_dd.value = None
             return
+        # An income-origin transfer moves money from the counterparty into the statement account,
+        # so the picker chooses the source; an expense-origin transfer chooses the destination.
+        widgets.destination_dd.label = (
+            "From account" if self._income_origin(widgets.row) else "Destination account"
+        )
         options = [
             ft.DropdownOption(key=str(account.id), text=account.name)
             for account in self._accounts
@@ -510,6 +578,7 @@ class StatementImportDialog:
 
     def _row_toggled(self, widgets: _RowWidgets) -> None:
         widgets.row.include = bool(widgets.include.value)
+        self._edited = True
         self.select_all.value = bool(self._row_widgets) and all(w.include.value for w in self._row_widgets)
         self.ctx.page.update()
 
@@ -518,10 +587,17 @@ class StatementImportDialog:
         for widgets in self._row_widgets:
             widgets.row.include = value
             widgets.include.value = value
+        self._edited = True
         self.ctx.page.update()
 
     def _type_changed(self, widgets: _RowWidgets) -> None:
-        widgets.row.transaction.type = TransactionType(widgets.type_dd.value)
+        chosen = TransactionType(widgets.type_dd.value)
+        if chosen not in self._allowed_types(widgets.row):
+            # Defensive: only offer expense->transfer, income->transfer, income->refund.
+            widgets.type_dd.value = widgets.row.transaction.type.value
+            return
+        widgets.row.transaction.type = chosen
+        self._edited = True
         self._sync_category(widgets)
         self._sync_destination(widgets)
         self._sync_amount(widgets)
@@ -532,6 +608,7 @@ class StatementImportDialog:
             int(widgets.category_dd.value) if widgets.category_dd.value else None
         )
         widgets.save_rule.disabled = widgets.row.transaction.category_id is None
+        self._edited = True
         self.ctx.page.update()
 
     def _save_rule(self, widgets: _RowWidgets) -> None:
@@ -548,6 +625,7 @@ class StatementImportDialog:
         widgets.row.transaction.transfer_account_id = (
             int(widgets.destination_dd.value) if widgets.destination_dd.value else None
         )
+        self._edited = True
 
     def _apply_category(self, _: ft.Event) -> None:
         if not self.apply_category.value:
@@ -570,6 +648,7 @@ class StatementImportDialog:
             widgets.category_dd.value = str(category.id)
             widgets.save_rule.disabled = False
             applied += 1
+        self._edited = True
         self.ctx.page.update()
         message = f"Applied {category.name} to {applied} selected row(s)"
         if skipped:
@@ -592,9 +671,46 @@ class StatementImportDialog:
             self._refresh_account_dependent()
             self.ctx.page.update()
             return
+        if self.preview is not None and self._edited:
+            self._confirm_account_switch(account_id)
+            return
+        self._load_for_account(account_id)
+
+    def _confirm_account_switch(self, account_id: int) -> None:
+        """Switching accounts re-parses and discards row edits, so ask before doing it."""
+        previous = str(self.preview.account_id) if self.preview is not None else None
+
+        def cancel(_: ft.Event) -> None:
+            self.ctx.page.pop_dialog()
+            self.account.value = previous
+            self.ctx.page.update()
+
+        def proceed(_: ft.Event) -> None:
+            self.ctx.page.pop_dialog()
+            self._load_for_account(account_id)
+
+        self.ctx.page.show_dialog(
+            ft.AlertDialog(
+                modal=True,
+                icon=ft.Icon(ft.Icons.WARNING_AMBER_ROUNDED, color=WARNING_COLOR),
+                title=ft.Text("Discard row changes?"),
+                content=ft.Text(
+                    "Changing the account re-reads the statement and discards the type, category, "
+                    "destination and include choices you made in the preview."
+                ),
+                actions=[
+                    ft.TextButton(content="Keep editing", on_click=cancel),
+                    ft.FilledButton(content="Discard and switch", on_click=proceed),
+                ],
+                actions_alignment=ft.MainAxisAlignment.END,
+            )
+        )
+
+    def _load_for_account(self, account_id: int) -> None:
         try:
             preview = self.ctx.service.prepare_import(self._path, account_id)
-        except (StatementValidationError, UnsupportedStatementError, OSError, RepositoryError) as exc:
+        except (StatementValidationError, UnsupportedStatementError, StatementReadError, OSError,
+                RepositoryError) as exc:
             # Never leave another account's preview visible as if it belonged to this selection.
             self._clear_preview_state(
                 "This statement could not be reviewed for that account. Choose another account."
@@ -607,6 +723,7 @@ class StatementImportDialog:
     def _clear_preview_state(self, message: str) -> None:
         """Drop the current preview so another account's rows can never be committed."""
         self.preview = None
+        self._edited = False
         self._row_widgets = []
         self.rows_column.controls = []
         self.rows_count.value = ""
@@ -619,9 +736,11 @@ class StatementImportDialog:
         self.mismatch_note.visible = False
         self.opening_balance.visible = False
         self.remember.visible = False
+        self.projection_panel.visible = False
         self.import_button.disabled = True
 
     def _refresh_account_dependent(self) -> None:
+        self.projection_panel.visible = False
         if self.preview is None or not self.account.value:
             self.import_button.disabled = True
             self.opening_balance.visible = False
@@ -677,6 +796,42 @@ class StatementImportDialog:
         self.remember.visible = remember
         self.remember.value = True
         self.remember.label = f"Remember this account as ending {statement_last4}"
+        self._refresh_projection()
+
+    def _refresh_projection(self) -> None:
+        """Show how this import would reconcile the account with the statement (spec §7.5/§8.1)."""
+        self.projection_panel.visible = False
+        if self.preview is None or not self.account.value:
+            return
+        statement = self.preview.statement
+        account_id = int(self.account.value)
+        try:
+            current_cents = self.ctx.repo.account_balance_as_of(account_id, statement.period_end)
+        except RepositoryError:
+            return
+        set_opening = bool(self.opening_balance.visible and self.opening_balance.value)
+        has_history = self.ctx.repo.has_transactions_before(account_id, statement.period_start)
+        if set_opening and not has_history:
+            # The opening balance will be set to the statement's beginning, so the ledger ends at ending.
+            projected_cents = 0
+        else:
+            projected_cents = (
+                current_cents + (statement.ending_cents - statement.beginning_cents) - statement.ending_cents
+            )
+        self.projection_statement.value = format_money(statement.ending_cents)
+        self.projection_balance_label.value = f"Account balance at {statement.period_end:%Y-%m-%d}"
+        self.projection_balance.value = format_money(current_cents)
+        self.projection_difference.value = format_money(projected_cents, signed=True)
+        self.projection_difference.color = INCOME_COLOR if projected_cents == 0 else EXPENSE_COLOR
+        if projected_cents == 0:
+            self.projection_note.value = "After importing, this account matches the statement's ending balance."
+        else:
+            self.projection_note.value = (
+                "The statement and this account's ledger disagree by this amount. Importing keeps existing "
+                "transactions; use Check balance afterwards to review or correct the difference."
+            )
+        self.projection_note.visible = True
+        self.projection_panel.visible = True
 
     # ---------- commit ----------
     def _commit(self, _: ft.Event) -> None:
@@ -690,12 +845,22 @@ class StatementImportDialog:
         if not included:
             self.ctx.notify("Select at least one transaction to import", error=True)
             return
+        for row in included:
+            if row.transaction.type is TransactionType.TRANSFER and row.transaction.transfer_account_id is None:
+                self.ctx.notify(
+                    "Choose the From account for every imported deposit transfer"
+                    if self._income_origin(row)
+                    else "Choose the destination account for every imported transfer",
+                    error=True,
+                )
+                return
         set_opening = bool(self.opening_balance.visible and self.opening_balance.value)
         remember = bool(self.remember.visible and self.remember.value)
         last4 = self.preview.statement.account_last4
         account_id = self.preview.account_id
+        commit_rows = [self._oriented(row, account_id) for row in included]
         try:
-            self.ctx.service.commit_import(self.preview, included, set_opening_balance=set_opening)
+            self.ctx.service.commit_import(self.preview, commit_rows, set_opening_balance=set_opening)
         except RepositoryError as exc:
             self.ctx.notify(str(exc), error=True)
             return
@@ -712,6 +877,8 @@ class StatementImportDialog:
                 number_error = exc
 
         count = len(included)
+        reconciliation = self.ctx.service.last_reconciliation(account_id)
+        account = self.ctx.repo.get_account(account_id)
         self._close()
         self.ctx.data_changed()
         if number_error is not None:
@@ -720,8 +887,119 @@ class StatementImportDialog:
                 f"{number_error}",
                 error=True,
             )
+        if account is not None:
+            ImportResultDialog(self.ctx, account, reconciliation, count).open()
+
+    def _oriented(self, row: ImportRow, statement_account_id: int) -> ImportRow:
+        """Orient a transfer so the ledger's debit/credit convention matches the parsed direction.
+
+        The ledger debits ``account_id`` and credits ``transfer_account_id``. An expense-origin
+        transfer moves money out of the statement account, while an income-origin (deposit) transfer
+        moves money into it, so the statement account must be the credited side.
+        """
+        tx = row.transaction
+        if tx.type is not TransactionType.TRANSFER:
+            return row
+        if self._income_origin(row):
+            counterparty = tx.transfer_account_id
+            if counterparty is None:
+                return row  # commit_import reports the missing account
+            return replace(row, transaction=replace(
+                tx, account_id=counterparty, transfer_account_id=statement_account_id
+            ))
+        return replace(row, transaction=replace(
+            tx, account_id=statement_account_id, transfer_account_id=tx.transfer_account_id
+        ))
+
+
+class ImportResultDialog:
+    """Post-import reconciliation summary, with a path into the balance-check dialog."""
+
+    def __init__(
+        self,
+        ctx: AppContext,
+        account: Account,
+        reconciliation: Reconciliation | None,
+        count: int,
+    ) -> None:
+        self.ctx = ctx
+        self.account = account
+        self.reconciliation = reconciliation
+        self.is_liability = account.kind.is_liability
+
+        controls: list[ft.Control] = [
+            ft.Text(f"Imported {count} transaction(s) into {account.name}.", size=13),
+        ]
+        if reconciliation is None:
+            controls.append(
+                ft.Text("No reconciliation was recorded for this import.", size=12,
+                        color=ft.Colors.ON_SURFACE_VARIANT)
+            )
         else:
-            self.ctx.notify(f"Imported {count} transaction(s)")
+            resolved = reconciliation.difference_cents == 0
+            controls += [
+                ft.Row(
+                    [ft.Text("Statement ending", size=12, color=ft.Colors.ON_SURFACE_VARIANT, expand=True),
+                     ft.Text(format_money(self._display(reconciliation.stated_cents)), weight=ft.FontWeight.W_600)],
+                    spacing=8,
+                ),
+                ft.Row(
+                    [ft.Text("Computed balance", size=12, color=ft.Colors.ON_SURFACE_VARIANT, expand=True),
+                     ft.Text(format_money(self._display(reconciliation.computed_cents)), weight=ft.FontWeight.W_600)],
+                    spacing=8,
+                ),
+                ft.Row(
+                    [ft.Text("Difference", size=12, color=ft.Colors.ON_SURFACE_VARIANT, expand=True),
+                     ft.Text(
+                         format_money(self._display(reconciliation.difference_cents)),
+                         weight=ft.FontWeight.W_600,
+                         color=INCOME_COLOR if resolved else EXPENSE_COLOR,
+                     )],
+                    spacing=8,
+                ),
+                ft.Text(
+                    "The imported transactions match the statement's ending balance."
+                    if resolved
+                    else (
+                        f"The ledger differs from the statement by "
+                        f"{format_money(self._display(reconciliation.difference_cents))}. "
+                        "Use Check balance to review it and record a correction if needed."
+                    ),
+                    size=12,
+                    color=INCOME_COLOR if resolved else EXPENSE_COLOR,
+                    weight=ft.FontWeight.W_500,
+                ),
+            ]
+
+        self.dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Import complete"),
+            content=ft.Container(
+                width=460,
+                content=ft.Column(controls, spacing=10, tight=True),
+            ),
+            actions=[
+                ft.TextButton(content="Done", on_click=lambda _: ctx.page.pop_dialog()),
+                ft.FilledButton(
+                    content="Check balance",
+                    icon=ft.Icons.FACT_CHECK_OUTLINED,
+                    on_click=self._check_balance,
+                ),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+
+    def _display(self, cents: int) -> int:
+        return -cents if self.is_liability else cents
+
+    def _check_balance(self, _: ft.Event) -> None:
+        from .reconcile import BalanceCheckDialog
+
+        self.ctx.page.pop_dialog()
+        BalanceCheckDialog(self.ctx, self.account).open()
+
+    def open(self) -> None:
+        self.ctx.page.show_dialog(self.dialog)
 
 
 class ImportedStatementsDialog:
@@ -816,7 +1094,8 @@ class ImportedStatementsDialog:
             self.ctx.page,
             "Delete this import?",
             f"Remove the {account} statement for {_period(statement)}? Its imported transactions "
-            "and reconciliation will be deleted, and the PDF can be imported again.",
+            "and reconciliation will be deleted, and the PDF can be imported again. If this import "
+            "set the account's opening balance, that opening balance is not reverted.",
             lambda: self._delete(statement),
             confirm_text="Delete import",
         )

@@ -189,6 +189,7 @@ class BudgetService:
                     duplicate=self.repo.find_transaction(
                         account_id, item.occurred_on, item.amount_cents, item.description
                     ) is not None,
+                    direction=item.direction,
                 )
             )
         return ImportPreview(statement=statement, account_id=account_id, rows=rows)

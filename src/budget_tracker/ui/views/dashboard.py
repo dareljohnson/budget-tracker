@@ -52,7 +52,7 @@ class DashboardView:
             self._kpis(data),
             ft.ResponsiveRow(
                 [
-                    card(self._breakdown(data.expense_by_category, data.month_summary.expense_cents), col={"xs": 12, "lg": 6}, height=CHART_CARD_HEIGHT),
+                    card(self._breakdown(data.expense_by_category), col={"xs": 12, "lg": 6}, height=CHART_CARD_HEIGHT),
                     card(self._trend(data.trend), col={"xs": 12, "lg": 6}, height=CHART_CARD_HEIGHT),
                 ],
                 spacing=GAP,
@@ -94,7 +94,7 @@ class DashboardView:
         )
 
     @staticmethod
-    def _breakdown(totals: list[CategoryTotal], total_expense: int) -> ft.Column:
+    def _breakdown(totals: list[CategoryTotal]) -> ft.Column:
         header = section_title("Spending by Category")
         if not totals:
             return ft.Column([header, empty_state(ft.Icons.PIE_CHART_OUTLINE, "No spending yet", "Expenses for this month will appear here.")])

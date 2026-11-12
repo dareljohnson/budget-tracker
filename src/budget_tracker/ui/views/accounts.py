@@ -100,20 +100,27 @@ class AccountsView:
         details = f"{account.kind.label}  •  {usage} transaction(s)"
         if account.number_last4:
             details += f"  •  •••• {account.number_last4}"
+        heading: list[ft.Control] = [
+            ft.Text(account.name, size=16, weight=ft.FontWeight.W_600),
+            ft.Text(details, size=12, color=ft.Colors.ON_SURFACE_VARIANT),
+        ]
+        latest = self.ctx.service.last_reconciliation(account.id)
+        if latest is not None and latest.difference_cents == 0:
+            heading.append(
+                ft.Text(
+                    f"Reconciled through {latest.as_of:%Y-%m-%d}",
+                    size=11,
+                    color=INCOME_COLOR,
+                    weight=ft.FontWeight.W_500,
+                )
+            )
         return card(
             ft.Column(
                 [
                     ft.Row(
                         [
                             account_avatar(account, 44),
-                            ft.Column(
-                                [
-                                    ft.Text(account.name, size=16, weight=ft.FontWeight.W_600),
-                                    ft.Text(details, size=12, color=ft.Colors.ON_SURFACE_VARIANT),
-                                ],
-                                spacing=2,
-                                expand=True,
-                            ),
+                            ft.Column(heading, spacing=2, expand=True),
                         ],
                         spacing=GAP,
                     ),

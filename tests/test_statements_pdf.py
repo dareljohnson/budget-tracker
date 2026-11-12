@@ -8,7 +8,7 @@ from fpdf import FPDF
 from statement_fixture import make_multipage_pdf, make_statement_pdf
 
 from budget_tracker.statements import parse_pdf
-from budget_tracker.statements.model import UnsupportedStatementError
+from budget_tracker.statements.model import StatementReadError, UnsupportedStatementError
 
 
 class TestPdfAdapter(unittest.TestCase):
@@ -33,6 +33,13 @@ class TestPdfAdapter(unittest.TestCase):
             [date(2026, 9, 20), date(2026, 10, 2), date(2026, 9, 25),
              date(2026, 9, 26), date(2026, 9, 30)],
         )
+
+    def test_non_pdf_bytes_raise_statement_read_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "not-a-pdf.pdf"
+            path.write_bytes(b"this is definitely not a pdf")
+            with self.assertRaises(StatementReadError):
+                parse_pdf(path)
 
     def test_rejects_non_statement_pdf(self):
         with tempfile.TemporaryDirectory() as tmp:

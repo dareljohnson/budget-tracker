@@ -10,6 +10,7 @@ from ...repository import RepositoryError
 from ..components import account_avatar, balance_text, card, confirm_dialog, empty_state, page_header, stat_card
 from ..context import AppContext
 from ..theme import EXPENSE_COLOR, GAP, INCOME_COLOR, PALETTE, SEED_COLOR
+from .reconcile import BalanceCheckDialog
 from .transactions import TransactionEditor
 
 
@@ -79,6 +80,12 @@ class AccountsView:
                 )
             )
         actions += [
+            ft.IconButton(
+                ft.Icons.FACT_CHECK_OUTLINED,
+                tooltip="Check balance",
+                icon_size=20,
+                on_click=lambda _: BalanceCheckDialog(self.ctx, account).open(),
+            ),
             ft.IconButton(ft.Icons.EDIT_OUTLINED, tooltip="Edit", icon_size=20, on_click=lambda _: AccountEditor(self.ctx, account).open()),
             ft.IconButton(
                 ft.Icons.DELETE_OUTLINE,
@@ -90,6 +97,9 @@ class AccountsView:
             ),
         ]
         caption = "Owed" if is_card and balance.owed_cents else "Balance"
+        details = f"{account.kind.label}  •  {usage} transaction(s)"
+        if account.number_last4:
+            details += f"  •  •••• {account.number_last4}"
         return card(
             ft.Column(
                 [
@@ -99,7 +109,7 @@ class AccountsView:
                             ft.Column(
                                 [
                                     ft.Text(account.name, size=16, weight=ft.FontWeight.W_600),
-                                    ft.Text(f"{account.kind.label}  •  {usage} transaction(s)", size=12, color=ft.Colors.ON_SURFACE_VARIANT),
+                                    ft.Text(details, size=12, color=ft.Colors.ON_SURFACE_VARIANT),
                                 ],
                                 spacing=2,
                                 expand=True,
@@ -162,6 +172,13 @@ class AccountEditor:
             options=[ft.DropdownOption(key=k.value, text=k.label) for k in AccountKind],
             on_select=self._kind_changed,
         )
+        self.number_last4 = ft.TextField(
+            label="Last 4 digits (optional)",
+            value=(account.number_last4 or "") if account else "",
+            max_length=4,
+            keyboard_type=ft.KeyboardType.NUMBER,
+            on_submit=self._save,
+        )
         opening = account.opening_balance_cents if account else 0
         if self.kind.is_liability:
             opening = -opening
@@ -184,6 +201,7 @@ class AccountEditor:
                     [
                         ft.Row([self.preview, ft.Column([self.name], expand=True)], spacing=GAP, vertical_alignment=ft.CrossAxisAlignment.START),
                         self.kind_dropdown,
+                        self.number_last4,
                         self.opening,
                         ft.Text("Color", weight=ft.FontWeight.W_600),
                         self.color_grid,
@@ -237,11 +255,16 @@ class AccountEditor:
 
     def _save(self, _: ft.Event) -> None:
         name = (self.name.value or "").strip()
+        last4 = (self.number_last4.value or "").strip()
         valid = True
         self.name.error = None
         self.opening.error = None
+        self.number_last4.error = None
         if not name:
             self.name.error = "Name is required"
+            valid = False
+        if last4 and not last4.isdigit():
+            self.number_last4.error = "Digits only"
             valid = False
         try:
             opening = parse_signed_money(self.opening.value)
@@ -259,6 +282,7 @@ class AccountEditor:
             kind=self.kind,
             opening_balance_cents=opening,
             color=self.color,
+            number_last4=last4 or None,
         )
         try:
             if account.id:

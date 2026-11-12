@@ -11,7 +11,15 @@ except ImportError:  # pragma: no cover - UI tests need Flet installed
     ft = None
 
 from budget_tracker.db import connect
-from budget_tracker.models import Bill, BillFrequency, CategoryTotal, Transaction, TransactionType
+from budget_tracker.models import (
+    Account,
+    AccountKind,
+    Bill,
+    BillFrequency,
+    CategoryTotal,
+    Transaction,
+    TransactionType,
+)
 from budget_tracker.repository import Repository
 from budget_tracker.services import BudgetService
 
@@ -122,6 +130,98 @@ class TestEditors(unittest.TestCase):
         visa = next(a for a in self.repo.list_accounts() if a.name == "Visa")
         self.assertEqual(visa.opening_balance_cents, -25000)
         self.assertEqual(AccountEditor(self.ctx, visa).opening.value, "250.00")
+
+    def test_account_editor_preserves_number_last4_when_renaming(self):
+        """Regression: editing an account must never drop its stored account suffix."""
+        from budget_tracker.ui.views.accounts import AccountEditor
+
+        account = self.repo.add_account(Account("Joint", AccountKind.CHECKING, number_last4="3060"))
+        editor = AccountEditor(self.ctx, self.repo.get_account(account.id))
+        editor.open()
+        self.assertEqual(editor.number_last4.value, "3060")
+
+        editor.name.value = "Joint (renamed)"
+        editor._save(None)
+
+        self.assertEqual(self.page.errors, [])
+        self.assertEqual(self.page.open_dialogs, [])
+        saved = self.repo.get_account(account.id)
+        self.assertEqual((saved.name, saved.number_last4), ("Joint (renamed)", "3060"))
+
+    def test_account_editor_validates_and_saves_last_digits(self):
+        from budget_tracker.ui.views.accounts import AccountEditor
+
+        editor = AccountEditor(self.ctx, None)
+        editor.open()
+        editor.name.value = "Visa"
+        editor.number_last4.value = "12a4"
+        with unittest.mock.patch.object(type(editor.dialog), "update"):
+            editor._save(None)
+        self.assertEqual(editor.number_last4.error, "Digits only")
+        self.assertIsNone(next((a for a in self.repo.list_accounts() if a.name == "Visa"), None))
+
+        editor.number_last4.value = "060"
+        editor._save(None)
+        self.assertEqual(self.page.errors, [])
+        self.assertEqual(next((a for a in self.repo.list_accounts() if a.name == "Visa"), None).number_last4, "060")
+
+    def test_balance_check_adjustment_resolves_and_records_history(self):
+        from budget_tracker.ui.views.reconcile import BalanceCheckDialog
+
+        self.repo.add_transaction(
+            Transaction(5000, TransactionType.INCOME, self.repo.list_categories(TransactionType.INCOME)[0].id,
+                        date(2026, 10, 1), "pay", account_id=self.accts["Checking"].id)
+        )
+        dialog = BalanceCheckDialog(self.ctx, self.accts["Checking"])
+        dialog.open()
+        dialog.date.value = "2026-10-05"
+        dialog.stated.value = "45"
+        dialog.note.value = "bank app"
+        dialog._save(None)
+
+        self.assertEqual((self.page.errors, self.page.open_dialogs), ([], [dialog.dialog]))
+        self.assertTrue(dialog.result.visible)
+        self.assertEqual(
+            (dialog.computed_value.value, dialog.stated_value.value, dialog.difference_value.value),
+            ("$50.00", "$45.00", "$5.00"),
+        )
+        self.assertTrue(dialog.adjust_row.visible)
+        self.assertEqual(dialog.adjustment.value, "-5.00")
+
+        dialog._adjust(None)
+        self.assertFalse(dialog.adjust_row.visible)
+        self.assertEqual((dialog.computed_value.value, dialog.difference_value.value), ("$45.00", "$0.00"))
+        records = self.repo.list_reconciliations(self.accts["Checking"].id)
+        self.assertEqual([r.difference_cents for r in records], [0, 500])
+        self.assertEqual({b.account.name: b.balance_cents for b in self.repo.account_balances()}["Checking"], 4500)
+        self.assertEqual(self.repo.summary("2026-10").expense_cents, 0)
+
+    def test_balance_check_liability_uses_positive_amount_owed(self):
+        from budget_tracker.ui.views.reconcile import BalanceCheckDialog
+
+        self.repo.add_transaction(
+            Transaction(25000, TransactionType.EXPENSE, self.repo.list_categories(TransactionType.EXPENSE)[0].id,
+                        date(2026, 10, 1), "shopping", account_id=self.accts["Credit Card"].id)
+        )
+        dialog = BalanceCheckDialog(self.ctx, self.accts["Credit Card"])
+        dialog.open()
+        self.assertEqual(dialog.stated.label, "Amount owed")
+        dialog.date.value = "2026-10-05"
+        dialog.stated.value = "240"
+        dialog._save(None)
+
+        self.assertEqual(
+            (dialog.computed_value.value, dialog.stated_value.value, dialog.difference_value.value),
+            ("$250.00", "$240.00", "$10.00"),
+        )
+        self.assertEqual(dialog.adjustment.value, "10.00")
+        self.assertEqual(self.repo.list_reconciliations(self.accts["Credit Card"].id)[0].stated_cents, -24000)
+
+        dialog._adjust(None)
+        self.assertFalse(dialog.adjust_row.visible)
+        self.assertEqual({b.account.name: b.balance_cents for b in self.repo.account_balances()}["Credit Card"], -24000)
+        newest = self.repo.list_reconciliations(self.accts["Credit Card"].id)[0]
+        self.assertEqual((newest.stated_cents, newest.computed_cents, newest.difference_cents), (-24000, -24000, 0))
 
     def test_views_render(self):
         from budget_tracker.ui.views.accounts import AccountsView

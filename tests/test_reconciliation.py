@@ -89,3 +89,27 @@ class TestAccountNumber(Base):
         self.assertEqual({a.name: a.number_last4 for a in self.repo.list_accounts()}["Joint"], "3060")
         self.repo.set_account_number(acct.id, "060")
         self.assertEqual(self.repo.get_account(acct.id).number_last4, "060")
+
+
+class TestBalanceCheck(Base):
+    def test_check_balance_computes_as_of_difference(self):
+        self.repo.add_transaction(Transaction(5000, TransactionType.INCOME, self.cats["Salary"].id,
+                                              date(2026, 10, 1), "pay", account_id=self.accts["Checking"].id))
+        self.repo.add_transaction(Transaction(2000, TransactionType.EXPENSE, self.cats["Groceries"].id,
+                                              date(2026, 10, 10), "later", account_id=self.accts["Checking"].id))
+        rec = BudgetService(self.repo).check_balance(self.accts["Checking"].id, date(2026, 10, 5), 4500)
+        self.assertEqual((rec.computed_cents, rec.difference_cents), (5000, 500))
+        self.assertEqual(BudgetService(self.repo).last_reconciliation(self.accts["Checking"].id).id, rec.id)
+
+    def test_adjustment_resolves_difference_without_spending(self):
+        svc = BudgetService(self.repo)
+        svc.adjust_balance(self.accts["Checking"].id, date(2026, 10, 5), -500, "counted cash")
+        self.assertEqual({b.account.name: b.balance_cents for b in self.repo.account_balances()}["Checking"], -500)
+        self.assertEqual(self.repo.summary("2026-10").expense_cents, 0)
+
+    def test_follow_up_check_after_adjustment_is_reconciled(self):
+        svc = BudgetService(self.repo)
+        svc.adjust_balance(self.accts["Checking"].id, date(2026, 10, 5), -500, "fix")
+        rec = svc.check_balance(self.accts["Checking"].id, date(2026, 10, 5), -500)
+        self.assertEqual(rec.difference_cents, 0)
+        self.assertEqual(len(self.repo.list_reconciliations(self.accts["Checking"].id)), 1)

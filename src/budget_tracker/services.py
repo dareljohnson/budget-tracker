@@ -103,6 +103,39 @@ class BudgetService:
     def export_filename(now: datetime | None = None) -> str:
         return f"transactions_{(now or datetime.now()):%Y%m%d_%H%M%S}.csv"
 
+    # ---------- manual balance checks ----------
+    def check_balance(self, account_id: int, as_of: date, stated_cents: int, note: str = "") -> Reconciliation:
+        """Compare the ledger balance through ``as_of`` with a stated balance and record the check."""
+        computed_cents = self.repo.account_balance_as_of(account_id, as_of)
+        return self.repo.add_reconciliation(
+            Reconciliation(
+                account_id=account_id,
+                as_of=as_of,
+                stated_cents=stated_cents,
+                computed_cents=computed_cents,
+                difference_cents=computed_cents - stated_cents,
+                note=note,
+            )
+        )
+
+    def adjust_balance(self, account_id: int, as_of: date, amount_cents: int, note: str = "") -> Transaction:
+        """Post a signed correction that moves the account balance only."""
+        return self.repo.add_transaction(
+            Transaction(
+                amount_cents=amount_cents,
+                type=TransactionType.ADJUSTMENT,
+                category_id=None,
+                occurred_on=as_of,
+                description=note or "Balance adjustment",
+                account_id=account_id,
+            )
+        )
+
+    def last_reconciliation(self, account_id: int) -> Reconciliation | None:
+        """The most recent balance check for an account, or ``None`` when it has never been checked."""
+        reconciliations = self.repo.list_reconciliations(account_id)
+        return reconciliations[0] if reconciliations else None
+
     # ---------- statement import ----------
     def _default_category_id(self, type_: TransactionType) -> int:
         """The seeded catch-all category for a transaction type (refunds share the expense default)."""

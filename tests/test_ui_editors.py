@@ -187,6 +187,9 @@ class TestEditors(unittest.TestCase):
         )
         self.assertTrue(dialog.adjust_row.visible)
         self.assertEqual(dialog.adjustment.value, "-5.00")
+        self.assertEqual(dialog.adjustment.label, "Correction to ledger")
+        self.assertIn("added to the ledger balance", dialog.adjustment.hint_text.lower())
+        self.assertEqual(dialog.result.controls[2].controls[0].value, "Difference (ledger - statement)")
 
         dialog._adjust(None)
         self.assertFalse(dialog.adjust_row.visible)
@@ -222,6 +225,23 @@ class TestEditors(unittest.TestCase):
         self.assertEqual({b.account.name: b.balance_cents for b in self.repo.account_balances()}["Credit Card"], -24000)
         newest = self.repo.list_reconciliations(self.accts["Credit Card"].id)[0]
         self.assertEqual((newest.stated_cents, newest.computed_cents, newest.difference_cents), (-24000, -24000, 0))
+
+    def test_balance_check_rejects_blank_stated_and_negative_owed(self):
+        from budget_tracker.ui.views.reconcile import BalanceCheckDialog
+
+        dialog = BalanceCheckDialog(self.ctx, self.accts["Credit Card"])
+        dialog.open()
+        dialog.date.value = "2026-10-05"
+        with unittest.mock.patch.object(type(dialog.dialog), "update"):
+            dialog.stated.value = ""
+            dialog._save(None)
+            self.assertEqual(dialog.stated.error, "Enter the stated balance")
+            self.assertEqual(self.repo.list_reconciliations(self.accts["Credit Card"].id), [])
+
+            dialog.stated.value = "-10"
+            dialog._save(None)
+        self.assertEqual(dialog.stated.error, "Enter the amount owed as a positive number")
+        self.assertEqual(self.repo.list_reconciliations(self.accts["Credit Card"].id), [])
 
     def test_views_render(self):
         from budget_tracker.ui.views.accounts import AccountsView

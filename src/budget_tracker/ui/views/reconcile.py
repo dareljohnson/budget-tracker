@@ -49,7 +49,7 @@ class BalanceCheckDialog:
             [
                 self._amount_row("Computed", self.computed_value),
                 self._amount_row("Stated", self.stated_value),
-                self._amount_row("Difference", self.difference_value),
+                self._amount_row("Difference (ledger - statement)", self.difference_value),
             ],
             spacing=4,
             tight=True,
@@ -57,10 +57,10 @@ class BalanceCheckDialog:
         )
 
         self.adjustment = ft.TextField(
-            label="Adjustment (signed)",
+            label="Correction to ledger",
             prefix_icon=ft.Icons.TUNE,
             keyboard_type=ft.KeyboardType.NUMBER,
-            hint_text="Positive raises the ledger balance",
+            hint_text="Added to the ledger balance (positive raises it)",
             expand=True,
             on_submit=self._adjust,
         )
@@ -225,7 +225,12 @@ class BalanceCheckDialog:
             self.date.error = str(exc)
             valid = False
         try:
-            entered = parse_signed_money(self.stated.value)
+            raw_stated = (self.stated.value or "").strip()
+            if not raw_stated:
+                raise ValueError("Enter the stated balance")
+            entered = parse_signed_money(raw_stated)
+            if self.is_liability and entered < 0:
+                raise ValueError("Enter the amount owed as a positive number")
         except ValueError as exc:
             self.stated.error = str(exc)
             valid = False

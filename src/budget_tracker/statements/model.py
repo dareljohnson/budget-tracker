@@ -41,6 +41,7 @@ class ImportRow:
     transaction: Transaction
     duplicate: bool = False
     include: bool = True
+    direction: str | None = None  # parsed direction, kept even after the row is retyped
 
 
 @dataclass(slots=True)
@@ -60,3 +61,7 @@ class StatementValidationError(Exception):
 
 class UnsupportedStatementError(Exception):
     pass
+
+
+class StatementReadError(Exception):
+    """The file could not be read as a PDF (corrupt, encrypted, or not a PDF)."""

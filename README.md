@@ -6,17 +6,20 @@ A personal budget tracker desktop app built with **Python 3.13**, **[Flet](https
 
 - **Dashboard**: net worth across all accounts, monthly income and spending, savings rate, spending by category, a six-month income vs. spending trend, account balances, budget health, and recent activity.
 - **Accounts**: checking, savings, credit card, cash, and other accounts, each with a live balance. Credit cards show the amount owed, and **Pay card** records a payment from your checking account.
+- **Balance checks and adjustments**: check any account against the balance your bank shows and see the difference. If they disagree, record a signed correction that changes the account balance only — adjustments are excluded from income, spending, and budgets. Earlier checks are kept in a history.
 - **Bills and reminders**: recurring bills (one-time, weekly, monthly, yearly) and credit card payments, each with a due date. Overdue and soon-due bills show on the Bills page, on the Dashboard, and in a pop-up when the app starts. **Mark paid** records the payment and moves the bill to its next due date. Windows notifications can also remind you when the app is closed (see below).
-- **Transactions**: four types, each tied to an account:
+- **Transactions**: five types, each tied to an account:
   - **Expense**: money spent, e.g. groceries paid with a credit card.
   - **Income**: money received into an account.
   - **Refund**: money returned for a purchase. It reduces spending (and budget usage) in its category.
   - **Transfer**: money moved between your own accounts, e.g. a credit card payment or moving money to savings. Transfers change balances but are **not** counted as income or spending, so card purchases aren't counted twice.
+  - **Adjustment**: a signed correction recorded from a balance check. It changes the account balance only and is excluded from income, spending, and budgets.
 
   Search and filter by type, account, category, or month, and export the current view to CSV.
+- **Statement import**: import a Regions checking statement PDF from the Transactions page. The PDF is parsed locally and verified against the statement's own summary totals, and nothing is written until you review it. When exactly one saved account number ending matches, that account is preselected, and a mismatch blocks the import. Each row has its own type, category, and (for transfers) destination account; a category can be applied to all selected rows at once, duplicate rows are flagged and left unchecked, and an opening balance can be set when the account has no earlier history. You can also remember the account's last four digits and save a category rule from a row. **Imported statements…** lets you undo an import. See [Importing bank statements](#importing-bank-statements) for the supported files and limits.
 - **Excel export**: **Export Excel** on the Transactions screen saves a full `.xlsx` workbook with live formulas. It opens in Microsoft Excel, Apple Numbers, Google Sheets, and LibreOffice. See [Excel workbook](#excel-workbook).
 - **Budgets**: set monthly limits per expense category. Progress bars turn amber at 80% and red when you go over. You can copy last month's budgets.
-- **Categories**: income and expense categories with custom colors and icons. Default categories are created on first run.
+- **Categories**: income and expense categories with custom colors and icons. Default categories are created on first run. Category rules saved from statement imports are listed under **Categories → Rules**, where they can be reviewed and deleted.
 - **Light/dark theme**: your choice is saved.
 
 ## Getting started
@@ -43,6 +46,8 @@ See **[PACKAGING.md](PACKAGING.md)** for:
 - a GitHub Actions workflow that builds all three;
 - moving the project and its data to another PC.
 
+The statement importer's PDF library (`pdfplumber`) is a normal runtime dependency, so the standalone installers bundle it automatically — no extra packaging step is needed.
+
 ## Running tests
 
 ```powershell
@@ -55,6 +60,8 @@ $env:PYTHONPATH = "src"; python -m unittest discover -s tests
 
 Data is stored in SQLite at `%LOCALAPPDATA%\BudgetTracker\budget_tracker.db` on Windows (`~/.local/share/budget_tracker` on Linux and macOS). To use a different folder, set the `BUDGET_TRACKER_HOME` environment variable. With a Microsoft Store Python, Windows redirects the file into the package cache — see [Where data lives](PACKAGING.md#where-data-lives) for the exact paths.
 
+Statement PDFs are never copied into the database. Of the statement file itself, an import keeps only the PDF's SHA-256 hash and, if you choose to remember it, the last four account digits; the statement summary and its imported transactions are saved as normal local data.
+
 ## Project layout
 
 ```
@@ -64,7 +71,8 @@ src/budget_tracker/
   formatting.py    money/date parsing and formatting
   db.py            connection, versioned migrations, seed data
   repository.py    parameterized SQL data access
-  services.py      dashboard aggregation, CSV/Excel export
+  services.py      dashboard aggregation, CSV/Excel export, statement import, balance checks
+  statements/      statement models and the Regions checking PDF parser (pdfplumber adapter)
   xlsx.py          dependency-free .xlsx writer (styles, formulas, filters)
   workbook_export.py  builds the Excel workbook sheets and formulas
   reminders.py     due-bill check + Windows toast (for Task Scheduler)
@@ -83,6 +91,32 @@ tests/             data-layer and UI editor tests
 3. When you pay the bill, click **Pay card** (or add a **Transfer** from checking to the card). Checking goes down and the amount owed goes down. Your spending doesn't change, because you already counted it when you made the purchases.
 
 Existing databases are upgraded automatically: transactions recorded before accounts existed are assigned to a **Checking** account.
+
+## Importing bank statements
+
+On the **Transactions** page, choose **Import statement** and pick a Regions checking statement PDF. The app parses it on your PC, checks the transactions against the statement's own summary totals, and shows a review before anything is written.
+
+- The **account** is preselected when a single saved account number ending matches the statement's. If the statement's digits conflict with the selected account, the import is blocked until the right account is chosen.
+- Each row has its own **type** (expense, income, refund, or transfer), **category**, and, for transfers, destination account. **Apply** sets one category for all selected rows, and **Select all** toggles every row.
+- Rows that look like transactions you already have are flagged **Duplicate** and left unchecked. You can still include one deliberately.
+- If the account has no transactions before the statement period, you can set its **opening balance** to the statement's beginning balance.
+- You can remember the account's last four digits for future matching, and save a **category rule** from a row so later imports categorize that description automatically.
+
+The import is rejected — and nothing is written — if the parsed rows don't add up to the statement's summary, or if a row falls outside the statement period. The same PDF can't be imported twice. **Imported statements…** lists past imports so you can delete one and import it again.
+
+### Supported statements and limits
+
+- Regions **checking** statements only. Other banks, Regions credit card or savings statements, and other layouts are rejected.
+- PDFs only: no OCR or scanned images.
+- No bank feeds, and no OFX, QIF, CAMT, or CSV import. CSV is export-only.
+- Everything is parsed and stored locally. PDFs are never copied into the database: of the statement file itself, the app records only the SHA-256 hash (to detect repeat imports) and, at most, the last four account digits.
+
+## Reconciling accounts
+
+- A statement import records its own reconciliation at the statement's ending balance.
+- To check any account at any time, use **Check balance** on the **Accounts** page. Enter the balance the bank shows — for a credit card, enter the positive **amount owed** — and the date. The app compares it with the ledger and shows the difference.
+- If the amounts differ, you can record a **correction to the ledger**. It changes the account balance only; adjustments are excluded from income, spending, and budgets.
+- Previous checks, their differences, and their notes are listed in the balance check dialog.
 
 ## Bills and payment reminders
 

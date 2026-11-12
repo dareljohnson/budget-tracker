@@ -9,6 +9,7 @@ from ...repository import RepositoryError
 from ..components import card, category_avatar, confirm_dialog, empty_state, page_header, section_title
 from ..context import AppContext
 from ..theme import EXPENSE_COLOR, GAP, ICON_CHOICES, PALETTE, icon_for
+from .category_rules import CategoryRulesDialog
 
 
 class CategoriesView:
@@ -21,7 +22,15 @@ class CategoriesView:
                 page_header(
                     "Categories",
                     "Organize your money with custom categories",
-                    [ft.FilledButton(content="Add Category", icon=ft.Icons.ADD, on_click=lambda _: CategoryEditor(ctx, None).open())],
+                    [
+                        ft.OutlinedButton(
+                            content="Rules",
+                            icon=ft.Icons.RULE,
+                            tooltip="Categorization rules learned from imports",
+                            on_click=lambda _: CategoryRulesDialog(ctx).open(),
+                        ),
+                        ft.FilledButton(content="Add Category", icon=ft.Icons.ADD, on_click=lambda _: CategoryEditor(ctx, None).open()),
+                    ],
                 ),
                 ft.ResponsiveRow(
                     [

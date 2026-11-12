@@ -8,12 +8,13 @@ from pathlib import Path
 import flet as ft
 
 from ...config import export_dir
-from ...formatting import format_money, month_label, parse_date, parse_money
+from ...formatting import format_money, month_label, parse_date, parse_money, parse_signed_money
 from ...models import Transaction, TransactionType
 from ...repository import RepositoryError
 from ..components import card, confirm_dialog, date_field, empty_state, page_header, transaction_row
 from ..context import AppContext
 from ..theme import EXPENSE_COLOR, GAP, INCOME_COLOR
+from .statement_import import StatementImportDialog, open_imported_statements
 
 ALL = "all"
 
@@ -47,6 +48,12 @@ class TransactionsView:
         )
         self.list_column = ft.Column(spacing=2)
         self.footer = ft.Row(spacing=24)
+        self.import_button = ft.FilledTonalButton(
+            content="Import statement",
+            icon=ft.Icons.UPLOAD_FILE,
+            tooltip="Review a Regions checking statement PDF before importing it",
+            on_click=self._import_statement,
+        )
 
         self.control = ft.Column(
             [
@@ -54,6 +61,13 @@ class TransactionsView:
                     "Transactions",
                     "Track every dollar coming in and going out",
                     [
+                        self.import_button,
+                        ft.OutlinedButton(
+                            content="Imported statements…",
+                            icon=ft.Icons.HISTORY,
+                            tooltip="Undo a statement import",
+                            on_click=lambda _: open_imported_statements(self.ctx),
+                        ),
                         ft.OutlinedButton(
                             content="Export CSV",
                             icon=ft.Icons.DOWNLOAD,
@@ -155,13 +169,26 @@ class TransactionsView:
         ]
 
     # ---------- actions ----------
+    async def _import_statement(self, _: ft.Event) -> None:
+        """Open the import review; the button is re-enabled when that dialog closes."""
+        self.import_button.disabled = True
+        self.import_button.update()
+        dialog = StatementImportDialog(self.ctx, on_close=self._import_closed)
+        await dialog.open()
+
+    def _import_closed(self) -> None:
+        self.import_button.disabled = False
+        self.import_button.update()
+
     def _confirm_delete(self, tx: Transaction) -> None:
         def delete() -> None:
             self.ctx.repo.delete_transaction(tx.id)
             self.ctx.notify("Transaction deleted")
             self.ctx.data_changed()
 
-        name = tx.description or tx.category_name or f"Transfer to {tx.transfer_account_name}"
+        name = tx.description or tx.category_name or (
+            "Adjustment" if tx.type == TransactionType.ADJUSTMENT else f"Transfer to {tx.transfer_account_name}"
+        )
         confirm_dialog(
             self.ctx.page,
             "Delete transaction?",
@@ -254,6 +281,7 @@ class TransactionEditor:
         self.ctx = ctx
         self.tx = tx
         self.type = tx.type if tx else (preset_type or TransactionType.EXPENSE)
+        self.is_adjustment = self.type == TransactionType.ADJUSTMENT
         accounts = ctx.repo.list_accounts()
         amount_cents = tx.amount_cents if tx else preset_amount_cents
 
@@ -267,6 +295,7 @@ class TransactionEditor:
             ],
             on_change=self._type_changed,
         )
+        self.adjustment_label = ft.Text("Adjustment", weight=ft.FontWeight.W_600, visible=self.is_adjustment)
         self.hint = ft.Text(size=12, color=ft.Colors.ON_SURFACE_VARIANT)
         self.amount = ft.TextField(
             label="Amount",
@@ -297,8 +326,11 @@ class TransactionEditor:
         self.date = date_field(ctx.page, "Date", tx.occurred_on if tx else date.today())
         self.description = ft.TextField(label="Description (optional)", value=tx.description if tx else "", max_length=120, on_submit=self._save)
         self.account_row = ft.Row(spacing=12)
-        self._load_categories(selected=tx.category_id if tx else None)
-        self._apply_type()
+        if self.is_adjustment:
+            self._setup_adjustment()
+        else:
+            self._load_categories(selected=tx.category_id if tx else None)
+            self._apply_type()
 
         self.dialog = ft.AlertDialog(
             modal=True,
@@ -307,7 +339,7 @@ class TransactionEditor:
                 width=520,
                 content=ft.Column(
                     [
-                        self.type_toggle,
+                        self.adjustment_label if self.is_adjustment else self.type_toggle,
                         self.hint,
                         self.amount,
                         self.account_row,
@@ -337,6 +369,16 @@ class TransactionEditor:
     def open(self) -> None:
         self.ctx.page.show_dialog(self.dialog)
 
+    def _setup_adjustment(self) -> None:
+        """A signed balance correction: no type toggle or category, just account/date/amount."""
+        self.type_toggle.visible = False
+        self.adjustment_label.visible = True
+        self.hint.visible = False
+        self.category.visible = False
+        self.account_row.controls = [self.account]
+        self.account.label = "Account"
+        self.amount.keyboard_type = ft.KeyboardType.TEXT
+
     def _load_categories(self, selected: int | None = None) -> None:
         category_type = self.type.category_type
         categories = self.ctx.repo.list_categories(category_type) if category_type else []
@@ -364,7 +406,7 @@ class TransactionEditor:
     def _save(self, _: ft.Event) -> None:
         valid = True
         try:
-            amount = parse_money(self.amount.value)
+            amount = parse_signed_money(self.amount.value) if self.is_adjustment else parse_money(self.amount.value)
             self.amount.error = None
         except ValueError as exc:
             self.amount.error = str(exc)
@@ -376,16 +418,20 @@ class TransactionEditor:
             self.date.error = str(exc)
             valid = False
         is_transfer = self.type == TransactionType.TRANSFER
+        is_adjustment = self.type == TransactionType.ADJUSTMENT
         if not self.account.value:
             self.account.error_text = "Select an account (create one on the Accounts page)"
             valid = False
         else:
             self.account.error_text = None
         self.to_account.error_text = None
-        if is_transfer and (not self.to_account.value or self.to_account.value == self.account.value):
-            self.to_account.error_text = "Choose a different account"
-            valid = False
-        if not is_transfer and not self.category.value:
+        if is_adjustment:
+            self.category.error_text = None
+        elif is_transfer:
+            if not self.to_account.value or self.to_account.value == self.account.value:
+                self.to_account.error_text = "Choose a different account"
+                valid = False
+        elif not self.category.value:
             self.category.error_text = "Select a category (create one on the Categories page)"
             valid = False
         else:
@@ -398,7 +444,7 @@ class TransactionEditor:
             id=self.tx.id if self.tx else None,
             amount_cents=amount,
             type=self.type,
-            category_id=None if is_transfer else int(self.category.value),
+            category_id=None if (is_transfer or is_adjustment) else int(self.category.value),
             occurred_on=occurred,
             description=self.description.value or "",
             account_id=int(self.account.value),

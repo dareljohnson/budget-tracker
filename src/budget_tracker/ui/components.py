@@ -114,6 +114,20 @@ def empty_state(icon: ft.IconData, title: str, message: str, action: ft.Control 
 
 
 def amount_text(tx: Transaction, size: int = 15) -> ft.Text:
+    if tx.type == TransactionType.ADJUSTMENT:
+        color = (
+            INCOME_COLOR
+            if tx.amount_cents > 0
+            else EXPENSE_COLOR
+            if tx.amount_cents < 0
+            else ft.Colors.ON_SURFACE_VARIANT
+        )
+        return ft.Text(
+            format_money(tx.amount_cents, signed=True),
+            size=size,
+            weight=ft.FontWeight.W_600,
+            color=color,
+        )
     sign = tx.flow_sign
     color = INCOME_COLOR if sign > 0 else EXPENSE_COLOR if sign < 0 else ft.Colors.ON_SURFACE_VARIANT
     return ft.Text(
@@ -142,6 +156,8 @@ def balance_text(balance: AccountBalance, size: int = 15) -> ft.Text:
 
 def _transaction_subtitle(tx: Transaction) -> str:
     when = f"{tx.occurred_on:%b %d, %Y}"
+    if tx.type == TransactionType.ADJUSTMENT:
+        return f"Adjustment  •  {tx.account_name}  •  {when}"
     if tx.type == TransactionType.TRANSFER:
         return f"Transfer  •  {tx.account_name} → {tx.transfer_account_name}  •  {when}"
     label = f"{tx.category_name} (refund)" if tx.type == TransactionType.REFUND else tx.category_name
@@ -160,7 +176,10 @@ def transaction_row(
         actions.append(
             ft.IconButton(ft.Icons.DELETE_OUTLINE, tooltip="Delete", icon_size=20, icon_color=EXPENSE_COLOR, on_click=lambda _: on_delete(tx))
         )
-    if tx.type == TransactionType.TRANSFER:
+    if tx.type == TransactionType.ADJUSTMENT:
+        avatar = category_avatar("ACCOUNT_BALANCE", SEED_COLOR)
+        title = tx.description or "Adjustment"
+    elif tx.type == TransactionType.TRANSFER:
         avatar = category_avatar("SWAP_HORIZ", SEED_COLOR)
         title = tx.description or f"Transfer to {tx.transfer_account_name}"
     else:

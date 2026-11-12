@@ -340,6 +340,92 @@ class TestEditors(unittest.TestCase):
             DashboardView._breakdown([CategoryTotal(1, "Groceries", "#43A047", 5000)], 0)
         )
 
+    def test_adjustment_editor_saves_signed_amount_and_keeps_type(self):
+        from budget_tracker.ui.components import _transaction_subtitle, amount_text, transaction_row
+        from budget_tracker.ui.theme import EXPENSE_COLOR, INCOME_COLOR
+
+        tx = self.repo.add_transaction(
+            Transaction(
+                -1500, TransactionType.ADJUSTMENT, None, date(2026, 11, 3), "bank correction",
+                account_id=self.accts["Checking"].id,
+            )
+        )
+        editor = self._editor(tx=tx)
+        self.assertIs(editor.type, TransactionType.ADJUSTMENT)
+        self.assertFalse(editor.type_toggle.visible)
+        self.assertFalse(editor.category.visible)
+        self.assertTrue(editor.adjustment_label.visible)
+        self.assertEqual(editor.amount.value, "-15.00")
+        self.assertEqual(editor.account.value, str(self.accts["Checking"].id))
+
+        editor.amount.value = "-20.50"
+        editor.date.value = "2026-11-04"
+        editor.description.value = "corrected"
+        editor._save(None)
+
+        self.assertEqual((self.page.errors, self.page.open_dialogs), ([], []))
+        [saved] = self.repo.list_transactions(type_=TransactionType.ADJUSTMENT)
+        self.assertEqual(
+            (saved.type, saved.amount_cents, saved.category_id),
+            (TransactionType.ADJUSTMENT, -2050, None),
+        )
+        self.assertEqual((saved.occurred_on, saved.description), (date(2026, 11, 4), "corrected"))
+        summary = self.repo.summary("2026-11")
+        self.assertEqual((summary.income_cents, summary.expense_cents), (0, 0))
+
+        negative = amount_text(saved)
+        self.assertEqual((negative.value, negative.color), ("-$20.50", EXPENSE_COLOR))
+        row = transaction_row(saved)
+        self.assertEqual(row.content.controls[1].controls[0].value, "corrected")
+        self.assertEqual(_transaction_subtitle(saved), "Adjustment  •  Checking  •  Nov 04, 2026")
+
+        self.repo.add_transaction(
+            Transaction(
+                500, TransactionType.ADJUSTMENT, None, date(2026, 11, 5), "",
+                account_id=self.accts["Checking"].id,
+            )
+        )
+        positive = next(t for t in self.repo.list_transactions(type_=TransactionType.ADJUSTMENT) if t.amount_cents > 0)
+        self.assertEqual((amount_text(positive).value, amount_text(positive).color), ("+$5.00", INCOME_COLOR))
+
+        editor.amount.value = "0"
+        editor._save(None)
+        self.assertEqual(self.page.errors, ["Adjustment amount cannot be zero"])
+
+    def test_category_rules_dialog_lists_and_deletes_rules(self):
+        from budget_tracker.ui.views.categories import CategoriesView
+        from budget_tracker.ui.views.category_rules import CategoryRulesDialog
+
+        groceries = self.repo.list_categories(TransactionType.EXPENSE)[0]
+        income = self.repo.list_categories(TransactionType.INCOME)[0]
+        self.repo.add_category_rule("Kroger", groceries.id)
+        self.repo.add_category_rule("PAYROLL", income.id)
+
+        view = CategoriesView(self.ctx)
+        actions = view.control.controls[0].controls[1].controls
+        rules_button = next(button for button in actions if getattr(button, "content", None) == "Rules")
+        rules_button.on_click(None)
+        [opened] = self.page.open_dialogs
+        self.assertIn("Kroger", " ".join(text.value for text in _dialog_rule_texts(opened)))
+
+        dialog = CategoryRulesDialog(self.ctx)
+        dialog.open()
+        self.assertEqual(len(dialog.list_column.controls), 2)
+        kroger = next(row for row in dialog.list_column.controls if "Kroger" in row.content.controls[1].value)
+        self.assertEqual(kroger.content.controls[1].value, f'"Kroger" → {groceries.name}')
+        kroger.content.controls[-1].on_click(None)
+        self.assertEqual([rule.match_text for rule in self.repo.list_category_rules()], ["PAYROLL"])
+        self.assertEqual(len(dialog.list_column.controls), 1)
+
+        dialog._delete(self.repo.list_category_rules()[0])
+        self.assertEqual(dialog.list_column.controls[0].value, "No rules yet — save one from the import preview.")
+        self.assertEqual(self.repo.list_category_rules(), [])
+        self.assertIsNone(self.repo.suggest_category_id("Card Purchase Kroger #443", TransactionType.EXPENSE))
+
+
+def _dialog_rule_texts(dialog) -> list:
+    return [row.content.controls[1] for row in dialog.content.content.controls]
+
 
 if __name__ == "__main__":
     unittest.main()

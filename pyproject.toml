@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "budget-tracker"
+version = "1.0.0"
+description = "A personal budget tracker desktop app built with Flet and SQLite"
+readme = "README.md"
+requires-python = ">=3.13"
+# Only what the packaged app needs at runtime; `flet build` bundles exactly this list.
+dependencies = ["flet>=1.1,<2", "pdfplumber>=0.11,<1"]
+
+[project.optional-dependencies]
+# Desktop runner, CLI (flet build) and web preview for running from source.
+desktop = ["flet[all]>=1.1,<2"]
+dev = ["flet[all]>=1.1,<2", "pytest>=8", "fpdf2>=2.7"]
+
+[project.scripts]
+budget-tracker = "budget_tracker.main:run"
+budget-tracker-remind = "budget_tracker.reminders:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# ---- Native app packaging (`flet build windows|macos|linux`); see PACKAGING.md ----
+[tool.flet]
+product = "Budget Tracker"           # window title / launcher name
+artifact = "BudgetTracker"           # BudgetTracker.exe, Linux binary name
+org = "com.budgettracker"            # bundle id prefix -> com.budgettracker.budget_tracker
+company = "Budget Tracker"           # keep stable: the app's Flet storage lives under %APPDATA%\<company>\<product>
+copyright = "Copyright (c) 2026 Budget Tracker"
+
+[tool.flet.app]
+path = "src"                         # folder that contains main.py and assets/
+module = "main"
+exclude = ["budget_tracker.egg-info"]
+
+[tool.flet.macos]
+artifact = "Budget Tracker"          # Budget Tracker.app
+
+[tool.flet.linux]
+categories = ["Office", "Finance"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 140
+target-version = "py313"

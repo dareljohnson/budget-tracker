@@ -79,6 +79,7 @@ class StatementImportDialog:
             on_select=self._account_changed,
         )
         self.match_note = ft.Text("", size=12, color=INCOME_COLOR, weight=ft.FontWeight.W_600, visible=False)
+        self.mismatch_note = ft.Text("", size=12, color=EXPENSE_COLOR, weight=ft.FontWeight.W_600, visible=False)
         self.statement_meta = ft.Text("", size=12, color=ft.Colors.ON_SURFACE_VARIANT)
         self.summary_holder = ft.Row([], spacing=28, wrap=True, vertical_alignment=ft.CrossAxisAlignment.CENTER)
         self.rows_count = ft.Text("", size=12, color=ft.Colors.ON_SURFACE_VARIANT)
@@ -109,7 +110,12 @@ class StatementImportDialog:
                 height=560,
                 content=ft.Column(
                     [
-                        ft.Row([self.account, self.match_note], spacing=16, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                        ft.Row(
+                            [self.account, self.match_note, self.mismatch_note],
+                            spacing=16,
+                            wrap=True,
+                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                        ),
                         self.statement_meta,
                         ft.Container(
                             content=self.summary_holder,
@@ -481,14 +487,14 @@ class StatementImportDialog:
 
     # ---------- account binding ----------
     def _account_changed(self, _: ft.Event[ft.Dropdown]) -> None:
-        if self.preview is None or self._path is None:
+        if self._path is None:
             return
         if not self.account.value:
-            self._refresh_account_dependent()
+            self._clear_preview_state("Choose an account to review this statement.")
             self.ctx.page.update()
             return
         account_id = int(self.account.value)
-        if account_id == self.preview.account_id:
+        if self.preview is not None and account_id == self.preview.account_id:
             # Reuse the existing preview, but no row may transfer to its own source account.
             for widgets in self._row_widgets:
                 self._sync_destination(widgets)
@@ -498,14 +504,31 @@ class StatementImportDialog:
         try:
             preview = self.ctx.service.prepare_import(self._path, account_id)
         except (StatementValidationError, UnsupportedStatementError, OSError, RepositoryError) as exc:
-            # Keep the old preview on screen but not importable under the new selection.
-            self.import_button.disabled = True
-            self.opening_balance.visible = False
-            self.remember.visible = False
+            # Never leave another account's preview visible as if it belonged to this selection.
+            self._clear_preview_state(
+                "This statement could not be reviewed for that account. Choose another account."
+            )
             _notify_parse_error(self.ctx, exc)
             self.ctx.page.update()
             return
         self._install_preview(preview)
+
+    def _clear_preview_state(self, message: str) -> None:
+        """Drop the current preview so another account's rows can never be committed."""
+        self.preview = None
+        self._row_widgets = []
+        self.rows_column.controls = []
+        self.rows_count.value = ""
+        self.summary_holder.controls = []
+        self.statement_meta.value = message
+        self.select_all.value = False
+        self.match_note.value = ""
+        self.match_note.visible = False
+        self.mismatch_note.value = ""
+        self.mismatch_note.visible = False
+        self.opening_balance.visible = False
+        self.remember.visible = False
+        self.import_button.disabled = True
 
     def _refresh_account_dependent(self) -> None:
         if self.preview is None or not self.account.value:
@@ -513,6 +536,7 @@ class StatementImportDialog:
             self.opening_balance.visible = False
             self.remember.visible = False
             self.match_note.visible = False
+            self.mismatch_note.visible = False
             return
         statement = self.preview.statement
         account = self.ctx.repo.get_account(int(self.account.value))
@@ -520,14 +544,34 @@ class StatementImportDialog:
             self.import_button.disabled = True
             self.opening_balance.visible = False
             self.remember.visible = False
+            self.match_note.visible = False
+            self.mismatch_note.visible = False
             return
-        self.import_button.disabled = False
 
-        matched = self.ctx.service.match_account(statement.account_last4)
-        show_match = matched is not None and matched.id == account.id
-        self.match_note.value = (
-            f"Matched by account number ending {statement.account_last4}" if show_match else ""
+        statement_last4 = statement.account_last4
+        account_last4 = account.number_last4
+        mismatched = bool(statement_last4 and account_last4) and not (
+            statement_last4.endswith(account_last4) or account_last4.endswith(statement_last4)
         )
+        self.mismatch_note.value = (
+            f"Statement account ending {statement_last4} does not match {account.name} "
+            f"ending {account_last4}"
+            if mismatched
+            else ""
+        )
+        self.mismatch_note.visible = mismatched
+        if mismatched:
+            # Wrong-account imports are an anti-goal: block until the right account is selected.
+            self.import_button.disabled = True
+            self.opening_balance.visible = False
+            self.remember.visible = False
+            self.match_note.visible = False
+            return
+
+        self.import_button.disabled = False
+        matched = self.ctx.service.match_account(statement_last4)
+        show_match = matched is not None and matched.id == account.id
+        self.match_note.value = f"Matched by account number ending {statement_last4}" if show_match else ""
         self.match_note.visible = show_match
 
         offer_opening = not self.ctx.repo.has_transactions_before(account.id, statement.period_start)
@@ -538,10 +582,10 @@ class StatementImportDialog:
             "so this account matches the statement"
         )
 
-        remember = bool(statement.account_last4) and not account.number_last4
+        remember = bool(statement_last4) and not account_last4
         self.remember.visible = remember
         self.remember.value = True
-        self.remember.label = f"Remember this account as ending {statement.account_last4}"
+        self.remember.label = f"Remember this account as ending {statement_last4}"
 
     # ---------- commit ----------
     def _commit(self, _: ft.Event) -> None:
@@ -558,22 +602,35 @@ class StatementImportDialog:
         set_opening = bool(self.opening_balance.visible and self.opening_balance.value)
         remember = bool(self.remember.visible and self.remember.value)
         last4 = self.preview.statement.account_last4
+        account_id = self.preview.account_id
         try:
-            self.ctx.service.commit_import(
-                self.preview, self.preview.rows, set_opening_balance=set_opening
-            )
-            if remember and last4:
-                self.ctx.repo.set_account_number(self.preview.account_id, last4)
+            self.ctx.service.commit_import(self.preview, included, set_opening_balance=set_opening)
         except RepositoryError as exc:
             self.ctx.notify(str(exc), error=True)
             return
         except OSError as exc:
             self.ctx.notify(f"Import failed: {exc.strerror or exc}", error=True)
             return
+
+        # The import is committed; a failure to remember the digits must not mask that success.
+        number_error: Exception | None = None
+        if remember and last4:
+            try:
+                self.ctx.repo.set_account_number(account_id, last4)
+            except Exception as exc:  # noqa: BLE001 - the import already succeeded
+                number_error = exc
+
         count = len(included)
         self._close()
         self.ctx.data_changed()
-        self.ctx.notify(f"Imported {count} transaction(s)")
+        if number_error is not None:
+            self.ctx.notify(
+                f"Imported {count} transaction(s), but the account ending digits could not be saved: "
+                f"{number_error}",
+                error=True,
+            )
+        else:
+            self.ctx.notify(f"Imported {count} transaction(s)")
 
 
 class ImportedStatementsDialog:

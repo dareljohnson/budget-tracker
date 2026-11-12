@@ -80,16 +80,6 @@ the venv launcher fail silently.
 2. Flutter compiles a native executable into `build/<platform>/`.
 3. The scripts in `packaging/<platform>/build.*` wrap that folder in an installer under `build/installer/`.
 
-### Runtime dependencies
-
-The statement importer uses **pdfplumber** to read PDFs. It is a normal runtime dependency in
-`pyproject.toml`, so `flet build` bundles it automatically. The packaging scripts need no change for it.
-
-Import has limits: it supports **Regions checking statements only** — no OCR or scanned images, no bank
-feeds, and no OFX/QIF/CAMT/CSV import. PDFs are never stored; only the file's SHA-256 hash and, at most, the
-last four digits of the account number are kept. See
-[Importing bank statements](README.md#importing-bank-statements) in the README.
-
 Flutter is **downloaded automatically** to `~/flutter/<version>` on the first build, which is a large one-time
 download. App metadata comes from `pyproject.toml`:
 
@@ -107,6 +97,16 @@ artifact = "Budget Tracker"    # Budget Tracker.app
 
 The version shown in installers is `[project].version`. **Bump it for every release** so upgrades install
 cleanly.
+
+### Runtime dependencies
+
+The statement importer uses **pdfplumber** to read PDFs. It is a normal runtime dependency in
+`pyproject.toml`, so `flet build` bundles it automatically. The packaging scripts need no change for it.
+
+Import has limits: it supports **Regions checking statements only** — no OCR or scanned images, no bank
+feeds, and no OFX/QIF/CAMT/CSV import. PDFs are never copied into the database: of the statement file
+itself, the app keeps only its SHA-256 hash and, at most, the last four account digits. See
+[Importing bank statements](README.md#importing-bank-statements) in the README.
 
 ### Windows 11
 

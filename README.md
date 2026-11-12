@@ -15,7 +15,7 @@ A personal budget tracker desktop app built with **Python 3.13**, **[Flet](https
   - **Transfer**: money moved between your own accounts, e.g. a credit card payment or moving money to savings. Transfers change balances but are **not** counted as income or spending, so card purchases aren't counted twice.
 
   Search and filter by type, account, category, or month, and export the current view to CSV.
-- **Statement import**: import a Regions checking statement PDF from the Transactions page. The PDF is parsed locally and verified against the statement's own summary totals, and nothing is written until you review it. The matching account is preselected from its saved number ending, and a mismatch blocks the import. Each row has its own type, category, and (for transfers) destination account; a category can be applied to all selected rows at once, duplicate rows are flagged and left unchecked, and an opening balance can be set when the account has no earlier history. You can also remember the account's last four digits and save a category rule from a row. **Imported statements…** lets you undo an import. See [Importing bank statements](#importing-bank-statements) for the supported files and limits.
+- **Statement import**: import a Regions checking statement PDF from the Transactions page. The PDF is parsed locally and verified against the statement's own summary totals, and nothing is written until you review it. When exactly one saved account number ending matches, that account is preselected, and a mismatch blocks the import. Each row has its own type, category, and (for transfers) destination account; a category can be applied to all selected rows at once, duplicate rows are flagged and left unchecked, and an opening balance can be set when the account has no earlier history. You can also remember the account's last four digits and save a category rule from a row. **Imported statements…** lets you undo an import. See [Importing bank statements](#importing-bank-statements) for the supported files and limits.
 - **Excel export**: **Export Excel** on the Transactions screen saves a full `.xlsx` workbook with live formulas. It opens in Microsoft Excel, Apple Numbers, Google Sheets, and LibreOffice. See [Excel workbook](#excel-workbook).
 - **Budgets**: set monthly limits per expense category. Progress bars turn amber at 80% and red when you go over. You can copy last month's budgets.
 - **Categories**: income and expense categories with custom colors and icons. Default categories are created on first run. Category rules saved from statement imports are listed under **Categories → Rules**, where they can be reviewed and deleted.
@@ -59,7 +59,7 @@ $env:PYTHONPATH = "src"; python -m unittest discover -s tests
 
 Data is stored in SQLite at `%LOCALAPPDATA%\BudgetTracker\budget_tracker.db` on Windows (`~/.local/share/budget_tracker` on Linux and macOS). To use a different folder, set the `BUDGET_TRACKER_HOME` environment variable. With a Microsoft Store Python, Windows redirects the file into the package cache — see [Where data lives](PACKAGING.md#where-data-lives) for the exact paths.
 
-Statement PDFs are never copied into the database. An import stores only the PDF's SHA-256 hash and, if you choose to remember it, the last four digits of the account number.
+Statement PDFs are never copied into the database. Of the statement file itself, an import keeps only the PDF's SHA-256 hash and, if you choose to remember it, the last four account digits; the statement summary and its imported transactions are saved as normal local data.
 
 ## Project layout
 
@@ -95,7 +95,7 @@ Existing databases are upgraded automatically: transactions recorded before acco
 
 On the **Transactions** page, choose **Import statement** and pick a Regions checking statement PDF. The app parses it on your PC, checks the transactions against the statement's own summary totals, and shows a review before anything is written.
 
-- The **account** is preselected when a saved account number ending matches the statement's. If the statement's digits conflict with the selected account, the import is blocked until the right account is chosen.
+- The **account** is preselected when a single saved account number ending matches the statement's. If the statement's digits conflict with the selected account, the import is blocked until the right account is chosen.
 - Each row has its own **type** (expense, income, refund, or transfer), **category**, and, for transfers, destination account. **Apply** sets one category for all selected rows, and **Select all** toggles every row.
 - Rows that look like transactions you already have are flagged **Duplicate** and left unchecked. You can still include one deliberately.
 - If the account has no transactions before the statement period, you can set its **opening balance** to the statement's beginning balance.
@@ -108,7 +108,7 @@ The import is rejected — and nothing is written — if the parsed rows don't a
 - Regions **checking** statements only. Other banks, Regions credit card or savings statements, and other layouts are rejected.
 - PDFs only: no OCR or scanned images.
 - No bank feeds, and no OFX, QIF, CAMT, or CSV import. CSV is export-only.
-- Everything is parsed and stored locally. The PDF itself isn't kept: the app records only its SHA-256 hash (to detect repeat imports) and, at most, the last four digits of the account number.
+- Everything is parsed and stored locally. PDFs are never copied into the database: of the statement file itself, the app records only the SHA-256 hash (to detect repeat imports) and, at most, the last four account digits.
 
 ## Reconciling accounts
 

@@ -43,6 +43,15 @@ class RepositoryError(Exception):
     """Raised for user-facing data integrity errors."""
 
 
+def _validated_account_digits(digits: str | None) -> str | None:
+    """Account suffix is optional, but must otherwise be 1-4 ASCII digits."""
+    if digits is None:
+        return None
+    if not (isinstance(digits, str) and digits.isascii() and digits.isdigit() and len(digits) <= 4):
+        raise RepositoryError("Account number digits must be 1 to 4 ASCII digits")
+    return digits
+
+
 def _month_bounds(month: str) -> tuple[str, str]:
     """Return [start, end) ISO dates for a YYYY-MM month."""
     year, mon = map(int, month.split("-"))
@@ -153,12 +162,13 @@ class Repository:
         name = account.name.strip()
         if not name:
             raise RepositoryError("Account name is required")
+        number_last4 = _validated_account_digits(account.number_last4)
         try:
             with self.conn:
                 cur = self.conn.execute(
                     "INSERT INTO accounts (name, kind, opening_balance_cents, color, number_last4) "
                     "VALUES (?, ?, ?, ?, ?)",
-                    (name, account.kind.value, account.opening_balance_cents, account.color, account.number_last4),
+                    (name, account.kind.value, account.opening_balance_cents, account.color, number_last4),
                 )
         except sqlite3.IntegrityError as exc:
             raise RepositoryError(f"An account named '{name}' already exists") from exc
@@ -171,22 +181,20 @@ class Repository:
         name = account.name.strip()
         if not name:
             raise RepositoryError("Account name is required")
+        number_last4 = _validated_account_digits(account.number_last4)
         try:
             with self.conn:
                 self.conn.execute(
                     "UPDATE accounts SET name = ?, kind = ?, opening_balance_cents = ?, color = ?, number_last4 = ? "
                     "WHERE id = ?",
-                    (name, account.kind.value, account.opening_balance_cents, account.color, account.number_last4,
+                    (name, account.kind.value, account.opening_balance_cents, account.color, number_last4,
                      account.id),
                 )
         except sqlite3.IntegrityError as exc:
             raise RepositoryError(f"An account named '{name}' already exists") from exc
 
     def set_account_number(self, account_id: int, digits: str | None) -> None:
-        if digits is not None and not (
-            isinstance(digits, str) and digits.isascii() and digits.isdigit() and len(digits) <= 4
-        ):
-            raise RepositoryError("Account number digits must be 1 to 4 ASCII digits")
+        digits = _validated_account_digits(digits)
         with self.conn:
             self.conn.execute("UPDATE accounts SET number_last4 = ? WHERE id = ?", (digits, account_id))
 
@@ -603,6 +611,15 @@ class Repository:
             (account_id,),
         )
         return [self._row_to_reconciliation(r) for r in rows]
+
+    def reconciliation_for_statement(self, statement_id: int) -> Reconciliation | None:
+        """The reconciliation written by one import, independent of other checks' dates."""
+        row = self.conn.execute(
+            "SELECT id, account_id, statement_id, as_of, stated_cents, computed_cents, difference_cents, note, "
+            "created_at FROM reconciliations WHERE statement_id = ? ORDER BY id DESC LIMIT 1",
+            (statement_id,),
+        ).fetchone()
+        return self._row_to_reconciliation(row) if row else None
 
     def account_balance_as_of(self, account_id: int, as_of: date) -> int:
         """Ledger balance of one account through ``as_of``, inclusive."""

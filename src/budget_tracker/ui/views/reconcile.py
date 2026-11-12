@@ -29,6 +29,7 @@ class BalanceCheckDialog:
         self.is_liability = account.kind.is_liability
         self.last_check: Reconciliation | None = None
         self._stated_cents: int | None = None
+        self._adjusted_check: Reconciliation | None = None
 
         self.status = ft.Text(size=12, color=ft.Colors.ON_SURFACE_VARIANT)
         self.date = date_field(ctx.page, "As of", date.today())
@@ -207,6 +208,7 @@ class BalanceCheckDialog:
         resolved = reconciliation.difference_cents == 0
         self.difference_value.color = INCOME_COLOR if resolved else EXPENSE_COLOR
         self.result.visible = True
+        self.adjust_button.disabled = False
         self.adjust_row.visible = not resolved
         if not resolved:
             # The signed ledger correction that moves computed to the stated balance.
@@ -253,6 +255,10 @@ class BalanceCheckDialog:
         if self.last_check is None or self._stated_cents is None:
             self.ctx.notify("Run a balance check first", error=True)
             return
+        if self.last_check is self._adjusted_check:
+            # The correction is already in the ledger; never post it twice for the same check.
+            self.ctx.notify("An adjustment was already recorded for this balance check", error=True)
+            return
         self.adjustment.error = None
         try:
             amount = parse_signed_money(self.adjustment.value)
@@ -270,6 +276,9 @@ class BalanceCheckDialog:
         try:
             self.ctx.service.adjust_balance(self.account.id, as_of, amount, note)
             recorded = True
+            # Disable the action before the follow-up so a failed recheck cannot invite a duplicate.
+            self._adjusted_check = self.last_check
+            self.adjust_button.disabled = True
             follow_up = self.ctx.service.check_balance(self.account.id, as_of, self._stated_cents, note)
         except RepositoryError as exc:
             if recorded:
@@ -277,7 +286,12 @@ class BalanceCheckDialog:
                 self._refresh_status()
                 self._render_history()
                 self.ctx.data_changed()
-            self.ctx.notify(str(exc), error=True)
+                self.ctx.notify(
+                    f"The adjustment was recorded, but the follow-up balance check failed: {exc}",
+                    error=True,
+                )
+            else:
+                self.ctx.notify(str(exc), error=True)
             return
         self._show_result(follow_up)
         self._refresh_status()

@@ -122,6 +122,11 @@ class TestEditors(unittest.TestCase):
             if widgets.row.transaction.description == description
         )
 
+    def _set_opening(self, account_id: int, cents: int) -> None:
+        account = self.repo.get_account(account_id)
+        account.opening_balance_cents = cents
+        self.repo.update_account(account)
+
     def test_statement_import_dialog_commits_only_included_rows(self):
         dialog = self._import_dialog([
             self._import_row(TransactionType.EXPENSE, 2_000, 20, "Groceries"),
@@ -265,6 +270,18 @@ class TestEditors(unittest.TestCase):
         editor._save(None)
         self.assertEqual(self.page.errors, [])
         self.assertEqual(next((a for a in self.repo.list_accounts() if a.name == "Visa"), None).number_last4, "060")
+
+    def test_account_editor_rejects_non_ascii_last_digits(self):
+        from budget_tracker.ui.views.accounts import AccountEditor
+
+        editor = AccountEditor(self.ctx, None)
+        editor.open()
+        editor.name.value = "Visa"
+        editor.number_last4.value = "٠٦٠"
+        with unittest.mock.patch.object(type(editor.dialog), "update"):
+            editor._save(None)
+        self.assertEqual(editor.number_last4.error, "Digits only")
+        self.assertIsNone(next((a for a in self.repo.list_accounts() if a.name == "Visa"), None))
 
     def test_balance_check_adjustment_resolves_and_records_history(self):
         from budget_tracker.ui.views.reconcile import BalanceCheckDialog
@@ -431,10 +448,85 @@ class TestEditors(unittest.TestCase):
             dialog._adjust(None)
 
         self.assertEqual(changes, [True])
-        self.assertEqual(self.page.errors, ["follow-up failed"])
+        self.assertEqual(
+            self.page.errors,
+            ["The adjustment was recorded, but the follow-up balance check failed: follow-up failed"],
+        )
         self.assertEqual(
             {b.account.name: b.balance_cents for b in self.repo.account_balances()}["Checking"], -500
         )
+        self.assertTrue(dialog.adjust_button.disabled)
+
+        # A failed recheck must not offer the same correction again.
+        adjustments = self.repo.list_transactions(type_=TransactionType.ADJUSTMENT)
+        self.assertEqual(len(adjustments), 1)
+        dialog.adjustment.value = "-5.00"
+        with unittest.mock.patch.object(self.ctx.service, "adjust_balance") as adjust:
+            dialog._adjust(None)
+        adjust.assert_not_called()
+        self.assertEqual(len(self.repo.list_transactions(type_=TransactionType.ADJUSTMENT)), 1)
+        self.assertEqual(
+            self.page.errors[-1], "An adjustment was already recorded for this balance check"
+        )
+
+    def test_projection_uses_only_included_rows(self):
+        self._set_opening(self.accts["Checking"].id, 100_000)
+        dialog = self._import_dialog([
+            self._import_row(TransactionType.INCOME, 50_000, 20, "Payroll"),
+            self._import_row(TransactionType.EXPENSE, 30_000, 25, "Rent"),
+            self._import_row(TransactionType.EXPENSE, 1_000, 30, "Fee"),
+        ])
+        self.assertEqual(dialog.projection_difference.value, "$0.00")
+
+        payroll = self._widget_for(dialog, "Payroll")
+        payroll.include.value = False
+        dialog._row_toggled(payroll)
+        self.assertEqual(dialog.projection_difference.value, "-$500.00")
+
+    def test_projection_includes_activity_inside_the_period(self):
+        self._set_opening(self.accts["Checking"].id, 100_000)
+        groceries = next(c for c in self.repo.list_categories(TransactionType.EXPENSE) if c.name == "Groceries")
+        self.repo.add_transaction(Transaction(
+            5_000, TransactionType.EXPENSE, groceries.id, date(2026, 9, 18), "Manual",
+            account_id=self.accts["Checking"].id,
+        ))
+        dialog = self._import_dialog([
+            self._import_row(TransactionType.INCOME, 50_000, 20, "Payroll"),
+            self._import_row(TransactionType.EXPENSE, 30_000, 25, "Rent"),
+            self._import_row(TransactionType.EXPENSE, 1_000, 30, "Fee"),
+        ])
+        self.assertEqual(dialog.projection_difference.value, "-$50.00")
+
+    def test_projection_credits_statement_account_for_income_origin_transfer(self):
+        self._set_opening(self.accts["Checking"].id, 100_000)
+        dialog = self._import_dialog([self._import_row(TransactionType.INCOME, 50_000, 20, "Payroll")])
+        payroll = self._widget_for(dialog, "Payroll")
+        payroll.type_dd.value = TransactionType.TRANSFER.value
+        dialog._type_changed(payroll)
+        payroll.destination_dd.value = str(self.accts["Cash"].id)
+        dialog._destination_changed(payroll)
+
+        # +50000 effect: the statement account is the credited side of the income-origin transfer.
+        self.assertEqual(dialog.projection_difference.value, "+$310.00")
+
+    def test_import_result_uses_the_imports_own_reconciliation(self):
+        checking = self.accts["Checking"]
+        newer = self.ctx.service.check_balance(checking.id, date(2026, 12, 1), 0)
+        dialog = self._import_dialog([self._import_row(TransactionType.INCOME, 19_000, 20, "Payroll")])
+        dialog.opening_balance.value = False
+        with unittest.mock.patch(
+            "budget_tracker.ui.views.statement_import.ImportResultDialog"
+        ) as result_cls:
+            dialog._commit(None)
+
+        self.assertEqual(self.page.errors, [])
+        self.assertIs(self.ctx.service.last_reconciliation(checking.id).id, newer.id)
+        imported_id = dialog.preview.statement.id
+        self.assertIsNotNone(imported_id)
+        passed = result_cls.call_args.args[2]
+        self.assertEqual(passed.statement_id, imported_id)
+        self.assertEqual(passed.as_of, date(2026, 10, 15))
+        self.assertEqual(self.repo.reconciliation_for_statement(imported_id).id, passed.id)
 
     def test_import_dialog_maps_read_error_to_message(self):
         from budget_tracker.statements.model import StatementReadError

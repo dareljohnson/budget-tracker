@@ -270,7 +270,7 @@ class AccountEditor:
         if not name:
             self.name.error = "Name is required"
             valid = False
-        if last4 and not last4.isdigit():
+        if last4 and not (last4.isascii() and last4.isdigit() and len(last4) <= 4):
             self.number_last4.error = "Digits only"
             valid = False
         try:

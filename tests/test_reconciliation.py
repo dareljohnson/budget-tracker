@@ -99,6 +99,15 @@ class TestAccountNumber(Base):
         self.repo.set_account_number(acct.id, None)
         self.assertIsNone(self.repo.get_account(acct.id).number_last4)
 
+    def test_add_and_update_reject_non_ascii_digits(self):
+        with self.assertRaises(RepositoryError):
+            self.repo.add_account(Account("Bad", AccountKind.CHECKING, number_last4="٠٦٠"))
+        acct = self.repo.add_account(Account("Good", AccountKind.CHECKING))
+        acct.number_last4 = "٠٦٠"
+        with self.assertRaises(RepositoryError):
+            self.repo.update_account(acct)
+        self.assertIsNone(self.repo.get_account(acct.id).number_last4)
+
 
 class TestCategoryRules(Base):
     def test_add_category_rule_is_idempotent(self):

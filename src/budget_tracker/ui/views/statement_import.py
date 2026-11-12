@@ -580,6 +580,7 @@ class StatementImportDialog:
         widgets.row.include = bool(widgets.include.value)
         self._edited = True
         self.select_all.value = bool(self._row_widgets) and all(w.include.value for w in self._row_widgets)
+        self._refresh_projection()
         self.ctx.page.update()
 
     def _select_all_changed(self, _: ft.Event[ft.Checkbox]) -> None:
@@ -588,6 +589,7 @@ class StatementImportDialog:
             widgets.row.include = value
             widgets.include.value = value
         self._edited = True
+        self._refresh_projection()
         self.ctx.page.update()
 
     def _type_changed(self, widgets: _RowWidgets) -> None:
@@ -601,6 +603,7 @@ class StatementImportDialog:
         self._sync_category(widgets)
         self._sync_destination(widgets)
         self._sync_amount(widgets)
+        self._refresh_projection()
         self.ctx.page.update()
 
     def _category_changed(self, widgets: _RowWidgets) -> None:
@@ -609,6 +612,7 @@ class StatementImportDialog:
         )
         widgets.save_rule.disabled = widgets.row.transaction.category_id is None
         self._edited = True
+        self._refresh_projection()
         self.ctx.page.update()
 
     def _save_rule(self, widgets: _RowWidgets) -> None:
@@ -626,6 +630,7 @@ class StatementImportDialog:
             int(widgets.destination_dd.value) if widgets.destination_dd.value else None
         )
         self._edited = True
+        self._refresh_projection()
 
     def _apply_category(self, _: ft.Event) -> None:
         if not self.apply_category.value:
@@ -649,6 +654,7 @@ class StatementImportDialog:
             widgets.save_rule.disabled = False
             applied += 1
         self._edited = True
+        self._refresh_projection()
         self.ctx.page.update()
         message = f"Applied {category.name} to {applied} selected row(s)"
         if skipped:
@@ -798,36 +804,62 @@ class StatementImportDialog:
         self.remember.label = f"Remember this account as ending {statement_last4}"
         self._refresh_projection()
 
+    def _included_effect(self, account_id: int) -> int:
+        """Net change the included preview rows would make to ``account_id``'s balance."""
+        effect = 0
+        for row in self.preview.rows if self.preview is not None else []:
+            if not row.include:
+                continue
+            tx = self._oriented(row, account_id).transaction
+            if tx.type in (TransactionType.INCOME, TransactionType.REFUND):
+                if tx.account_id == account_id:
+                    effect += tx.amount_cents
+            elif tx.type is TransactionType.EXPENSE:
+                if tx.account_id == account_id:
+                    effect -= tx.amount_cents
+            elif tx.type is TransactionType.TRANSFER:
+                if tx.account_id == account_id:
+                    effect -= tx.amount_cents
+                elif tx.transfer_account_id == account_id:
+                    effect += tx.amount_cents
+        return effect
+
     def _refresh_projection(self) -> None:
-        """Show how this import would reconcile the account with the statement (spec §7.5/§8.1)."""
+        """Show how the included rows would reconcile the account with the statement (spec §7.5/§8.1)."""
         self.projection_panel.visible = False
         if self.preview is None or not self.account.value:
             return
         statement = self.preview.statement
         account_id = int(self.account.value)
+        account = self.ctx.repo.get_account(account_id)
+        if account is None:
+            return
         try:
             current_cents = self.ctx.repo.account_balance_as_of(account_id, statement.period_end)
         except RepositoryError:
             return
+        effect_cents = self._included_effect(account_id)
         set_opening = bool(self.opening_balance.visible and self.opening_balance.value)
-        has_history = self.ctx.repo.has_transactions_before(account_id, statement.period_start)
-        if set_opening and not has_history:
-            # The opening balance will be set to the statement's beginning, so the ledger ends at ending.
-            projected_cents = 0
-        else:
+        if set_opening:
+            # Replacing the opening balance changes only the starting point, not existing activity.
             projected_cents = (
-                current_cents + (statement.ending_cents - statement.beginning_cents) - statement.ending_cents
+                statement.beginning_cents
+                + (current_cents - account.opening_balance_cents)
+                + effect_cents
             )
+        else:
+            projected_cents = current_cents + effect_cents
+        difference_cents = projected_cents - statement.ending_cents
         self.projection_statement.value = format_money(statement.ending_cents)
         self.projection_balance_label.value = f"Account balance at {statement.period_end:%Y-%m-%d}"
         self.projection_balance.value = format_money(current_cents)
-        self.projection_difference.value = format_money(projected_cents, signed=True)
-        self.projection_difference.color = INCOME_COLOR if projected_cents == 0 else EXPENSE_COLOR
-        if projected_cents == 0:
+        self.projection_difference.value = format_money(difference_cents, signed=True)
+        self.projection_difference.color = INCOME_COLOR if difference_cents == 0 else EXPENSE_COLOR
+        if difference_cents == 0:
             self.projection_note.value = "After importing, this account matches the statement's ending balance."
         else:
             self.projection_note.value = (
-                "The statement and this account's ledger disagree by this amount. Importing keeps existing "
+                "The statement and the included rows disagree by this amount. Importing keeps existing "
                 "transactions; use Check balance afterwards to review or correct the difference."
             )
         self.projection_note.visible = True
@@ -860,7 +892,9 @@ class StatementImportDialog:
         account_id = self.preview.account_id
         commit_rows = [self._oriented(row, account_id) for row in included]
         try:
-            self.ctx.service.commit_import(self.preview, commit_rows, set_opening_balance=set_opening)
+            statement = self.ctx.service.commit_import(
+                self.preview, commit_rows, set_opening_balance=set_opening
+            )
         except RepositoryError as exc:
             self.ctx.notify(str(exc), error=True)
             return
@@ -877,7 +911,13 @@ class StatementImportDialog:
                 number_error = exc
 
         count = len(included)
-        reconciliation = self.ctx.service.last_reconciliation(account_id)
+        # Use this import's own reconciliation; last_reconciliation is ordered by as_of and may
+        # belong to a newer manual balance check.
+        reconciliation = (
+            self.ctx.repo.reconciliation_for_statement(statement.id)
+            if statement.id is not None
+            else None
+        )
         account = self.ctx.repo.get_account(account_id)
         self._close()
         self.ctx.data_changed()

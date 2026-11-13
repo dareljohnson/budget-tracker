@@ -233,16 +233,18 @@ def is_credit_card_marker(text: str) -> bool:
 
 
 def has_non_usd_marker(text: str) -> bool:
-    """Return whether a currency declaration names a non-USD currency.
+    """Return whether ``text`` carries a non-USD currency signal.
 
-    ISO codes are only meaningful in a declaration (``Statement currency: EUR``); a foreign purchase
-    inside a transaction description (``PURCHASE 25.00 EUR``) is not a document-level signal.
+    A non-USD symbol (``£``, ``€``, ``C$``, ``A$``) is unambiguous, so it counts wherever it appears;
+    callers scan the summary region, where a symbol adjacent to a summary amount is a summary-level
+    signal. ISO codes are only meaningful in a declaration (``Statement currency: EUR``); a foreign
+    purchase inside a transaction description (``PURCHASE 25.00 EUR``) is not a document-level signal.
     """
+    if any(symbol in text.upper() for symbol in _NON_USD_SYMBOLS):
+        return True
     normalized = normalize_label(text)
     if not _contains_phrase(normalized, "currency"):
         return False
-    if any(symbol in text.upper() for symbol in _NON_USD_SYMBOLS):
-        return True
     return any(_contains_phrase(normalized, code) for code in _NON_USD_CODES)
 
 

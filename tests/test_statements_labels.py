@@ -42,6 +42,7 @@ def test_rejection_markers():
     assert not labels.is_credit_card_marker("POS DEBIT VISA 1234")
     assert labels.has_non_usd_marker("Statement currency: EUR")
     assert not labels.has_non_usd_marker("PURCHASE 25.00 EUR")
+    assert labels.has_non_usd_marker("Beginning Balance £1,000.00")
 
 
 def test_label_text_strips_every_amount_and_date_token():

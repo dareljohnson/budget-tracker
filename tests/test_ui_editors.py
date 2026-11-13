@@ -1,5 +1,6 @@
 """UI logic tests: drive the editors with real Flet controls against an in-memory page stub."""
 
+import asyncio
 import tempfile
 import unittest
 import unittest.mock
@@ -417,7 +418,7 @@ class TestEditors(unittest.TestCase):
         dialog._category_changed(widgets)
 
         dialog.account.value = str(self.accts["Cash"].id)
-        dialog._account_changed(None)
+        asyncio.run(dialog._account_changed(None))
         [confirm] = self.page.open_dialogs
         self.assertEqual(confirm.title.value, "Discard row changes?")
         confirm.actions[0].on_click(None)
@@ -425,9 +426,9 @@ class TestEditors(unittest.TestCase):
 
         dialog.account.value = str(self.accts["Cash"].id)
         with unittest.mock.patch.object(dialog, "_load_for_account") as load:
-            dialog._account_changed(None)
+            asyncio.run(dialog._account_changed(None))
             [confirm] = self.page.open_dialogs
-            confirm.actions[1].on_click(None)
+            asyncio.run(confirm.actions[1].on_click(None))
         load.assert_called_once_with(self.accts["Cash"].id)
 
     def test_balance_check_adjustment_refreshes_when_follow_up_check_fails(self):
@@ -563,15 +564,44 @@ class TestEditors(unittest.TestCase):
         self.assertIn("US dollar", message)
         self.assertNotIn("Regions", message)
 
+    def test_parse_error_copy_names_missing_ocr_engine(self):
+        """Use the parser's real message so rewording it fails this test, not production."""
+        from budget_tracker.statements import load_statement
+        from budget_tracker.statements.model import UnsupportedStatementError
+        from budget_tracker.ui.views.statement_import import _notify_parse_error
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "statement.png"
+            path.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 16)
+            with unittest.mock.patch(
+                "budget_tracker.statements.ocr_available", return_value=False
+            ):
+                with self.assertRaises(UnsupportedStatementError) as raised:
+                    load_statement(path)
+
+        with unittest.mock.patch.object(self.ctx, "notify") as notify:
+            _notify_parse_error(self.ctx, raised.exception)
+        self.assertIn("OCR", notify.call_args.args[0])
+
     def test_ocr_preview_shows_badge(self):
         from budget_tracker.statements.model import ImportPreview
 
         rows = [self._import_row(TransactionType.EXPENSE, 2_000, 20, "Groceries")]
         dialog = self._import_dialog(rows)
+        self.assertFalse(dialog.ocr_badge.visible)          # text preview: hidden
         dialog._install_preview(ImportPreview(
             statement=dialog.preview.statement, account_id=dialog.preview.account_id,
             rows=rows, source="ocr"))
         self.assertTrue(dialog.ocr_badge.visible)
+        self.assertIn(dialog.ocr_badge, dialog.summary_holder.controls)
+
+    def test_all_reparse_paths_are_async(self):
+        import inspect
+
+        from budget_tracker.ui.views.statement_import import StatementImportDialog
+
+        self.assertTrue(inspect.iscoroutinefunction(StatementImportDialog._load_for_account))
+        self.assertTrue(inspect.iscoroutinefunction(StatementImportDialog._account_changed))
 
     def test_views_render(self):
         from budget_tracker.ui.views.accounts import AccountsView

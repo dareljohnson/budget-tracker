@@ -34,8 +34,11 @@ DUPLICATE_WIDTH = 76
 
 
 _UNSUPPORTED_MESSAGES = {
+    # generic._refuse_out_of_scope raises "Credit card statements are not supported".
     "credit card": "Credit card statements aren't supported. Nothing was imported.",
+    # generic._refuse_out_of_scope raises "Only US dollar statements are supported".
     "us dollar": "Only US dollar statements are supported. Nothing was imported.",
+    # statements.__init__._load_image raises "Image statements require the local OCR engine".
     "ocr": "Could not read this image because local OCR isn't available. Nothing was imported.",
 }
 _LAYOUT_MESSAGE = (
@@ -360,11 +363,11 @@ class StatementImportDialog:
                         border_radius=20,
                         bgcolor=ft.Colors.with_opacity(0.12, INCOME_COLOR),
                     ),
-                    self.ocr_badge,
                 ],
                 spacing=8,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
+            self.ocr_badge,
         ]
         self.ocr_badge.visible = preview.source == "ocr"
 
@@ -693,7 +696,7 @@ class StatementImportDialog:
         self.ctx.notify(message)
 
     # ---------- account binding ----------
-    def _account_changed(self, _: ft.Event[ft.Dropdown]) -> None:
+    async def _account_changed(self, _: ft.Event[ft.Dropdown]) -> None:
         if self._path is None:
             return
         if not self.account.value:
@@ -711,7 +714,7 @@ class StatementImportDialog:
         if self.preview is not None and self._edited:
             self._confirm_account_switch(account_id)
             return
-        self._load_for_account(account_id)
+        await self._load_for_account(account_id)
 
     def _confirm_account_switch(self, account_id: int) -> None:
         """Switching accounts re-parses and discards row edits, so ask before doing it."""
@@ -722,9 +725,9 @@ class StatementImportDialog:
             self.account.value = previous
             self.ctx.page.update()
 
-        def proceed(_: ft.Event) -> None:
+        async def proceed(_: ft.Event) -> None:
             self.ctx.page.pop_dialog()
-            self._load_for_account(account_id)
+            await self._load_for_account(account_id)
 
         self.ctx.page.show_dialog(
             ft.AlertDialog(
@@ -743,9 +746,11 @@ class StatementImportDialog:
             )
         )
 
-    def _load_for_account(self, account_id: int) -> None:
+    async def _load_for_account(self, account_id: int) -> None:
         try:
-            preview = self.ctx.service.prepare_import(self._path, account_id)
+            preview = await asyncio.to_thread(
+                self.ctx.service.prepare_import, self._path, account_id
+            )
         except (StatementValidationError, UnsupportedStatementError, StatementReadError, OSError,
                 RepositoryError) as exc:
             # Never leave another account's preview visible as if it belonged to this selection.
@@ -765,6 +770,7 @@ class StatementImportDialog:
         self.rows_column.controls = []
         self.rows_count.value = ""
         self.summary_holder.controls = []
+        self.ocr_badge.visible = False
         self.statement_meta.value = message
         self.select_all.value = False
         self.match_note.value = ""
@@ -1089,7 +1095,7 @@ class ImportedStatementsDialog:
                     [
                         ft.Text(
                             "Deleting an import removes its transactions and reconciliation, "
-                            "and frees the PDF to be imported again.",
+                            "and frees the file to be imported again.",
                             size=12,
                             color=ft.Colors.ON_SURFACE_VARIANT,
                         ),
@@ -1165,7 +1171,7 @@ class ImportedStatementsDialog:
             self.ctx.page,
             "Delete this import?",
             f"Remove the {account} statement for {_period(statement)}? Its imported transactions "
-            "and reconciliation will be deleted, and the PDF can be imported again. If this import "
+            "and reconciliation will be deleted, and the file can be imported again. If this import "
             "set the account's opening balance, that opening balance is not reverted.",
             lambda: self._delete(statement),
             confirm_text="Delete import",

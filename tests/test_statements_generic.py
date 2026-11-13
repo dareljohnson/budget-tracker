@@ -135,12 +135,50 @@ def test_page_footer_and_totals_row_are_not_rows():
 
 def test_section_heading_supplies_direction():
     words = [Word("DATE", 40, 200), Word("DESCRIPTION", 130, 200), Word("AMOUNT", 400, 200)]
-    words += [Word("DEPOSITS", 130, 220)]
+    words += [Word("DEPOSITS", 20, 220)]
     words += [Word("09/20", 40, 240), Word("Refund", 130, 240), Word("25.00", 400, 240)]
-    words += [Word("WITHDRAWALS", 130, 260)]
+    words += [Word("WITHDRAWALS", 20, 260)]
     words += [Word("09/21", 40, 280), Word("Rent", 130, 280), Word("100.00", 400, 280)]
     rows = find_transactions(words, anchor=date(2026, 9, 20), anchor_on_end=False)
     assert [r.direction for r in rows] == ["income", "expense"]
+
+def test_totals_line_does_not_clear_the_section():
+    words = [Word("DATE", 40, 200), Word("DESCRIPTION", 130, 200), Word("AMOUNT", 400, 200)]
+    words += [Word("WITHDRAWALS", 20, 220)]
+    words += [Word("09/20", 40, 240), Word("Rent", 130, 240), Word("100.00", 400, 240)]
+    words += [Word("Total", 40, 260), Word("Deposits", 80, 260), Word("100.00", 400, 260)]
+    words += [Word("09/21", 40, 280), Word("Rent", 130, 280), Word("100.00", 400, 280)]
+    rows = find_transactions(words, anchor=date(2026, 9, 20), anchor_on_end=False)
+    assert [r.direction for r in rows] == ["expense", "expense"]
+
+def test_totals_line_does_not_set_the_section():
+    words = table_words(["DATE", "DESCRIPTION", "AMOUNT"], [
+        {"date": "09/20", "description": "Card Purchase", "amount": "40.00"},
+    ])
+    words += [Word("Total", 40, 250), Word("Withdrawals", 80, 250), Word("40.00", 400, 250)]
+    words += [Word("09/21", 40, 270), Word("Another", 130, 270), Word("40.00", 400, 270)]
+    rows = find_transactions(words, anchor=date(2026, 9, 20), anchor_on_end=False)
+    assert [r.direction for r in rows] == ["", ""]
+
+def test_wrapped_description_word_is_not_a_heading():
+    words = table_words(["DATE", "DESCRIPTION", "AMOUNT"], [
+        {"date": "09/20", "description": "Card Purchase", "amount": "40.00"},
+        {"date": "09/21", "description": "Rent", "amount": "100.00"},
+    ])
+    words += [Word("WITHDRAWAL", 130, 227)]  # continuation at the description column
+    rows = find_transactions(words, anchor=date(2026, 9, 20), anchor_on_end=False)
+    assert rows[0].description == "Card Purchase WITHDRAWAL"
+    assert [r.description for r in rows] == ["Card Purchase WITHDRAWAL", "Rent"]
+
+def test_trailing_summary_block_is_not_appended():
+    words = table_words(["DATE", "DESCRIPTION", "AMOUNT"], [
+        {"date": "09/20", "description": "Card Purchase", "amount": "40.00"},
+    ])
+    words += [Word("DAILY", 130, 260), Word("BALANCE", 180, 260), Word("SUMMARY", 240, 260)]
+    words += [Word("09/20", 40, 280), Word("1,000.00", 400, 280)]
+    rows = find_transactions(words, anchor=date(2026, 9, 20), anchor_on_end=False)
+    assert len(rows) == 1
+    assert rows[0].description == "Card Purchase"
 
 def test_yearless_date_without_anchor_is_rejected():
     words = table_words(

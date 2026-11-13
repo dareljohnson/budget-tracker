@@ -20,6 +20,13 @@ from budget_tracker.statements.numbers import parse_amount, parse_date
 _NEXT_LINE_TOLERANCE = 12.0
 
 _TOTAL_RE = re.compile(r"\b(?:sub)?totals?\b", re.IGNORECASE)
+_ENDING_BALANCE_RE = re.compile(r"\b(?:ending|closing)\s+balance\b", re.IGNORECASE)
+_NON_FLOW_RE = re.compile(
+    r"\b(?:average|daily\s+balance|interest\s+rate|number\s+of|days\s+in)\b", re.IGNORECASE
+)
+_TABLE_END_RE = re.compile(
+    r"\b(?:daily\s+balance|average\s+balance|end\s+of\s+statement)\b", re.IGNORECASE
+)
 
 COLUMN_TOLERANCE = 25.0
 
@@ -171,10 +178,13 @@ def find_transactions(
     """Reconstruct transaction rows from the statement's column geometry.
 
     The first header line (a ``DATE`` token plus a description token plus an amount token) supplies
-    the column anchors. Each later line whose date-column token parses as a date starts a row; other
-    lines extend the current row's description unless they are a repeated header, a page footer, a
-    totals/summary line, or a section heading. Tokens are assigned to the nearest amount column
-    within :data:`COLUMN_TOLERANCE`. A row's direction comes from its debit/credit column, the sign
+    the column anchors. Each later line whose date-column token parses as a date starts a row. A
+    repeated header, page footer, totals row, or non-flow figure is skipped before section-heading
+    detection, so it never opens a section or extends a description; a wrapped description word at
+    the description column is not a heading. A trailing non-flow block (``DAILY BALANCE``,
+    ``AVERAGE BALANCE``, ``END OF STATEMENT``) ends parsing. Other lines extend the current row's
+    description. Tokens are assigned to the nearest amount column within
+    :data:`COLUMN_TOLERANCE`. A row's direction comes from its debit/credit column, the sign
     or marker of its single amount, the change in its running balance, or its enclosing section --
     in that order; when none applies the direction is ``""``. Rows with no amount are not rows.
 
@@ -187,6 +197,7 @@ def find_transactions(
         return []
     header_index, anchors = header
     date_anchor = anchors["date"]
+    description_anchor = anchors["description"]
     amount_anchors = {role: x for role, x in anchors.items() if role in _AMOUNT_ROLES}
 
     rows: list[TableRow] = []
@@ -216,14 +227,15 @@ def find_transactions(
             current = {"occurred_on": occurred_on, "description": [], "columns": {}}
             _collect_row_tokens(line, current, date_word, amount_anchors)
             continue
-        heading = _heading_family(text)
+        if _TABLE_END_RE.search(text):
+            finalize()
+            break
+        if _FOOTER_RE.search(text) or _non_transaction_line(text):
+            continue
+        heading = _heading_family(line, description_anchor)
         if heading is not None:
             finalize()
             section = heading
-            continue
-        if _FOOTER_RE.search(text):
-            continue
-        if _non_transaction_line(text):
             continue
         if current is not None:
             for word in line:
@@ -309,8 +321,18 @@ def _nearest_role(centre: float, anchors: dict[str, float]) -> str | None:
     return role if abs(x - centre) <= COLUMN_TOLERANCE else None
 
 
-def _heading_family(text: str) -> str | None:
-    """Return the section a heading line opens, or ``None`` for an ordinary line."""
+def _heading_family(line: Sequence[Word], description_anchor: float) -> str | None:
+    """Return the section a heading line opens, or ``None`` for an ordinary line.
+
+    A heading is a narrow class: it carries no amount, is at most six words, matches a section
+    family, and starts outside the description column's tolerance. A wrapped description word sits
+    at the description column, so it extends the current row instead of opening a section.
+    """
+    if any(parse_amount(word.text) is not None for word in line) or len(line) > 6:
+        return None
+    if abs(_centre(line[0]) - description_anchor) <= COLUMN_TOLERANCE:
+        return None
+    text = collapsed(line)
     family = family_of(text)
     if family in _SECTION_FAMILIES:
         return family
@@ -321,9 +343,7 @@ def _heading_family(text: str) -> str | None:
 
 
 def _non_transaction_line(text: str) -> bool:
-    if _TOTAL_RE.search(text):
-        return True
-    return family_of(text) is not None
+    return any(pattern.search(text) for pattern in (_TOTAL_RE, _ENDING_BALANCE_RE, _NON_FLOW_RE))
 
 
 def _build_row(current: dict, previous_balance: int | None, section: str | None) -> TableRow | None:

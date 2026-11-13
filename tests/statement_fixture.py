@@ -1,3 +1,4 @@
+from datetime import datetime
 from pathlib import Path
 
 from fpdf import FPDF
@@ -20,6 +21,7 @@ _WORD_GAP = 4.0
 
 def make_statement_pdf(path: Path) -> None:
     pdf = FPDF(unit="pt", format="letter")
+    pdf.set_creation_date(datetime(2026, 1, 1, 12, 0, 0))
     pdf.add_page()
     pdf.set_font("Helvetica", size=8)
     lines = [
@@ -43,6 +45,7 @@ def make_statement_pdf(path: Path) -> None:
 
 def make_multipage_pdf(path: Path) -> None:
     pdf = FPDF(unit="pt", format="letter")
+    pdf.set_creation_date(datetime(2026, 1, 1, 12, 0, 0))
     pdf.set_font("Helvetica", size=8)
     pdf.add_page()
     page1 = [
@@ -148,6 +151,7 @@ def _generic_statement_tokens() -> list[tuple[float, float, str]]:
 def make_generic_statement_pdf(path: Path) -> None:
     """A BNI-style statement with explicit credit, debit and running-balance columns."""
     pdf = FPDF(unit="pt", format="letter")
+    pdf.set_creation_date(datetime(2026, 1, 1, 12, 0, 0))
     pdf.add_page()
     pdf.set_font("Helvetica", size=_FONT_SIZE)
     for x, y, text in _generic_statement_tokens():
@@ -192,6 +196,7 @@ def _multipage_generic_tokens() -> list[list[tuple[float, float, str]]]:
 def make_multipage_generic_statement_pdf(path: Path) -> None:
     """A BB&T-style decomposed-summary statement whose column header repeats on page two."""
     pdf = FPDF(unit="pt", format="letter")
+    pdf.set_creation_date(datetime(2026, 1, 1, 12, 0, 0))
     pdf.set_font("Helvetica", size=_FONT_SIZE)
     for tokens in _multipage_generic_tokens():
         pdf.add_page()
@@ -203,6 +208,7 @@ def make_multipage_generic_statement_pdf(path: Path) -> None:
 def make_unparsable_text_pdf(path: Path) -> None:
     """A PDF with a real text layer that no statement parser recognizes."""
     pdf = FPDF(unit="pt", format="letter")
+    pdf.set_creation_date(datetime(2026, 1, 1, 12, 0, 0))
     pdf.add_page()
     pdf.set_font("Helvetica", size=12)
     pdf.text(50, 50, "Lorem ipsum dolor sit amet consectetur adipiscing elit sed do")

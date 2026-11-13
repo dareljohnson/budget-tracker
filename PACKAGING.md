@@ -113,11 +113,13 @@ automatically. Expect the OCR models and ONNX Runtime to add **roughly 200 MB** 
 portable payload. The build scripts already pass `--no-compile-packages`: compiling `cv2/config.py` to
 a `.pyc` breaks the OCR import.
 
-Import supports any US checking or savings statement — PDF, PNG, or JPEG — and is accepted only when
-the parsed rows reconcile to the statement's printed summary; credit cards, non-USD statements, bank
-feeds, and OFX/QIF/CAMT/CSV import are out of scope. Statement files are never copied into the
-database: of the file itself, the app keeps only its SHA-256 hash and, at most, the last four account
-digits. See [Importing bank statements](README.md#importing-bank-statements) in the README.
+Import supports most US checking or savings statements — specifically, those that print a standard
+date / description / amount transaction table — in PDF, PNG, or JPEG form, and is accepted only when
+the parsed rows reconcile to the statement's printed summary. Layouts without a recognizable
+transaction table are refused; credit cards, non-USD statements, bank feeds, and OFX/QIF/CAMT/CSV
+import are out of scope. Statement files are never copied into the database: of the file itself, the
+app keeps only its SHA-256 hash and, at most, the last four account digits. See
+[Importing bank statements](README.md#importing-bank-statements) in the README.
 
 ### Windows 11
 

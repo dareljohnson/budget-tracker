@@ -106,9 +106,10 @@ The import is rejected — and nothing is written — if the parsed rows don't a
 
 ### Supported statements and limits
 
-- Any US **checking or savings** statement, from any bank: PDF (with or without a text layer), PNG, or JPEG.
+- Most US **checking or savings** statements — specifically, those that print a standard date / description / amount transaction table (a single amount column, a debit/credit pair, or a balance column): PDF (with or without a text layer), PNG, or JPEG.
 - Scans and photos are read by the built-in local OCR engine, and so are PDFs with no usable text layer. Everything runs on your PC; nothing is uploaded.
-- The import is strict: it is accepted only when the parsed rows reconcile exactly to the statement's printed summary and no row falls outside the statement period. Otherwise it is refused, the refusal says what could not be verified, and nothing is written.
+- The import is strict: it is accepted only when the parsed rows reconcile exactly to the statement's printed summary and no row falls outside the statement period. Otherwise it is refused, the refusal explains the problem, and nothing is written.
+- A layout without a recognizable transaction table — no date column, no description column, or no amount/debit/credit/balance column — is refused. It is not guessed at.
 - **Credit card** statements and **non-USD** statements are out of scope and are refused.
 - **One file per import.** A photographed multi-page statement must be combined into a single PDF first.
 - No bank feeds, and no OFX, QIF, CAMT, or CSV import. CSV is export-only.

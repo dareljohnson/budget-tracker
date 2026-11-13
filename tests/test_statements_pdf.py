@@ -6,14 +6,20 @@ from pathlib import Path
 from fpdf import FPDF
 
 from statement_fixture import (
+    generic_statement_words,
     make_generic_statement_pdf,
     make_multipage_generic_statement_pdf,
     make_multipage_pdf,
     make_statement_pdf,
+    make_unparsable_text_pdf,
 )
 
-from budget_tracker.statements import parse_pdf
-from budget_tracker.statements.model import StatementReadError, UnsupportedStatementError
+from budget_tracker.statements import load_statement, parse_pdf
+from budget_tracker.statements.model import (
+    StatementReadError,
+    StatementValidationError,
+    UnsupportedStatementError,
+)
 
 
 class TestPdfAdapter(unittest.TestCase):
@@ -60,6 +66,36 @@ class TestPdfAdapter(unittest.TestCase):
             path = Path(tmp) / "bbt.pdf"; make_multipage_generic_statement_pdf(path)
             stmt = parse_pdf(path)
         assert len(stmt.transactions) == 6  # the fixture's rows, each once across the repeated header
+
+    def test_bad_text_layer_retries_through_ocr(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "scanned.pdf"; make_unparsable_text_pdf(path)
+
+            def fake(_path):
+                return generic_statement_words()
+
+            stmt = load_statement(path, ocr=fake)
+        assert stmt.source == "ocr"
+        assert stmt.ending_cents == 3_167_869
+
+    def test_document_over_twenty_pages_is_not_retried_through_ocr(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "long.pdf"
+            pdf = FPDF(unit="pt", format="letter"); pdf.set_font("Helvetica", size=12)
+            # More than eight words per page: the sparse-page OCR path must not run here.
+            for _ in range(21):
+                pdf.add_page()
+                pdf.text(50, 50, "Lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod")
+            pdf.output(str(path))
+            calls = []
+
+            def fake(_path):
+                calls.append(_path)
+                return generic_statement_words()
+
+            with self.assertRaises((UnsupportedStatementError, StatementValidationError)):
+                load_statement(path, ocr=fake)
+        self.assertEqual(calls, [])
 
     def test_rejects_non_statement_pdf(self):
         with tempfile.TemporaryDirectory() as tmp:

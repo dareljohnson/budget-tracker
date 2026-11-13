@@ -28,7 +28,8 @@ $version = (Select-String -Path pyproject.toml -Pattern '^version\s*=\s*"([^"]+)
 if (-not $SkipBuild) {
     $flet = Join-Path $root '.venv\Scripts\flet.exe'
     if (-not (Test-Path $flet)) { $flet = 'flet' }
-    & $flet build windows --python-version 3.13 --yes --no-rich-output
+    # --no-compile-packages keeps cv2/config.py; compiling it to .pyc breaks the OCR import.
+    & $flet build windows --python-version 3.13 --no-compile-packages --yes --no-rich-output
     if ($LASTEXITCODE -ne 0) { throw "flet build windows failed (exit $LASTEXITCODE). See PACKAGING.md > Troubleshooting." }
 }
 if (-not (Test-Path 'build\windows\BudgetTracker.exe')) { throw 'build\windows\BudgetTracker.exe not found.' }

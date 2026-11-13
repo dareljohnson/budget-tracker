@@ -4,7 +4,7 @@ from datetime import date
 from pathlib import Path
 from unittest import mock
 
-from statement_fixture import make_statement_pdf
+from statement_fixture import make_generic_statement_pdf, make_statement_pdf
 
 from budget_tracker.db import connect
 from budget_tracker.models import Account, AccountKind, Statement, Transaction, TransactionType
@@ -145,6 +145,16 @@ class TestImport(Base):
             make_statement_pdf(path)
             again = BudgetService(self.repo).prepare_import(path, self.accts["Checking"].id)
         self.assertEqual(len(again.rows), 4)
+
+    def test_overlapping_generic_import_flags_duplicates(self):
+        self.repo.add_transaction(Transaction(1_995, TransactionType.EXPENSE, self.cats["Groceries"].id,
+                                              date(2026, 9, 20), "Account Interest",
+                                              account_id=self.accts["Checking"].id))
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "generic.pdf"
+            make_generic_statement_pdf(path)
+            preview = BudgetService(self.repo).prepare_import(path, self.accts["Checking"].id)
+        self.assertTrue(any(row.duplicate for row in preview.rows))
 
     def test_saved_rule_suggests_and_can_be_deleted(self):
         self.repo.add_category_rule("Kroger", self.cats["Groceries"].id)

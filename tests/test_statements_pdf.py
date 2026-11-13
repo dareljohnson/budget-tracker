@@ -5,7 +5,12 @@ from pathlib import Path
 
 from fpdf import FPDF
 
-from statement_fixture import make_multipage_pdf, make_statement_pdf
+from statement_fixture import (
+    make_generic_statement_pdf,
+    make_multipage_generic_statement_pdf,
+    make_multipage_pdf,
+    make_statement_pdf,
+)
 
 from budget_tracker.statements import parse_pdf
 from budget_tracker.statements.model import StatementReadError, UnsupportedStatementError
@@ -40,6 +45,21 @@ class TestPdfAdapter(unittest.TestCase):
             path.write_bytes(b"this is definitely not a pdf")
             with self.assertRaises(StatementReadError):
                 parse_pdf(path)
+
+    def test_generic_layout_imports_end_to_end(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "bni.pdf"; make_generic_statement_pdf(path)
+            stmt = parse_pdf(path)
+        assert stmt.institution == "BNI"
+        assert (stmt.beginning_cents, stmt.deposits_cents, stmt.withdrawals_cents, stmt.ending_cents) == (
+            1_089_592, 2_203_272, 124_995, 3_167_869)
+        assert len(stmt.transactions) == 7
+
+    def test_multipage_generic_layout_imports_each_row_once(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "bbt.pdf"; make_multipage_generic_statement_pdf(path)
+            stmt = parse_pdf(path)
+        assert len(stmt.transactions) == 6  # the fixture's rows, each once across the repeated header
 
     def test_rejects_non_statement_pdf(self):
         with tempfile.TemporaryDirectory() as tmp:

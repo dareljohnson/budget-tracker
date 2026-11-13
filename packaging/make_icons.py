@@ -3,6 +3,7 @@
 Writes:
   src/assets/icon.png                   1024x1024 source icon used by `flet build` for every platform
   src/assets/icon.ico                   multi-size window/taskbar icon for Windows source runs
+  src/assets/icon_windows.ico           Windows build icon read by `flet build`
   packaging/windows/budget_tracker.ico  multi-size .ico for the Windows shortcut launcher
   packaging/linux/budget_tracker.png    256x256 icon for the Linux/macOS source launchers
 
@@ -88,6 +89,7 @@ def main() -> None:
     targets = {
         ROOT / "src" / "assets" / "icon.png": lambda: png(1024),
         ROOT / "src" / "assets" / "icon.ico": lambda: ico([16, 24, 32, 48, 64, 256]),
+        ROOT / "src" / "assets" / "icon_windows.ico": lambda: ico([16, 24, 32, 48, 64, 256]),
         ROOT / "packaging" / "windows" / "budget_tracker.ico": lambda: ico([16, 24, 32, 48, 64, 256]),
         ROOT / "packaging" / "linux" / "budget_tracker.png": lambda: png(256),
     }

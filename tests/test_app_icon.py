@@ -12,6 +12,14 @@ def test_window_icon_asset_is_a_windows_icon():
     assert icon.read_bytes()[:4] == b"\x00\x00\x01\x00"
 
 
+def test_window_icon_path_is_absolute():
+    from budget_tracker.main import _icon_path
+
+    icon = _icon_path()
+    assert icon.is_absolute()
+    assert icon.is_file()
+
+
 def test_assets_dir_resolves_from_source():
     from budget_tracker.main import _assets_dir
 

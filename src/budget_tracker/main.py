@@ -42,6 +42,15 @@ BILLS_INDEX = 3
 ALERT_MAX_ROWS = 6
 
 
+def _icon_path() -> Path:
+    """Absolute path to the runtime ``.ico``.
+
+    Flet ignores a relative ``assets/...`` icon path on Windows; the title-bar icon only
+    appears when this is an absolute ``.ico`` path.
+    """
+    return Path(__file__).resolve().parent.parent / "assets" / "icon.ico"
+
+
 def main(page: ft.Page) -> None:
     repo = Repository(connect(db_path()))
     ctx = AppContext(page=page, repo=repo, service=BudgetService(repo))
@@ -55,7 +64,8 @@ def main(page: ft.Page) -> None:
     page.window.height = 860
     page.window.min_width = 900
     page.window.min_height = 640
-    page.window.icon = "assets/icon.ico"
+    icon = _icon_path()
+    page.window.icon = str(icon) if icon.is_file() else "assets/icon.ico"
 
     def show_view(index: int) -> None:
         rail.selected_index = index

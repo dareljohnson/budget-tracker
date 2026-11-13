@@ -2,6 +2,7 @@ import tempfile
 import unittest
 from datetime import date
 from pathlib import Path
+from unittest import mock
 
 from fpdf import FPDF
 
@@ -77,6 +78,32 @@ class TestPdfAdapter(unittest.TestCase):
             stmt = load_statement(path, ocr=fake)
         assert stmt.source == "ocr"
         assert stmt.ending_cents == 3_167_869
+
+    def test_failed_ocr_retry_reraises_text_path_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "scanned.pdf"; make_unparsable_text_pdf(path)
+
+            def fake(_path):
+                raise StatementReadError("OCR read failed")
+
+            with self.assertRaises((UnsupportedStatementError, StatementValidationError)):
+                load_statement(path, ocr=fake)
+
+    def test_sparse_page_render_failure_becomes_read_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sparse.pdf"
+            pdf = FPDF(unit="pt", format="letter"); pdf.add_page()
+            pdf.set_font("Helvetica", size=12); pdf.text(50, 50, "Hello")
+            pdf.output(str(path))
+            with (
+                mock.patch("budget_tracker.statements.ocr_available", return_value=True),
+                mock.patch(
+                    "budget_tracker.statements.render_pdf_page",
+                    side_effect=RuntimeError("render exploded"),
+                ),
+            ):
+                with self.assertRaises(StatementReadError):
+                    load_statement(path)
 
     def test_document_over_twenty_pages_is_not_retried_through_ocr(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -14,10 +14,16 @@ from pathlib import Path
 
 from PIL import Image
 
-from budget_tracker.statements.extract import PAGE_OFFSET, load_image_pages, render_pdf_pages, sniff_kind
+from budget_tracker.statements.extract import (
+    PAGE_OFFSET,
+    load_image_pages,
+    pdf_page_count,
+    read_dpi,
+    render_pdf_page,
+    sniff_kind,
+)
 from budget_tracker.statements.model import Word
 
-_DEFAULT_DPI = 300.0
 _ENGINE = None
 
 # An amount candidate consists only of digits, separators, spaces around them, and the usual
@@ -28,7 +34,7 @@ _AMOUNT_CANDIDATE_RE = re.compile(
 )
 _SEPARATOR_SPACING_RE = re.compile(r"\s*([.,])\s*")
 _CORE_RE = re.compile(r"\d[\d.,]*")
-_DECIMAL_TAIL_RE = re.compile(r"^(.*)[.,](\d{2})$")
+_SEPARATOR_SPLIT_RE = re.compile(r"[.,]")
 
 
 def ocr_available() -> bool:
@@ -44,14 +50,14 @@ def ocr_available() -> bool:
 def ocr_images(images: Sequence[Image.Image]) -> list[Word]:
     """OCR each page image and return its recognised words in point-like coordinates.
 
-    The engine's boxes are pixels; they are scaled by ``72 / dpi`` using the image's recorded DPI
-    (300 when absent, which is what :func:`extract.render_pdf_pages` uses). Empty text is dropped.
-    The caller is responsible for adding a page offset when combining several pages.
+    The engine's boxes are pixels; they are scaled by ``72 / dpi`` using the image's recorded
+    effective DPI (300 when absent). Empty text is dropped. The caller is responsible for adding a
+    page offset when combining several pages.
     """
     engine = _engine()
     words: list[Word] = []
     for image in images:
-        scale = 72.0 / _image_dpi(image)
+        scale = 72.0 / read_dpi(image.info)
         buffer = io.BytesIO()
         image.save(buffer, format="PNG")
         result, _ = engine(buffer.getvalue())
@@ -68,23 +74,41 @@ def ocr_images(images: Sequence[Image.Image]) -> list[Word]:
 
 
 def ocr_document(path: Path) -> list[Word]:
-    """OCR a whole statement file, flattening its pages into one reading-order word list."""
-    images = render_pdf_pages(path) if sniff_kind(path) == "pdf" else load_image_pages(path)
+    """OCR a whole statement file, flattening its pages into one reading-order word list.
+
+    PDF pages are rendered and recognised one at a time, and each page image is released before
+    the next is opened, so a long document does not hold all of its rasters in memory.
+    """
     words: list[Word] = []
-    for index, image in enumerate(images):
-        offset = index * PAGE_OFFSET
-        words.extend(replace(word, top=word.top + offset) for word in ocr_images([image]))
+    if sniff_kind(path) == "pdf":
+        for index in range(pdf_page_count(path)):
+            image = render_pdf_page(path, index)
+            try:
+                page_words = ocr_images([image])
+            finally:
+                image.close()
+            offset = index * PAGE_OFFSET
+            words.extend(replace(word, top=word.top + offset) for word in page_words)
+        return words
+    for image in load_image_pages(path):
+        try:
+            page_words = ocr_images([image])
+        finally:
+            image.close()
+        words.extend(page_words)
     return words
 
 
 def normalize_amount_token(text: str) -> str:
     """Repair separator damage in an OCR'd amount token without inventing a decimal point.
 
-    Thousands separators are removed. When the token ends in a separator plus exactly two digits,
-    that final separator is the decimal point (``2.074.21`` -> ``2074.21``,
-    ``3.240,000,000.00`` -> ``3240000000.00``); every earlier separator is grouping. A token with
-    no decimal point is returned without one (``70139`` stays ``70139``), so :func:`parse_amount`
-    refuses it rather than booking a 100x-wrong value. Non-amount text is returned unchanged.
+    A token is rewritten only when it splits on ``.``/``,`` into at least three groups whose last
+    group is exactly two digits and whose earlier groups are one to three digits — the shape of
+    thousands grouping (``2.074.21`` -> ``2074.21``, ``3.240,000,000.00`` ->
+    ``3240000000.00``). Other shapes are left alone, so a dotted date (``2024.01.15``) is not
+    mangled, and a token with no decimal point (``70139`` stays ``70139``) is left for
+    :func:`parse_amount` to refuse rather than booking a 100x-wrong value. Non-amount text is
+    returned unchanged.
     """
     stripped = text.strip()
     if _AMOUNT_CANDIDATE_RE.match(stripped) is None:
@@ -98,26 +122,20 @@ def normalize_amount_token(text: str) -> str:
 
 
 def _normalize_core(core: str) -> str:
-    digits_only = re.sub(r"[.,]", "", core)
-    match = _DECIMAL_TAIL_RE.match(core)
-    if match is None:
-        return digits_only
-    whole = re.sub(r"[.,]", "", match.group(1))
-    if not whole:
-        return digits_only
-    return f"{whole}.{match.group(2)}"
+    """Rewrite only digit groups that look like thousands grouping.
 
-
-def _image_dpi(image: Image.Image) -> float:
-    dpi = image.info.get("dpi")
-    if isinstance(dpi, (tuple, list)) and dpi:
-        try:
-            value = float(dpi[0])
-        except (TypeError, ValueError):
-            return _DEFAULT_DPI
-        if value > 0:
-            return value
-    return _DEFAULT_DPI
+    At least three groups are required, the last must be exactly two digits, and every earlier
+    group must be one to three digits. A dotted date (``2024.01.15``) has a four-digit first
+    group, so it is left untouched rather than being mangled into ``202401.15``.
+    """
+    groups = _SEPARATOR_SPLIT_RE.split(core)
+    if (
+        len(groups) >= 3
+        and len(groups[-1]) == 2
+        and all(1 <= len(group) <= 3 for group in groups[:-1])
+    ):
+        return f"{''.join(groups[:-1])}.{groups[-1]}"
+    return core
 
 
 def _engine():

@@ -7,13 +7,14 @@ from pathlib import Path
 from budget_tracker.statements.extract import (
     PAGE_OFFSET,
     pdf_word_pages,
-    render_pdf_pages,
+    render_pdf_page,
     sniff_kind,
 )
 from budget_tracker.statements.generic import parse_generic
 from budget_tracker.statements.lines import collapsed, group_lines
 from budget_tracker.statements.model import (
     ParsedStatement,
+    StatementReadError,
     StatementValidationError,
     UnsupportedStatementError,
     Word,
@@ -90,7 +91,7 @@ def load_statement(path: Path, *, ocr: OcrPages | None = None) -> ParsedStatemen
             raise
         try:
             return _parse_adapters(ocr_fn(path), source="ocr")
-        except (UnsupportedStatementError, StatementValidationError):
+        except Exception:  # noqa: BLE001 - any retry failure yields the text-path error
             raise text_error from None
 
 
@@ -102,16 +103,32 @@ def _load_image(path: Path, ocr: OcrPages | None) -> ParsedStatement:
 
 
 def _pdf_words(path: Path, pages: list[list[Word]]) -> tuple[list[Word], bool]:
-    """Return the document's words, replacing image-only pages with OCR and flagging it."""
+    """Return the document's words, replacing image-only pages with OCR and flagging it.
+
+    Sparse-page OCR is skipped entirely above :data:`_MAX_OCR_PAGES` pages, and each sparse page
+    is rendered and recognised one at a time so a long document is never rasterised at once. A
+    render or recogniser failure becomes :class:`StatementReadError`; a file-level
+    :class:`OSError` still propagates.
+    """
+    flat = [word for page in pages for word in page]
+    if len(pages) > _MAX_OCR_PAGES:
+        return flat, False
     sparse = [index for index, page in enumerate(pages) if len(page) < _MIN_PAGE_WORDS]
     if not sparse or _default_ocr() is None:
-        return [word for page in pages for word in page], False
-    rendered = render_pdf_pages(path)
-    for index in sparse:
-        offset = index * PAGE_OFFSET
-        pages[index] = [
-            replace(word, top=word.top + offset) for word in ocr_images([rendered[index]])
-        ]
+        return flat, False
+    try:
+        for index in sparse:
+            image = render_pdf_page(path, index)
+            try:
+                page_words = ocr_images([image])
+            finally:
+                image.close()
+            offset = index * PAGE_OFFSET
+            pages[index] = [replace(word, top=word.top + offset) for word in page_words]
+    except (StatementReadError, OSError):
+        raise
+    except Exception as exc:  # noqa: BLE001 - render/OCR library failures are read errors
+        raise StatementReadError(str(exc)) from exc
     return [word for page in pages for word in page], True
 
 

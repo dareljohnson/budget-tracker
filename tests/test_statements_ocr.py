@@ -71,8 +71,8 @@ class TestOcrDocument(unittest.TestCase):
             with (
                 mock.patch("budget_tracker.statements.ocr_available", return_value=True),
                 mock.patch(
-                    "budget_tracker.statements.render_pdf_pages",
-                    return_value=[Image.new("L", (10, 10))],
+                    "budget_tracker.statements.render_pdf_page",
+                    return_value=Image.new("L", (10, 10)),
                 ),
                 mock.patch(
                     "budget_tracker.statements.ocr_images",
@@ -81,6 +81,45 @@ class TestOcrDocument(unittest.TestCase):
             ):
                 stmt = load_statement(pdf)
         self.assertEqual(stmt.source, "ocr")
+
+
+class TestOcrHelpers(unittest.TestCase):
+    """Resource bounds and token repair are engine-free, so these tests always run."""
+
+    def test_normalize_amount_token_leaves_dotted_dates(self):
+        self.assertEqual(normalize_amount_token("2024.01.15"), "2024.01.15")
+
+    def test_image_pixel_budget_rejects_huge_image(self):
+        from budget_tracker.statements import extract
+
+        with self.assertRaises(extract.StatementReadError):
+            extract._check_image_pixels(20_000, 20_000)
+
+    def test_render_scale_is_clamped(self):
+        from budget_tracker.statements import extract
+
+        scale = extract._render_scale(2_000, 10_000, 300)
+        self.assertLessEqual(10_000 * scale, extract.MAX_RENDER_LONG_EDGE)
+
+    def test_sparse_page_ocr_obeys_page_cap(self):
+        from budget_tracker.statements import _pdf_words
+
+        pages: list[list[Word]] = [[] for _ in range(21)]
+        stmt, used = _pdf_words(Path("x.pdf"), pages)
+        self.assertFalse(used)
+        self.assertEqual(stmt, [])
+
+    def test_render_pdf_pages_refuses_too_many_pages(self):
+        from budget_tracker.statements import extract
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "long.pdf"
+            document = FPDF(unit="pt", format="letter"); document.set_font("Helvetica", size=12)
+            for _ in range(21):
+                document.add_page(); document.text(50, 50, "x")
+            document.output(str(path))
+            with self.assertRaises(extract.StatementReadError):
+                extract.render_pdf_pages(path)
 
 
 @unittest.skipUnless(ocr_available(), "OCR engine not installed")
@@ -100,3 +139,12 @@ class TestOcrPath(unittest.TestCase):
             Image.new("L", (800, 1000), 255).save(png)  # blank page
             with self.assertRaises((UnsupportedStatementError, StatementValidationError)):
                 load_statement(png)
+
+    def test_photo_with_wrong_dpi_metadata_still_imports(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf = Path(tmp) / "stmt.pdf"; make_generic_statement_pdf(pdf)
+            png = Path(tmp) / "photo.png"
+            render_pdf_pages(pdf)[0].save(png, dpi=(72, 72))  # camera-style metadata
+            stmt = load_statement(png)
+        self.assertEqual(stmt.source, "ocr")
+        self.assertEqual(stmt.ending_cents, 3_167_869)

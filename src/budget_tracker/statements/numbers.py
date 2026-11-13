@@ -22,7 +22,7 @@ class Amount:
 
 
 def parse_amount(text: str) -> Amount | None:
-    """Parse ``$1,234.56``, ``(1,234.56)``, ``1,234.56-``, ``500.00 CR`` and ``500.00 DR``."""
+    """Parse ``$1,234.56``, ``-1,234.56``, ``(1,234.56)``, ``1,234.56-``, ``500.00 CR`` and ``500.00 DR``."""
     raw = text.replace("$", "").replace(",", "").strip()
     marker = next((candidate for candidate in _MARKERS if raw.endswith(candidate)), None)
     if marker is not None:
@@ -31,6 +31,9 @@ def parse_amount(text: str) -> Amount | None:
     if raw.startswith("(") and raw.endswith(")"):
         negative = True
         raw = raw[1:-1].strip()
+    elif raw.startswith("-"):
+        negative = True
+        raw = raw[1:].strip()
     elif raw.endswith("-"):
         negative = True
         raw = raw[:-1].strip()

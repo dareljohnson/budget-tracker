@@ -246,6 +246,18 @@ def test_iso_code_among_header_words_is_unsupported():
     with pytest.raises(UnsupportedStatementError):
         parse_generic([Word("GBP", 40, 40), Word("Statement", 80, 40)])
 
+def test_iso_code_in_a_complete_statement_is_unsupported():
+    words = [Word("Account", 40, 40), Word("Type:", 100, 40), Word("GBP", 150, 40)]
+    words += summary_words([
+        ("Beginning Balance", "$1,000.00"), ("Total Deposits", "$0.00"),
+        ("Total Withdrawals", "$40.00"), ("Ending Balance", "$960.00"),
+    ])
+    words += table_words(["DATE", "DESCRIPTION", "DEBIT"], [
+        {"date": "09/20/2026", "description": "Grocery", "debit": "40.00"},
+    ])
+    with pytest.raises(UnsupportedStatementError, match="US dollar"):
+        parse_generic(words)
+
 def test_ambiguous_direction_is_refused():
     words = summary_words([("Beginning Balance", "$1,000.00"), ("Total Deposits", "$0.00"),
                            ("Total Withdrawals", "$40.00"), ("Ending Balance", "$960.00")]) + table_words(

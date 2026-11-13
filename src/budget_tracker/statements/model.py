@@ -11,6 +11,7 @@ class Word:
     text: str
     x0: float
     top: float
+    x1: float | None = None
 
 
 @dataclass(frozen=True, slots=True)

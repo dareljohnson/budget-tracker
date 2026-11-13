@@ -165,10 +165,10 @@ def test_wrapped_description_word_is_not_a_heading():
         {"date": "09/20", "description": "Card Purchase", "amount": "40.00"},
         {"date": "09/21", "description": "Rent", "amount": "100.00"},
     ])
-    words += [Word("WITHDRAWAL", 130, 227)]  # continuation at the description column
+    words += [Word("WITHDRAWALS", 130, 227)]  # continuation at the description column
     rows = find_transactions(words, anchor=date(2026, 9, 20), anchor_on_end=False)
-    assert rows[0].description == "Card Purchase WITHDRAWAL"
-    assert [r.description for r in rows] == ["Card Purchase WITHDRAWAL", "Rent"]
+    assert rows[0].description == "Card Purchase WITHDRAWALS"
+    assert [r.description for r in rows] == ["Card Purchase WITHDRAWALS", "Rent"]
 
 def test_trailing_summary_block_is_not_appended():
     words = table_words(["DATE", "DESCRIPTION", "AMOUNT"], [

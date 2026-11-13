@@ -88,7 +88,7 @@ _ACCOUNT_TYPE_RE = re.compile(
 _ACCOUNT_RE = re.compile(r"\bACCOUNT\b", re.IGNORECASE)
 _CARD_RE = re.compile(r"\bCARD\b", re.IGNORECASE)
 _DIGIT_RUN_RE = re.compile(r"\d{4,}")
-_NON_USD_CODES = frozenset(("GBP", "EUR", "CAD", "AUD"))
+_NON_USD_CODE_RE = re.compile(r"\b(?:GBP|EUR|CAD|AUD)\b", re.IGNORECASE)
 _PERIOD_DATE = r"(?:[A-Za-z]+\s+\d{1,2},\s+\d{4}|\d{1,2}/\d{1,2}/\d{2,4})"
 _PERIOD_RE = re.compile(
     rf"({_PERIOD_DATE})\s*(?:through|to|[-–—])\s*({_PERIOD_DATE})", re.IGNORECASE
@@ -542,13 +542,14 @@ def _refuse_out_of_scope(lines: Sequence[Sequence[Word]]) -> None:
     """Raise for credit-card and non-USD documents.
 
     A standalone ISO code is a document-level declaration even when the header does not print the
-    word ``currency``; ``has_non_usd_marker`` only accepts codes in that declarative form.
+    word ``currency``; ``has_non_usd_marker`` only accepts codes in that declarative form, so any
+    code token anywhere in the region is refused here instead.
     """
     for line in lines:
         text = collapsed(line)
         if is_credit_card_marker(text):
             raise UnsupportedStatementError("Credit card statements are not supported")
-        if has_non_usd_marker(text) or normalize_label(text) in _NON_USD_CODES:
+        if has_non_usd_marker(text) or _NON_USD_CODE_RE.search(text):
             raise UnsupportedStatementError("Only US dollar statements are supported")
 
 

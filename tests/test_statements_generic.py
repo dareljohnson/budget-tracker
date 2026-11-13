@@ -240,6 +240,12 @@ def test_credit_card_and_non_usd_are_unsupported():
     with pytest.raises(UnsupportedStatementError):
         parse_generic([Word("Statement currency: EUR", 40, 40)])
 
+def test_iso_code_among_header_words_is_unsupported():
+    with pytest.raises(UnsupportedStatementError):
+        parse_generic([Word("Account", 40, 40), Word("Type:", 100, 40), Word("GBP", 150, 40)])
+    with pytest.raises(UnsupportedStatementError):
+        parse_generic([Word("GBP", 40, 40), Word("Statement", 80, 40)])
+
 def test_ambiguous_direction_is_refused():
     words = summary_words([("Beginning Balance", "$1,000.00"), ("Total Deposits", "$0.00"),
                            ("Total Withdrawals", "$40.00"), ("Ending Balance", "$960.00")]) + table_words(

@@ -16,7 +16,7 @@ A personal budget tracker desktop app built with **Python 3.13**, **[Flet](https
   - **Adjustment**: a signed correction recorded from a balance check. It changes the account balance only and is excluded from income, spending, and budgets.
 
   Search and filter by type, account, category, or month, and export the current view to CSV.
-- **Statement import**: import a Regions checking statement PDF from the Transactions page. The PDF is parsed locally and verified against the statement's own summary totals, and nothing is written until you review it. When exactly one saved account number ending matches, that account is preselected, and a mismatch blocks the import. Each row has its own type, category, and (for transfers) destination account; a category can be applied to all selected rows at once, duplicate rows are flagged and left unchecked, and an opening balance can be set when the account has no earlier history. You can also remember the account's last four digits and save a category rule from a row. **Imported statements…** lets you undo an import. See [Importing bank statements](#importing-bank-statements) for the supported files and limits.
+- **Statement import**: import a US checking or savings statement — a text PDF, a scanned PDF, or a PNG/JPEG photo — from the Transactions page. The file is parsed locally, with OCR when it has no usable text layer, and verified against the statement's own summary totals; nothing is written until you review it. When exactly one saved account number ending matches, that account is preselected, and a mismatch blocks the import. Each row has its own type, category, and (for transfers) destination account; a category can be applied to all selected rows at once, duplicate rows are flagged and left unchecked, and an opening balance can be set when the account has no earlier history. You can also remember the account's last four digits and save a category rule from a row. **Imported statements…** lets you undo an import. See [Importing bank statements](#importing-bank-statements) for the supported files and limits.
 - **Excel export**: **Export Excel** on the Transactions screen saves a full `.xlsx` workbook with live formulas. It opens in Microsoft Excel, Apple Numbers, Google Sheets, and LibreOffice. See [Excel workbook](#excel-workbook).
 - **Budgets**: set monthly limits per expense category. Progress bars turn amber at 80% and red when you go over. You can copy last month's budgets.
 - **Categories**: income and expense categories with custom colors and icons. Default categories are created on first run. Category rules saved from statement imports are listed under **Categories → Rules**, where they can be reviewed and deleted.
@@ -46,7 +46,7 @@ See **[PACKAGING.md](PACKAGING.md)** for:
 - a GitHub Actions workflow that builds all three;
 - moving the project and its data to another PC.
 
-The statement importer's PDF library (`pdfplumber`) is a normal runtime dependency, so the standalone installers bundle it automatically — no extra packaging step is needed.
+The statement importer's libraries (`pdfplumber`, `pypdfium2`, `Pillow`, and RapidOCR on ONNX Runtime) are normal runtime dependencies, so the standalone installers bundle them automatically — no extra packaging step is needed. They add roughly 200 MB to the installed app.
 
 ## Running tests
 
@@ -60,7 +60,7 @@ $env:PYTHONPATH = "src"; python -m unittest discover -s tests
 
 Data is stored in SQLite at `%LOCALAPPDATA%\BudgetTracker\budget_tracker.db` on Windows (`~/.local/share/budget_tracker` on Linux and macOS). To use a different folder, set the `BUDGET_TRACKER_HOME` environment variable. With a Microsoft Store Python, Windows redirects the file into the package cache — see [Where data lives](PACKAGING.md#where-data-lives) for the exact paths.
 
-Statement PDFs are never copied into the database. Of the statement file itself, an import keeps only the PDF's SHA-256 hash and, if you choose to remember it, the last four account digits; the statement summary and its imported transactions are saved as normal local data.
+Statement files (PDFs and images) are never copied into the database. Of the statement file itself, an import keeps only its SHA-256 hash and, if you choose to remember it, the last four account digits; the statement summary and its imported transactions are saved as normal local data.
 
 ## Project layout
 
@@ -72,7 +72,7 @@ src/budget_tracker/
   db.py            connection, versioned migrations, seed data
   repository.py    parameterized SQL data access
   services.py      dashboard aggregation, CSV/Excel export, statement import, balance checks
-  statements/      statement models and the Regions checking PDF parser (pdfplumber adapter)
+  statements/      statement models, PDF/image extraction, local OCR, Regions adapter + generic parser
   xlsx.py          dependency-free .xlsx writer (styles, formulas, filters)
   workbook_export.py  builds the Excel workbook sheets and formulas
   reminders.py     due-bill check + Windows toast (for Task Scheduler)
@@ -94,7 +94,7 @@ Existing databases are upgraded automatically: transactions recorded before acco
 
 ## Importing bank statements
 
-On the **Transactions** page, choose **Import statement** and pick a Regions checking statement PDF. The app parses it on your PC, checks the transactions against the statement's own summary totals, and shows a review before anything is written.
+On the **Transactions** page, choose **Import statement** and pick a US checking or savings statement: a PDF, PNG, or JPEG. The app reads it on your PC — from the PDF's text layer when there is one, and with the built-in local OCR engine for scans, photos, and PDFs with no usable text — checks the transactions against the statement's own summary totals, and shows a review before anything is written.
 
 - The **account** is preselected when a single saved account number ending matches the statement's. If the statement's digits conflict with the selected account, the import is blocked until the right account is chosen.
 - Each row has its own **type** (expense, income, refund, or transfer), **category**, and, for transfers, destination account. **Apply** sets one category for all selected rows, and **Select all** toggles every row.
@@ -102,14 +102,17 @@ On the **Transactions** page, choose **Import statement** and pick a Regions che
 - If the account has no transactions before the statement period, you can set its **opening balance** to the statement's beginning balance.
 - You can remember the account's last four digits for future matching, and save a **category rule** from a row so later imports categorize that description automatically.
 
-The import is rejected — and nothing is written — if the parsed rows don't add up to the statement's summary, or if a row falls outside the statement period. The same PDF can't be imported twice. **Imported statements…** lists past imports so you can delete one and import it again.
+The import is rejected — and nothing is written — if the parsed rows don't add up to the statement's summary, or if a row falls outside the statement period. The same file can't be imported twice. **Imported statements…** lists past imports so you can delete one and import it again.
 
 ### Supported statements and limits
 
-- Regions **checking** statements only. Other banks, Regions credit card or savings statements, and other layouts are rejected.
-- PDFs only: no OCR or scanned images.
+- Any US **checking or savings** statement, from any bank: PDF (with or without a text layer), PNG, or JPEG.
+- Scans and photos are read by the built-in local OCR engine, and so are PDFs with no usable text layer. Everything runs on your PC; nothing is uploaded.
+- The import is strict: it is accepted only when the parsed rows reconcile exactly to the statement's printed summary and no row falls outside the statement period. Otherwise it is refused, the refusal says what could not be verified, and nothing is written.
+- **Credit card** statements and **non-USD** statements are out of scope and are refused.
+- **One file per import.** A photographed multi-page statement must be combined into a single PDF first.
 - No bank feeds, and no OFX, QIF, CAMT, or CSV import. CSV is export-only.
-- Everything is parsed and stored locally. PDFs are never copied into the database: of the statement file itself, the app records only the SHA-256 hash (to detect repeat imports) and, at most, the last four account digits.
+- Everything is parsed and stored locally. PDFs and images are never copied into the database: of the statement file itself, the app records only the SHA-256 hash (to detect repeat imports) and, at most, the last four account digits.
 
 ## Reconciling accounts
 

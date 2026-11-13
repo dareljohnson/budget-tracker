@@ -1,7 +1,8 @@
-"""Statement import: review a parsed PDF, confirm it, and undo an import later."""
+"""Statement import: review a parsed statement, confirm it, and undo an import later."""
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -32,20 +33,35 @@ RULE_WIDTH = 40
 DUPLICATE_WIDTH = 76
 
 
+_UNSUPPORTED_MESSAGES = {
+    # generic._refuse_out_of_scope raises "Credit card statements are not supported".
+    "credit card": "Credit card statements aren't supported. Nothing was imported.",
+    # generic._refuse_out_of_scope raises "Only US dollar statements are supported".
+    "us dollar": "Only US dollar statements are supported. Nothing was imported.",
+    # statements.__init__._load_image raises "Image statements require the local OCR engine".
+    "ocr": "Could not read this image because local OCR isn't available. Nothing was imported.",
+}
+_LAYOUT_MESSAGE = (
+    "This statement doesn't match a supported checking or savings layout. Nothing was imported."
+)
+
+
 def _notify_parse_error(ctx: AppContext, exc: Exception) -> None:
     """Turn a parse failure into a clear message; nothing has been written at this point."""
     if isinstance(exc, StatementValidationError):
         details = "\n".join(f"• {error}" for error in exc.errors)
         ctx.notify(f"Statement did not validate. Nothing was imported.\n{details}", error=True)
     elif isinstance(exc, UnsupportedStatementError):
-        ctx.notify(
-            "This doesn't look like a supported Regions checking statement. Nothing was imported.",
-            error=True,
+        detail = str(exc).lower()
+        message = next(
+            (text for marker, text in _UNSUPPORTED_MESSAGES.items() if marker in detail),
+            _LAYOUT_MESSAGE,
         )
+        ctx.notify(message, error=True)
     elif isinstance(exc, StatementReadError):
-        ctx.notify("Could not read this PDF. Nothing was imported.", error=True)
+        ctx.notify("Could not read this file. Nothing was imported.", error=True)
     elif isinstance(exc, OSError):
-        ctx.notify(f"Could not read this PDF: {exc.strerror or exc}. Nothing was imported.", error=True)
+        ctx.notify(f"Could not read this file: {exc.strerror or exc}. Nothing was imported.", error=True)
     else:
         ctx.notify(str(exc), error=True)
 
@@ -129,7 +145,7 @@ class SaveCategoryRuleDialog:
 
 
 class StatementImportDialog:
-    """Review dialog for one statement PDF. Nothing is written until Import is pressed."""
+    """Review dialog for one statement. Nothing is written until Import is pressed."""
 
     def __init__(self, ctx: AppContext, *, on_close: Callable[[], None] | None = None) -> None:
         self.ctx = ctx
@@ -152,6 +168,7 @@ class StatementImportDialog:
         )
         self.match_note = ft.Text("", size=12, color=INCOME_COLOR, weight=ft.FontWeight.W_600, visible=False)
         self.mismatch_note = ft.Text("", size=12, color=EXPENSE_COLOR, weight=ft.FontWeight.W_600, visible=False)
+        self.ocr_badge = ft.Text("Read from image (OCR)", size=12, weight=ft.FontWeight.W_600, visible=False)
         self.statement_meta = ft.Text("", size=12, color=ft.Colors.ON_SURFACE_VARIANT)
         self.projection_statement = ft.Text("", weight=ft.FontWeight.W_600)
         self.projection_balance_label = ft.Text("", size=12, color=ft.Colors.ON_SURFACE_VARIANT)
@@ -237,7 +254,7 @@ class StatementImportDialog:
                         self.opening_balance,
                         self.remember,
                         ft.Text(
-                            "PDFs are parsed locally. Nothing is written until you choose Import.",
+                            "Statements are parsed locally. Nothing is written until you choose Import.",
                             size=11,
                             color=ft.Colors.ON_SURFACE_VARIANT,
                         ),
@@ -278,7 +295,7 @@ class StatementImportDialog:
             files = await self._file_picker.pick_files(
                 dialog_title="Import statement",
                 file_type=ft.FilePickerFileType.CUSTOM,
-                allowed_extensions=["pdf"],
+                allowed_extensions=["pdf", "png", "jpg", "jpeg"],
             )
         except Exception as exc:  # noqa: BLE001 - native picker can be unavailable
             self.ctx.notify(f"Could not open the file picker: {exc}", error=True)
@@ -293,7 +310,9 @@ class StatementImportDialog:
         # Parsing needs an account for duplicate detection. Parsing once with a provisional
         # account reveals the statement's account digits, which then select the real account.
         try:
-            preview = self.ctx.service.prepare_import(self._path, self._accounts[0].id)
+            preview = await asyncio.to_thread(
+                self.ctx.service.prepare_import, self._path, self._accounts[0].id
+            )
         except (StatementValidationError, UnsupportedStatementError, StatementReadError, OSError,
                 RepositoryError) as exc:
             _notify_parse_error(self.ctx, exc)
@@ -305,7 +324,9 @@ class StatementImportDialog:
             self.account.value = str(matched.id)
             if matched.id != preview.account_id:
                 try:
-                    preview = self.ctx.service.prepare_import(self._path, matched.id)
+                    preview = await asyncio.to_thread(
+                        self.ctx.service.prepare_import, self._path, matched.id
+                    )
                 except (StatementValidationError, UnsupportedStatementError, StatementReadError, OSError,
                         RepositoryError) as exc:
                     _notify_parse_error(self.ctx, exc)
@@ -323,19 +344,32 @@ class StatementImportDialog:
         )
         self.summary_holder.controls = [
             *self._summary_stats(statement),
-            ft.Container(
-                content=ft.Row(
-                    [
-                        ft.Icon(ft.Icons.VERIFIED, size=16, color=INCOME_COLOR),
-                        ft.Text("Statement verified", size=12, weight=ft.FontWeight.W_600, color=INCOME_COLOR),
-                    ],
-                    spacing=4,
-                ),
-                padding=ft.Padding.symmetric(horizontal=10, vertical=5),
-                border_radius=20,
-                bgcolor=ft.Colors.with_opacity(0.12, INCOME_COLOR),
+            ft.Row(
+                [
+                    ft.Container(
+                        content=ft.Row(
+                            [
+                                ft.Icon(ft.Icons.VERIFIED, size=16, color=INCOME_COLOR),
+                                ft.Text(
+                                    "Statement verified",
+                                    size=12,
+                                    weight=ft.FontWeight.W_600,
+                                    color=INCOME_COLOR,
+                                ),
+                            ],
+                            spacing=4,
+                        ),
+                        padding=ft.Padding.symmetric(horizontal=10, vertical=5),
+                        border_radius=20,
+                        bgcolor=ft.Colors.with_opacity(0.12, INCOME_COLOR),
+                    ),
+                ],
+                spacing=8,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
+            self.ocr_badge,
         ]
+        self.ocr_badge.visible = preview.source == "ocr"
 
         # Duplicates are flagged and left unchecked; the owner may include one deliberately.
         for row in preview.rows:
@@ -662,7 +696,7 @@ class StatementImportDialog:
         self.ctx.notify(message)
 
     # ---------- account binding ----------
-    def _account_changed(self, _: ft.Event[ft.Dropdown]) -> None:
+    async def _account_changed(self, _: ft.Event[ft.Dropdown]) -> None:
         if self._path is None:
             return
         if not self.account.value:
@@ -680,7 +714,7 @@ class StatementImportDialog:
         if self.preview is not None and self._edited:
             self._confirm_account_switch(account_id)
             return
-        self._load_for_account(account_id)
+        await self._load_for_account(account_id)
 
     def _confirm_account_switch(self, account_id: int) -> None:
         """Switching accounts re-parses and discards row edits, so ask before doing it."""
@@ -691,9 +725,9 @@ class StatementImportDialog:
             self.account.value = previous
             self.ctx.page.update()
 
-        def proceed(_: ft.Event) -> None:
+        async def proceed(_: ft.Event) -> None:
             self.ctx.page.pop_dialog()
-            self._load_for_account(account_id)
+            await self._load_for_account(account_id)
 
         self.ctx.page.show_dialog(
             ft.AlertDialog(
@@ -712,9 +746,11 @@ class StatementImportDialog:
             )
         )
 
-    def _load_for_account(self, account_id: int) -> None:
+    async def _load_for_account(self, account_id: int) -> None:
         try:
-            preview = self.ctx.service.prepare_import(self._path, account_id)
+            preview = await asyncio.to_thread(
+                self.ctx.service.prepare_import, self._path, account_id
+            )
         except (StatementValidationError, UnsupportedStatementError, StatementReadError, OSError,
                 RepositoryError) as exc:
             # Never leave another account's preview visible as if it belonged to this selection.
@@ -734,6 +770,7 @@ class StatementImportDialog:
         self.rows_column.controls = []
         self.rows_count.value = ""
         self.summary_holder.controls = []
+        self.ocr_badge.visible = False
         self.statement_meta.value = message
         self.select_all.value = False
         self.match_note.value = ""
@@ -1058,7 +1095,7 @@ class ImportedStatementsDialog:
                     [
                         ft.Text(
                             "Deleting an import removes its transactions and reconciliation, "
-                            "and frees the PDF to be imported again.",
+                            "and frees the file to be imported again.",
                             size=12,
                             color=ft.Colors.ON_SURFACE_VARIANT,
                         ),
@@ -1134,7 +1171,7 @@ class ImportedStatementsDialog:
             self.ctx.page,
             "Delete this import?",
             f"Remove the {account} statement for {_period(statement)}? Its imported transactions "
-            "and reconciliation will be deleted, and the PDF can be imported again. If this import "
+            "and reconciliation will be deleted, and the file can be imported again. If this import "
             "set the account's opening balance, that opening balance is not reverted.",
             lambda: self._delete(statement),
             confirm_text="Delete import",

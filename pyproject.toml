@@ -9,7 +9,15 @@ description = "A personal budget tracker desktop app built with Flet and SQLite"
 readme = "README.md"
 requires-python = ">=3.13"
 # Only what the packaged app needs at runtime; `flet build` bundles exactly this list.
-dependencies = ["flet>=1.1,<2", "pdfplumber>=0.11,<1"]
+dependencies = [
+    "flet>=1.1,<2",
+    "pdfplumber>=0.11,<1",
+    # Local OCR: RapidOCR on ONNX Runtime, plus PDF rasterisation and image loading.
+    "rapidocr-onnxruntime==1.2.3",
+    "onnxruntime>=1.31,<2",
+    "Pillow>=13,<14",
+    "pypdfium2>=5.15,<6",
+]
 
 [project.optional-dependencies]
 # Desktop runner, CLI (flet build) and web preview for running from source.

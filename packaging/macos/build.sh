@@ -18,7 +18,8 @@ DMG="build/installer/BudgetTracker-$VERSION-macos.dmg"
 
 FLET="$ROOT/.venv/bin/flet"; [[ -x "$FLET" ]] || FLET=flet
 if [[ "${1:-}" != "--skip-build" ]]; then
-  "$FLET" build macos --python-version 3.13 --yes --no-rich-output
+  # --no-compile-packages keeps cv2/config.py; compiling it to .pyc breaks the OCR import.
+  "$FLET" build macos --python-version 3.13 --no-compile-packages --yes --no-rich-output
 fi
 [[ -d "$APP" ]] || { echo "$APP not found" >&2; exit 1; }
 

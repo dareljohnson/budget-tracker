@@ -17,7 +17,8 @@ NAME="BudgetTracker-$VERSION-linux-x64"
 
 FLET="$ROOT/.venv/bin/flet"; [[ -x "$FLET" ]] || FLET=flet
 if [[ "${1:-}" != "--skip-build" ]]; then
-  "$FLET" build linux --python-version 3.13 --yes --no-rich-output
+  # --no-compile-packages keeps cv2/config.py; compiling it to .pyc breaks the OCR import.
+  "$FLET" build linux --python-version 3.13 --no-compile-packages --yes --no-rich-output
 fi
 [[ -x build/linux/BudgetTracker ]] || { echo "build/linux/BudgetTracker not found" >&2; exit 1; }
 

@@ -11,6 +11,7 @@ class Word:
     text: str
     x0: float
     top: float
+    x1: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,6 +35,7 @@ class ParsedStatement:
     fees_cents: int
     ending_cents: int
     transactions: list[ParsedTransaction]
+    source: str = "text"
 
 
 @dataclass(slots=True)
@@ -49,6 +51,7 @@ class ImportPreview:
     statement: Statement
     account_id: int
     rows: list[ImportRow]
+    source: str = "text"
 
 
 class StatementValidationError(Exception):

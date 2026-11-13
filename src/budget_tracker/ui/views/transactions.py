@@ -51,7 +51,7 @@ class TransactionsView:
         self.import_button = ft.FilledTonalButton(
             content="Import statement",
             icon=ft.Icons.UPLOAD_FILE,
-            tooltip="Review a Regions checking statement PDF before importing it",
+            tooltip="Review a statement before importing it",
             on_click=self._import_statement,
         )
 

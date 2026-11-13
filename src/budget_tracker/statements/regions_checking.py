@@ -8,6 +8,7 @@ import re
 from collections.abc import Sequence
 from datetime import date, datetime
 
+from budget_tracker.statements.lines import collapsed, group_lines
 from budget_tracker.statements.model import (
     ParsedStatement,
     ParsedTransaction,
@@ -15,6 +16,7 @@ from budget_tracker.statements.model import (
     UnsupportedStatementError,
     Word,
 )
+from budget_tracker.statements.numbers import parse_amount, parse_date
 
 _AMOUNT_RE = re.compile(r"^\$?-?\d{1,3}(?:,\d{3})*\.\d{2}$")
 _DATE_RE = re.compile(r"^(\d{2})/(\d{2})$")
@@ -29,31 +31,11 @@ _HEADINGS = {
     "FEES (CONTINUED)": "fees",
 }
 
-_LINE_TOLERANCE = 2.0
-
-
-def _collapsed(line: Sequence[Word]) -> str:
-    return " ".join(" ".join(word.text for word in line).split())
-
-
-def _group_lines(words: Sequence[Word]) -> list[list[Word]]:
-    """Group words into visual lines by ``top`` (tolerance 2 pt), each sorted by ``x0``."""
-    lines: list[list[Word]] = []
-    for word in sorted(words, key=lambda item: item.top):
-        if not lines or abs(word.top - lines[-1][0].top) > _LINE_TOLERANCE:
-            lines.append([word])
-        else:
-            lines[-1].append(word)
-    for line in lines:
-        line.sort(key=lambda item: item.x0)
-    return lines
-
-
 def _heading(line: Sequence[Word]) -> str | None:
     """Return the section a heading line opens, or ``None`` for ordinary lines."""
     if not line or line[0].x0 < 150:
         return None
-    text = _collapsed(line).upper()
+    text = collapsed(line).upper()
     # The real template prints "DAILY BALANCE SUMMARY"; the table below it is not transaction data.
     if text.startswith("DAILY BALANCE"):
         return "stop"
@@ -61,18 +43,14 @@ def _heading(line: Sequence[Word]) -> str | None:
 
 
 def _cents(text: str) -> int:
-    raw = text.replace("$", "").replace(",", "")
-    negative = raw.startswith("-")
-    if negative:
-        raw = raw[1:]
-    whole, fraction = raw.split(".")
-    value = int(whole) * 100 + int(fraction)
-    return -value if negative else value
+    amount = parse_amount(text)
+    assert amount is not None
+    return amount.cents
 
 
 def _find_institution(lines: Sequence[Sequence[Word]]) -> str:
     for line in lines:
-        if "REGIONS BANK" in _collapsed(line).upper():
+        if "REGIONS BANK" in collapsed(line).upper():
             return "Regions Bank"
     raise UnsupportedStatementError("Not a Regions Bank statement")
 
@@ -80,13 +58,13 @@ def _find_institution(lines: Sequence[Sequence[Word]]) -> str:
 def _find_account_label(lines: Sequence[Sequence[Word]]) -> str:
     for line in lines:
         if any(word.text.upper() == "CHECKING" for word in line):
-            return _collapsed(line)
+            return collapsed(line)
     raise UnsupportedStatementError("Account label not found")
 
 
 def _find_period(lines: Sequence[Sequence[Word]]) -> tuple[date, date]:
     for line in lines:
-        match = _PERIOD_RE.search(_collapsed(line))
+        match = _PERIOD_RE.search(collapsed(line))
         if match is None:
             continue
         try:
@@ -134,14 +112,10 @@ def _summary_amounts(lines: Sequence[Sequence[Word]], first_heading_top: float) 
 
 
 def _transaction_date(text: str, period_start: date) -> date:
-    match = _DATE_RE.match(text)
-    assert match is not None
-    month, day = int(match.group(1)), int(match.group(2))
-    year = period_start.year if month >= period_start.month else period_start.year + 1
-    try:
-        return date(year, month, day)
-    except ValueError as exc:
-        raise StatementValidationError([f"Invalid transaction date {text!r}"]) from exc
+    parsed = parse_date(text, period_start)
+    if parsed is None:
+        raise StatementValidationError([f"Invalid transaction date {text!r}"])
+    return parsed
 
 
 def _parse_transactions(
@@ -211,7 +185,7 @@ def parse_statement(words: Sequence[Word]) -> ParsedStatement:
     :class:`StatementValidationError` when the parsed transactions do not match the
     statement's own summary box.
     """
-    lines = _group_lines(words)
+    lines = group_lines(words)
 
     institution = _find_institution(lines)
     account_label = _find_account_label(lines)

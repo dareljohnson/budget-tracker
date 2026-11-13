@@ -23,7 +23,7 @@ from .models import (
     TransactionType,
 )
 from .repository import Repository, RepositoryError
-from .statements import parse_pdf
+from .statements import load_statement
 from .statements.model import ImportPreview, ImportRow
 from .workbook_export import export_workbook
 
@@ -146,12 +146,12 @@ class BudgetService:
                 return category.id
         raise RepositoryError(f"The default '{name}' category is missing")
 
-    def prepare_import(self, pdf_path: Path, account_id: int) -> ImportPreview:
+    def prepare_import(self, statement_path: Path, account_id: int) -> ImportPreview:
         """Parse a statement and build an editable preview without writing anything."""
         if self.repo.get_account(account_id) is None:
             raise RepositoryError("Select an account")
-        parsed = parse_pdf(pdf_path)
-        file_sha256 = hashlib.sha256(pdf_path.read_bytes()).hexdigest()
+        parsed = load_statement(statement_path)
+        file_sha256 = hashlib.sha256(statement_path.read_bytes()).hexdigest()
         if self.repo.statement_by_sha256(file_sha256):
             raise RepositoryError("This statement was already imported")
 
@@ -192,7 +192,7 @@ class BudgetService:
                     direction=item.direction,
                 )
             )
-        return ImportPreview(statement=statement, account_id=account_id, rows=rows)
+        return ImportPreview(statement=statement, account_id=account_id, rows=rows, source=parsed.source)
 
     def commit_import(
         self, preview: ImportPreview, rows: list[ImportRow], *, set_opening_balance: bool = False

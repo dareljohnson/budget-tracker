@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import logging
+import os
+import sys
 from collections.abc import Callable
+from pathlib import Path
 
 import flet as ft
 
@@ -52,6 +55,7 @@ def main(page: ft.Page) -> None:
     page.window.height = 860
     page.window.min_width = 900
     page.window.min_height = 640
+    page.window.icon = "assets/icon.ico"
 
     def show_view(index: int) -> None:
         rail.selected_index = index
@@ -168,10 +172,58 @@ def show_due_bills_alert(ctx: AppContext, on_view_bills: Callable[[], None]) -> 
     return True
 
 
+def _assets_dir() -> str:
+    """Return the assets folder for a source run; bundled builds keep the default.
+
+    ``flet run`` resolves ``assets`` relative to the app path, but running from the project root
+    would miss ``src/assets``. Prefer the checkout's folder when it exists, otherwise leave the
+    default string so ``flet build`` behaves exactly as before.
+    """
+    if Path("assets").is_dir():
+        return "assets"
+    candidate = Path(__file__).resolve().parent.parent / "assets"
+    return str(candidate) if candidate.is_dir() else "assets"
+
+
+def _taskbar_identity() -> dict[str, str]:
+    """Return the Windows taskbar AppUserModel/relaunch values for a source run.
+
+    A source run launches the shared ``flet.exe`` desktop client, so Windows resolves the
+    taskbar button from that executable. Packaged builds already set
+    ``FLET_APP_USER_MODEL_ID`` in their PyInstaller runtime hook; for source runs, these
+    values give the client window Budget Tracker's name, icon and relaunch target.
+    ``page.window.icon`` alone only changes the window icon, not the taskbar identity.
+    """
+    if sys.platform != "win32" or os.environ.get("FLET_APP_USER_MODEL_ID"):
+        return {}
+    root = Path(__file__).resolve().parents[2]
+    icon = root / "src" / "assets" / "icon.ico"
+    if not icon.is_file():
+        return {}
+    launcher = root / "packaging" / "launch.pyw"
+    command = (
+        f'"{sys.executable}" "{launcher}"'
+        if launcher.is_file()
+        else f'"{sys.executable}" -m budget_tracker'
+    )
+    return {
+        "FLET_APP_USER_MODEL_ID": "com.budgettracker.budget_tracker",
+        "FLET_APP_RELAUNCH_DISPLAY_NAME": APP_NAME,
+        "FLET_APP_RELAUNCH_ICON": f"{icon},0",
+        "FLET_APP_RELAUNCH_COMMAND": command,
+    }
+
+
+def _apply_taskbar_identity() -> None:
+    """Publish the source-run taskbar identity before the Flet client starts."""
+    os.environ.update(_taskbar_identity())
+
+
 def run() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     log.info("Using database at %s", db_path())
-    ft.run(main)
+    _apply_taskbar_identity()
+    ft.run(main, assets_dir=_assets_dir())
 
 
 if __name__ == "__main__":

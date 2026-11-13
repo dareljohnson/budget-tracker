@@ -23,6 +23,7 @@ from budget_tracker.statements.extract import (
     sniff_kind,
 )
 from budget_tracker.statements.model import Word
+from budget_tracker.statements.numbers import parse_amount
 
 _ENGINE = None
 
@@ -51,8 +52,9 @@ def ocr_images(images: Sequence[Image.Image]) -> list[Word]:
     """OCR each page image and return its recognised words in point-like coordinates.
 
     The engine's boxes are pixels; they are scaled by ``72 / dpi`` using the image's recorded
-    effective DPI (300 when absent). Empty text is dropped. The caller is responsible for adding a
-    page offset when combining several pages.
+    effective DPI (300 when absent). Empty text is dropped. Recognized amount tokens have their
+    separator damage repaired here, in the OCR word producer; text-layer words are never touched.
+    The caller is responsible for adding a page offset when combining several pages.
     """
     engine = _engine()
     words: list[Word] = []
@@ -68,7 +70,12 @@ def ocr_images(images: Sequence[Image.Image]) -> list[Word]:
             xs = [float(point[0]) for point in box]
             ys = [float(point[1]) for point in box]
             words.append(
-                Word(cleaned, min(xs) * scale, min(ys) * scale, max(xs) * scale)
+                Word(
+                    normalize_amount_token(cleaned),
+                    min(xs) * scale,
+                    min(ys) * scale,
+                    max(xs) * scale,
+                )
             )
     return words
 
@@ -107,9 +114,13 @@ def normalize_amount_token(text: str) -> str:
     thousands grouping (``2.074.21`` -> ``2074.21``, ``3.240,000,000.00`` ->
     ``3240000000.00``). Other shapes are left alone, so a dotted date (``2024.01.15``) is not
     mangled, and a token with no decimal point (``70139`` stays ``70139``) is left for
-    :func:`parse_amount` to refuse rather than booking a 100x-wrong value. Non-amount text is
-    returned unchanged.
+    :func:`parse_amount` to refuse rather than booking a 100x-wrong value. A token
+    :func:`parse_amount` already accepts is returned unchanged, so normalisation is idempotent and
+    a well-formed grouped amount (``$1,000.00``) keeps its grouping. Non-amount text is returned
+    unchanged.
     """
+    if parse_amount(text) is not None:
+        return text
     stripped = text.strip()
     if _AMOUNT_CANDIDATE_RE.match(stripped) is None:
         return text

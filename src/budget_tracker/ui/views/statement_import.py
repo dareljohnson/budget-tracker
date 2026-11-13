@@ -1,4 +1,4 @@
-"""Statement import: review a parsed PDF, confirm it, and undo an import later."""
+"""Statement import: review a parsed statement, confirm it, and undo an import later."""
 
 from __future__ import annotations
 

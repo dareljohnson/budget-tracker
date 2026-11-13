@@ -167,6 +167,20 @@ def _resize_factor(width: int, height: int) -> float:
     return factor
 
 
+def _effective_dpi(
+    recorded_dpi: float, original_long_edge: float, final_long_edge: float
+) -> float:
+    """Return the DPI that maps the final pixels back to the source page's points.
+
+    ``max(recorded_dpi * resize_factor, 72 * final_long_edge / 1000)``, where ``resize_factor`` is
+    ``final_long_edge / original_long_edge``. A resized high-DPI scan keeps its true point scale
+    (600 DPI cropped to 4000 px still maps to a page-like ~792 pt), while camera metadata with no
+    resize falls back to the page-like floor.
+    """
+    resize_factor = final_long_edge / original_long_edge if original_long_edge > 0 else 1.0
+    return max(recorded_dpi * resize_factor, 72.0 * final_long_edge / 1000.0)
+
+
 def load_image_pages(path: Path) -> list[Image.Image]:
     """Load an image statement as a grayscale, contrast-normalised page.
 
@@ -176,10 +190,12 @@ def load_image_pages(path: Path) -> list[Image.Image]:
     :data:`_MIN_SHORT_EDGE` pixels so small print survives recognition, and the long edge is
     capped at :data:`_MAX_LONG_EDGE`.
 
-    ``info["dpi"]`` records the *effective* DPI: ``max(recorded_dpi, 72 * long_edge / 1000)``.
-    Camera/phone images carry 72 or 96 DPI metadata, which is not scan density; the floor maps
-    their pixels into the same page-like point coordinates as a rendered PDF page, so the parser's
-    line and column tolerances keep their intended physical meaning.
+    ``info["dpi"]`` records the *effective* DPI:
+    ``max(recorded_dpi * resize_factor, 72 * final_long_edge / 1000)``, where ``resize_factor`` is
+    ``final_long_edge / original_long_edge``. Camera/phone images carry 72 or 96 DPI metadata,
+    which is not scan density; the floor maps their pixels into the same page-like point
+    coordinates as a rendered PDF page, so the parser's line and column tolerances keep their
+    intended physical meaning. A resized high-DPI scan keeps its true point scale.
     """
     try:
         opened = Image.open(path)
@@ -191,6 +207,7 @@ def load_image_pages(path: Path) -> list[Image.Image]:
         recorded_dpi = read_dpi(opened.info)
         _check_image_pixels(*opened.size)
         width, height = opened.size
+        original_long_edge = float(max(width, height))
         factor = _resize_factor(width, height)
         if factor != 1.0:
             opened.draft("L", (max(1, round(width * factor)), max(1, round(height * factor))))
@@ -204,7 +221,7 @@ def load_image_pages(path: Path) -> list[Image.Image]:
             (max(1, round(width * factor)), max(1, round(height * factor))),
             Image.Resampling.LANCZOS,
         )
-    effective_dpi = max(recorded_dpi, 72.0 * max(image.size) / 1000.0)
+    effective_dpi = _effective_dpi(recorded_dpi, original_long_edge, float(max(image.size)))
     image.info["dpi"] = (effective_dpi, effective_dpi)
     return [image]
 

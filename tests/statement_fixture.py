@@ -19,27 +19,43 @@ _FONT_SIZE = 8
 _WORD_GAP = 4.0
 
 
+_REGIONS_PAGE_LINES = [
+    (150, 15, "Regions Bank"), (200, 237, "62+ LIFEGREEN CHECKING"),
+    (200, 252, "September 16, 2026 through October 15, 2026"),
+    (33, 141, "ACCOUNT #"), (90, 159, "060"),
+    (220, 324, "$1,000.00"), (220, 336, "$500.00"), (220, 348, "$300.00"),
+    (220, 360, "$10.00"), (220, 381, "$0.00"), (220, 405, "$0.00"), (220, 417, "$1,190.00"),
+    (250, 465, "DEPOSITS & CREDITS"),
+    (75, 480, "09/20 Card Purchase Merchant 200.00"),
+    (240, 480, "10/02 Payroll 300.00"),
+    (260, 579, "WITHDRAWALS"),
+    (75, 591, "09/25 Rent 300.00"),
+    (280, 620, "FEES"),
+    (75, 632, "09/30 Service Fee 10.00"),
+]
+
+
+def _draw_regions_page(pdf: FPDF) -> None:
+    pdf.set_font("Helvetica", size=8)
+    for x, y, text in _REGIONS_PAGE_LINES:
+        pdf.text(x, y, text)
+
+
 def make_statement_pdf(path: Path) -> None:
     pdf = FPDF(unit="pt", format="letter")
     pdf.set_creation_date(datetime(2026, 1, 1, 12, 0, 0))
     pdf.add_page()
-    pdf.set_font("Helvetica", size=8)
-    lines = [
-        (150, 15, "Regions Bank"), (200, 237, "62+ LIFEGREEN CHECKING"),
-        (200, 252, "September 16, 2026 through October 15, 2026"),
-        (33, 141, "ACCOUNT #"), (90, 159, "060"),
-        (220, 324, "$1,000.00"), (220, 336, "$500.00"), (220, 348, "$300.00"),
-        (220, 360, "$10.00"), (220, 381, "$0.00"), (220, 405, "$0.00"), (220, 417, "$1,190.00"),
-        (250, 465, "DEPOSITS & CREDITS"),
-        (75, 480, "09/20 Card Purchase Merchant 200.00"),
-        (240, 480, "10/02 Payroll 300.00"),
-        (260, 579, "WITHDRAWALS"),
-        (75, 591, "09/25 Rent 300.00"),
-        (280, 620, "FEES"),
-        (75, 632, "09/30 Service Fee 10.00"),
-    ]
-    for x, y, text in lines:
-        pdf.text(x, y, text)
+    _draw_regions_page(pdf)
+    pdf.output(str(path))
+
+
+def make_statement_with_blank_page_pdf(path: Path) -> None:
+    """The Regions statement on page one, followed by a page with no text layer."""
+    pdf = FPDF(unit="pt", format="letter")
+    pdf.set_creation_date(datetime(2026, 1, 1, 12, 0, 0))
+    pdf.add_page()
+    _draw_regions_page(pdf)
+    pdf.add_page()
     pdf.output(str(path))
 
 

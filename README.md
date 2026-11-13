@@ -51,9 +51,7 @@ The statement importer's libraries (`pdfplumber`, `pypdfium2`, `Pillow`, and Rap
 ## Running tests
 
 ```powershell
-pytest
-# or, with no extra dependencies:
-$env:PYTHONPATH = "src"; python -m unittest discover -s tests
+python -m pytest
 ```
 
 ## Data storage

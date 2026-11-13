@@ -48,6 +48,27 @@ class TestNormalizeAmountToken(unittest.TestCase):
     def test_leaves_descriptive_text_alone(self):
         self.assertEqual(normalize_amount_token("Branch Deposit"), "Branch Deposit")
 
+    def test_well_formed_amounts_are_unchanged(self):
+        """Normalisation is idempotent: an already-parseable amount keeps its grouping."""
+        for token in ("$1,000.00", "1,234.56", "(1,234.56)", "1,234.56-", "500.00 CR", "2074.21"):
+            self.assertEqual(normalize_amount_token(token), token)
+
+    def test_ocr_images_normalizes_produced_amount_tokens_only(self):
+        from budget_tracker.statements import ocr
+
+        def fake_engine(_png):
+            return (
+                [
+                    ([[0, 0], [10, 0], [10, 5], [0, 5]], "2.074.21", 0.9),
+                    ([[12, 0], [30, 0], [30, 5], [12, 5]], "Branch Deposit", 0.9),
+                ],
+                None,
+            )
+
+        with mock.patch.object(ocr, "_engine", return_value=fake_engine):
+            words = ocr.ocr_images([Image.new("L", (32, 8))])
+        self.assertEqual([word.text for word in words], ["2074.21", "Branch Deposit"])
+
 
 class TestOcrDocument(unittest.TestCase):
     """Page assembly is engine-free when the per-page recogniser is stubbed."""

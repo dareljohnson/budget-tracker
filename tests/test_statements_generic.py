@@ -67,8 +67,11 @@ def test_wrapped_detail_label_counts_once():
 
 COLUMN_X = {"date": 40, "description": 130, "amount": 400, "debit": 400,
             "credit": 470, "balance": 540}
-HEADER_ROLE = {"DATE": "date", "DESCRIPTION": "description", "AMOUNT": "amount",
-               "DEBIT": "debit", "CREDIT": "credit", "BALANCE": "balance"}
+HEADER_ROLE = {"DATE": "date", "DESCRIPTION": "description", "DETAILS": "description",
+               "TRANSACTION": "description", "REFERENCE": "description", "MEMO": "description",
+               "AMOUNT": "amount", "DEBIT": "debit", "CREDIT": "credit", "BALANCE": "balance",
+               "WITHDRAWAL": "debit", "WITHDRAWALS": "debit", "CHARGES": "debit",
+               "PAYMENTS": "debit", "DEPOSIT": "credit", "DEPOSITS": "credit"}
 
 def table_words(header, rows, top=200):
     words = [Word(name, COLUMN_X[HEADER_ROLE[name]], top) for name in header]
@@ -279,3 +282,64 @@ def test_foreign_text_in_description_does_not_reject():
         ["DATE", "DESCRIPTION", "DEBIT"],
         [{"date": "09/20/2026", "description": "PURCHASE 25.00 EUR", "debit": "40.00"}])
     assert parse_generic(words).transactions[0].amount_cents == 4_000
+
+
+def test_withdrawals_and_deposits_headers_are_debit_and_credit_columns():
+    rows = find_transactions(table_words(
+        ["DATE", "DESCRIPTION", "WITHDRAWALS", "DEPOSITS", "BALANCE"],
+        [{"date": "09/20", "description": "Grocery", "debit": "40.00", "balance": "960.00"},
+         {"date": "09/25", "description": "Payroll", "credit": "500.00", "balance": "1,460.00"}],
+    ), anchor=date(2026, 9, 16), anchor_on_end=False)
+    assert [(r.amount_cents, r.direction) for r in rows] == [(4_000, "expense"), (50_000, "income")]
+
+
+@pytest.mark.parametrize("header", ["DETAILS", "TRANSACTION", "REFERENCE", "MEMO"])
+def test_description_header_aliases_are_recognized(header):
+    rows = find_transactions(table_words(
+        ["DATE", header, "AMOUNT"],
+        [{"date": "09/20", "description": "Grocery", "amount": "40.00 CR"}],
+    ), anchor=date(2026, 9, 20), anchor_on_end=False)
+    assert [r.description for r in rows] == ["Grocery"]
+    assert rows[0].direction == "income"
+
+
+@pytest.mark.parametrize(
+    ("debit_header", "credit_header"),
+    [("WITHDRAWAL", "DEPOSIT"), ("CHARGES", "DEPOSITS"), ("PAYMENTS", "DEPOSIT")],
+)
+def test_debit_and_credit_header_aliases_are_recognized(debit_header, credit_header):
+    rows = find_transactions(table_words(
+        ["DATE", "DESCRIPTION", debit_header, credit_header],
+        [{"date": "09/20", "description": "Grocery", "debit": "40.00"},
+         {"date": "09/25", "description": "Payroll", "credit": "500.00"}],
+    ), anchor=date(2026, 9, 16), anchor_on_end=False)
+    assert [(r.amount_cents, r.direction) for r in rows] == [(4_000, "expense"), (50_000, "income")]
+
+
+def test_money_out_and_money_in_header_pair_is_a_debit_credit_pair():
+    words = [Word("DATE", 40, 200), Word("DESCRIPTION", 130, 200),
+             Word("MONEY", 390, 200), Word("OUT", 425, 200),
+             Word("MONEY", 475, 200), Word("IN", 510, 200)]
+    words += [Word("09/20", 40, 220), Word("Grocery", 130, 220), Word("40.00", 408, 220)]
+    words += [Word("09/25", 40, 234), Word("Payroll", 130, 234), Word("500.00", 493, 234)]
+    rows = find_transactions(words, anchor=date(2026, 9, 16), anchor_on_end=False)
+    assert [(r.amount_cents, r.direction) for r in rows] == [(4_000, "expense"), (50_000, "income")]
+
+
+@pytest.mark.parametrize(
+    ("anchor", "anchor_on_end"),
+    [(date(2025, 12, 16), False), (date(2026, 1, 15), True)],
+    ids=["start-anchor", "end-anchor"],
+)
+@pytest.mark.parametrize(
+    "date_tokens",
+    [[("Jan", 30), ("05", 55)], [("January", 16), ("5,", 45), ("2026", 58)]],
+    ids=["month-abbrev", "month-day-year"],
+)
+def test_multi_word_month_dates_start_a_row(anchor, anchor_on_end, date_tokens):
+    words = [Word("DATE", 40, 200), Word("DESCRIPTION", 130, 200), Word("AMOUNT", 400, 200)]
+    words += [Word(text, x, 220) for text, x in date_tokens]
+    words += [Word("Grocery", 130, 220), Word("40.00", 400, 220)]
+    rows = find_transactions(words, anchor=anchor, anchor_on_end=anchor_on_end)
+    assert [(r.occurred_on, r.amount_cents) for r in rows] == [(date(2026, 1, 5), 4_000)]
+    assert rows[0].description == "Grocery"

@@ -19,12 +19,7 @@ from budget_tracker.statements.model import (
     UnsupportedStatementError,
     Word,
 )
-from budget_tracker.statements.ocr import (
-    normalize_amount_token,
-    ocr_available,
-    ocr_document,
-    ocr_images,
-)
+from budget_tracker.statements.ocr import ocr_available, ocr_document, ocr_images
 from budget_tracker.statements.regions_checking import parse_statement
 
 # OCR returns flat positioned words, exactly like the PDF text extractor does.
@@ -44,10 +39,9 @@ def _parse_adapters(words: list[Word], *, source: str = "text") -> ParsedStateme
     refuse, the Regions error is the more useful one only when the document actually claimed to
     be Regions; otherwise the generic error explains why the document is unsupported.
 
-    OCR text has its separator damage repaired before any amount is parsed.
+    OCR-produced tokens are already separator-normalized by :func:`ocr.ocr_images`; text-layer
+    words reach the adapters untouched.
     """
-    if source == "ocr":
-        words = [replace(word, text=normalize_amount_token(word.text)) for word in words]
     lines = group_lines(words)
     claimed_regions = any("REGIONS BANK" in collapsed(line).upper() for line in lines)
     try:
@@ -99,7 +93,13 @@ def _load_image(path: Path, ocr: OcrPages | None) -> ParsedStatement:
     ocr_fn = ocr if ocr is not None else _default_ocr()
     if ocr_fn is None:
         raise UnsupportedStatementError("Image statements require the local OCR engine")
-    return _parse_adapters(ocr_fn(path), source="ocr")
+    try:
+        words = ocr_fn(path)
+    except StatementReadError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - a broken native engine is a read error
+        raise StatementReadError(str(exc)) from exc
+    return _parse_adapters(words, source="ocr")
 
 
 def _pdf_words(path: Path, pages: list[list[Word]]) -> tuple[list[Word], bool]:

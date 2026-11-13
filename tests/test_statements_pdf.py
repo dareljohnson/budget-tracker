@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest import mock
 
 from fpdf import FPDF
+from PIL import Image
 
 from statement_fixture import (
     generic_statement_words,
@@ -12,6 +13,7 @@ from statement_fixture import (
     make_multipage_generic_statement_pdf,
     make_multipage_pdf,
     make_statement_pdf,
+    make_statement_with_blank_page_pdf,
     make_unparsable_text_pdf,
 )
 
@@ -123,6 +125,32 @@ class TestPdfAdapter(unittest.TestCase):
             with self.assertRaises((UnsupportedStatementError, StatementValidationError)):
                 load_statement(path, ocr=fake)
         self.assertEqual(calls, [])
+
+    def test_sparse_page_ocr_does_not_rewrite_text_layer_amounts(self):
+        # Regression: the blank trailing page forces the sparse-page OCR path, but the Regions
+        # adapter must still see page one's original grouped amounts (`$1,000.00`).
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "blank-last.pdf"
+            make_statement_with_blank_page_pdf(path)
+            with (
+                mock.patch("budget_tracker.statements.ocr_available", return_value=True),
+                mock.patch("budget_tracker.statements.ocr_images", return_value=[]),
+            ):
+                stmt = load_statement(path)
+        self.assertEqual(stmt.source, "ocr")
+        self.assertEqual(stmt.ending_cents, 119_000)
+        self.assertEqual(len(stmt.transactions), 4)
+
+    def test_engine_failure_on_image_becomes_read_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "photo.png"
+            Image.new("L", (10, 10), 255).save(path)
+
+            def fake(_path):
+                raise RuntimeError("native engine exploded")
+
+            with self.assertRaises(StatementReadError):
+                load_statement(path, ocr=fake)
 
     def test_rejects_non_statement_pdf(self):
         with tempfile.TemporaryDirectory() as tmp:

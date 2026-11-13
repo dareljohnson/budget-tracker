@@ -50,10 +50,25 @@ COLUMN_TOLERANCE = 25.0
 _HEADER_ROLES = {
     "DATE": "date",
     "DESCRIPTION": "description",
+    "DETAILS": "description",
+    "TRANSACTION": "description",
+    "REFERENCE": "description",
+    "MEMO": "description",
     "AMOUNT": "amount",
     "DEBIT": "debit",
+    "WITHDRAWAL": "debit",
+    "WITHDRAWALS": "debit",
+    "CHARGES": "debit",
+    "PAYMENTS": "debit",
     "CREDIT": "credit",
+    "DEPOSIT": "credit",
+    "DEPOSITS": "credit",
     "BALANCE": "balance",
+}
+# Two adjacent header words can name one role (`MONEY OUT`, `MONEY IN`).
+_HEADER_PAIRS = {
+    ("MONEY", "OUT"): "debit",
+    ("MONEY", "IN"): "credit",
 }
 _AMOUNT_ROLES = ("amount", "debit", "credit", "balance")
 _SECTION_FAMILIES = ("deposits", "withdrawals", "fees")
@@ -224,7 +239,9 @@ def find_transactions(
     """Reconstruct transaction rows from the statement's column geometry.
 
     The first header line (a ``DATE`` token plus a description token plus an amount token) supplies
-    the column anchors. Each later line whose date-column token parses as a date starts a row. A
+    the column anchors. Each later line whose date-column token sequence parses as a date starts a
+    row; the date may span adjacent tokens (``Jan 05``, ``January 5, 2026``), so tokens within the
+    date column's tolerance are joined before parsing. A
     repeated header, page footer, totals row, or non-flow figure is skipped before section-heading
     detection, so it never opens a section or extends a description; a wrapped description word at
     the description column is not a heading. A trailing non-flow block (``DAILY BALANCE``,
@@ -269,9 +286,9 @@ def find_transactions(
         found = _row_date(line, date_anchor, anchor, anchor_on_end)
         if found is not None:
             finalize()
-            date_word, occurred_on = found
+            date_words, occurred_on = found
             current = {"occurred_on": occurred_on, "description": [], "columns": {}}
-            _collect_row_tokens(line, current, date_word, amount_anchors)
+            _collect_row_tokens(line, current, date_words, amount_anchors)
             continue
         if _TABLE_END_RE.search(text):
             finalize()
@@ -301,12 +318,27 @@ def _find_header(lines: Sequence[Sequence[Word]]) -> tuple[int, dict[str, float]
 
 
 def _header_anchors(line: Sequence[Word]) -> dict[str, float] | None:
-    """Return the column anchors of a header line, or ``None`` for a non-header line."""
+    """Return the column anchors of a header line, or ``None`` for a non-header line.
+
+    Adjacent tokens are consumed as a pair when the pair names a role (`MONEY OUT`, `MONEY IN`);
+    the pair's anchor is the centre of the span it covers.
+    """
     anchors: dict[str, float] = {}
-    for word in line:
+    index = 0
+    while index < len(line):
+        word = line[index]
+        if index + 1 < len(line):
+            pair = (word.text.upper(), line[index + 1].text.upper())
+            pair_role = _HEADER_PAIRS.get(pair)
+            if pair_role is not None:
+                if pair_role not in anchors:
+                    anchors[pair_role] = _pair_centre(word, line[index + 1])
+                index += 2
+                continue
         role = _HEADER_ROLES.get(word.text.upper())
         if role is not None and role not in anchors:
             anchors[role] = _centre(word)
+        index += 1
     if (
         "date" in anchors
         and "description" in anchors
@@ -316,15 +348,30 @@ def _header_anchors(line: Sequence[Word]) -> dict[str, float] | None:
     return None
 
 
+def _pair_centre(first: Word, second: Word) -> float:
+    return (first.x0 + (second.x1 if second.x1 is not None else second.x0)) / 2
+
+
 def _row_date(
     line: Sequence[Word], date_anchor: float, anchor: date | None, anchor_on_end: bool
-) -> tuple[Word, date] | None:
-    for word in line:
-        if abs(_centre(word) - date_anchor) > COLUMN_TOLERANCE:
-            continue
-        parsed = _parse_row_date(word.text, anchor, anchor_on_end)
-        if parsed is not None:
-            return word, parsed
+) -> tuple[list[Word], date] | None:
+    """Return the date-column tokens that form a row's date, and the parsed date.
+
+    Tokens whose centre lies within :data:`COLUMN_TOLERANCE` of the date column are joined before
+    parsing, so a month-name date split into separate words (``Jan 05``, ``January 5, 2026``)
+    is recognised. The tokens are returned as well so they are not appended to the description.
+    """
+    candidates = [
+        word for word in line if abs(_centre(word) - date_anchor) <= COLUMN_TOLERANCE
+    ]
+    for start in range(len(candidates)):
+        for end in range(len(candidates), start, -1):
+            tokens = candidates[start:end]
+            parsed = _parse_row_date(
+                " ".join(word.text for word in tokens), anchor, anchor_on_end
+            )
+            if parsed is not None:
+                return tokens, parsed
     return None
 
 
@@ -341,11 +388,12 @@ def _parse_row_date(text: str, anchor: date | None, anchor_on_end: bool) -> date
 def _collect_row_tokens(
     line: Sequence[Word],
     current: dict,
-    date_word: Word,
+    date_words: Sequence[Word],
     amount_anchors: dict[str, float],
 ) -> None:
+    date_ids = {id(word) for word in date_words}
     for word in line:
-        if word is date_word:
+        if id(word) in date_ids:
             continue
         amount = parse_amount(word.text)
         if amount is not None:

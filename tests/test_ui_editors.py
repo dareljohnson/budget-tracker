@@ -533,7 +533,45 @@ class TestEditors(unittest.TestCase):
         from budget_tracker.ui.views.statement_import import _notify_parse_error
 
         _notify_parse_error(self.ctx, StatementReadError("library detail"))
-        self.assertEqual(self.page.errors, ["Could not read this PDF. Nothing was imported."])
+        self.assertEqual(self.page.errors, ["Could not read this file. Nothing was imported."])
+
+    def test_parse_error_copy_is_generalized(self):
+        from budget_tracker.statements.model import UnsupportedStatementError
+        from budget_tracker.ui.views.statement_import import _notify_parse_error
+
+        with unittest.mock.patch.object(self.ctx, "notify") as notify:
+            _notify_parse_error(self.ctx, UnsupportedStatementError("no summary"))
+        message = notify.call_args.args[0]
+        self.assertNotIn("Regions", message)
+        self.assertIn("statement", message.lower())
+
+    def test_parse_error_copy_distinguishes_out_of_scope_statements(self):
+        from budget_tracker.statements.model import UnsupportedStatementError
+        from budget_tracker.ui.views.statement_import import _notify_parse_error
+
+        with unittest.mock.patch.object(self.ctx, "notify") as notify:
+            _notify_parse_error(
+                self.ctx, UnsupportedStatementError("Credit card statements are not supported")
+            )
+        self.assertIn("credit card", notify.call_args.args[0].lower())
+
+        with unittest.mock.patch.object(self.ctx, "notify") as notify:
+            _notify_parse_error(
+                self.ctx, UnsupportedStatementError("Only US dollar statements are supported")
+            )
+        message = notify.call_args.args[0]
+        self.assertIn("US dollar", message)
+        self.assertNotIn("Regions", message)
+
+    def test_ocr_preview_shows_badge(self):
+        from budget_tracker.statements.model import ImportPreview
+
+        rows = [self._import_row(TransactionType.EXPENSE, 2_000, 20, "Groceries")]
+        dialog = self._import_dialog(rows)
+        dialog._install_preview(ImportPreview(
+            statement=dialog.preview.statement, account_id=dialog.preview.account_id,
+            rows=rows, source="ocr"))
+        self.assertTrue(dialog.ocr_badge.visible)
 
     def test_views_render(self):
         from budget_tracker.ui.views.accounts import AccountsView

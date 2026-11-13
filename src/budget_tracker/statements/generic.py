@@ -31,8 +31,10 @@ def find_summary(words: Sequence[Word], block_end_top: float) -> SummaryFigures:
     """Return the summary figures printed above ``block_end_top``.
 
     Each line that looks like a summary label contributes the nearest amount on its own line, or
-    else the nearest amount on the next line within 12 points. A label with
-    no amount nearby is ignored. An explicit total for a family overrides that family's detail
+    else the nearest amount on the next line within 12 points when that next line is amount-only
+    (it carries no label text). A next line with label words is classified on its own; borrowing
+    its amount would double-count a wrapped label or steal a neighbouring summary figure. A label
+    with no amount nearby is ignored. An explicit total for a family overrides that family's detail
     lines; otherwise the detail lines are summed.
     """
     lines = [line for line in group_lines(words) if line[0].top < block_end_top]
@@ -46,7 +48,10 @@ def find_summary(words: Sequence[Word], block_end_top: float) -> SummaryFigures:
         cents = _nearest_amount(line, _label_end(label_words))
         if cents is None and index + 1 < len(lines):
             following = lines[index + 1]
-            if following[0].top - line[0].top <= _NEXT_LINE_TOLERANCE:
+            if (
+                following[0].top - line[0].top <= _NEXT_LINE_TOLERANCE
+                and not label_text(collapsed(following))
+            ):
                 cents = _nearest_amount(following, _label_end(label_words))
         if cents is None:
             continue

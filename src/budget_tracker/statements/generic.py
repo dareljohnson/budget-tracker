@@ -4,17 +4,34 @@ Summary lines are classified by their label alone; amounts stay exact. An explic
 the decomposed detail lines some statements print instead, and fees are kept apart from withdrawals.
 Transaction rows are reconstructed from column geometry: a date starts a row, the remaining tokens
 are placed in the nearest amount column, and direction is taken from the columns, the amount's own
-sign, the running balance, or the enclosing section heading -- never guessed.
+sign, the running balance, or the enclosing section heading -- never guessed. The assembled parser
+refuses credit-card, non-USD and unrecognizable documents, and imports a statement only when its
+rows reconcile to the figures the statement itself prints.
 """
 
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
+from typing import cast
 
-from budget_tracker.statements.labels import detail_family, family_of, label_text, normalize_label
+from budget_tracker.statements.labels import (
+    detail_family,
+    family_of,
+    has_non_usd_marker,
+    institution_of,
+    is_credit_card_marker,
+    label_text,
+    normalize_label,
+)
 from budget_tracker.statements.lines import collapsed, group_lines
-from budget_tracker.statements.model import StatementValidationError, Word
+from budget_tracker.statements.model import (
+    ParsedStatement,
+    ParsedTransaction,
+    StatementValidationError,
+    UnsupportedStatementError,
+    Word,
+)
 from budget_tracker.statements.numbers import parse_amount, parse_date
 
 _NEXT_LINE_TOLERANCE = 12.0
@@ -62,6 +79,21 @@ _YEARED_DATE_RE = re.compile(
     re.IGNORECASE,
 )
 _SENTINEL_ANCHOR = date(2000, 1, 1)
+
+_UNKNOWN_INSTITUTION = "Unknown bank"
+_DEFAULT_ACCOUNT_LABEL = "Statement"
+_ACCOUNT_TYPE_RE = re.compile(
+    r"\b(?:CHECKING|SAVINGS|CURRENT|SHARE|MONEY\s+MARKET)\b", re.IGNORECASE
+)
+_ACCOUNT_RE = re.compile(r"\bACCOUNT\b", re.IGNORECASE)
+_CARD_RE = re.compile(r"\bCARD\b", re.IGNORECASE)
+_DIGIT_RUN_RE = re.compile(r"\d{4,}")
+_NON_USD_CODES = frozenset(("GBP", "EUR", "CAD", "AUD"))
+_PERIOD_DATE = r"(?:[A-Za-z]+\s+\d{1,2},\s+\d{4}|\d{1,2}/\d{1,2}/\d{2,4})"
+_PERIOD_RE = re.compile(
+    rf"({_PERIOD_DATE})\s*(?:through|to|[-–—])\s*({_PERIOD_DATE})", re.IGNORECASE
+)
+_PERIOD_END_RE = re.compile(rf"\bfor\s+({_PERIOD_DATE})\b", re.IGNORECASE)
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,11 +152,14 @@ def find_summary(words: Sequence[Word], block_end_top: float) -> SummaryFigures:
 def _classify(label: str) -> str | None:
     """Classify a summary label.
 
-    Explicit totals use family matching only. Every other line is tried with the detail keywords
-    first, so a decomposed withdrawal line that names service charges is not read as fees.
+    Explicit totals use family matching only. A bare ``Fee``/``Fees`` summary line is the printed
+    fee figure. Every other line is tried with the detail keywords first, so a decomposed
+    withdrawal line that names service charges is not read as fees.
     """
     if _is_explicit_total(label):
         return family_of(label)
+    if normalize_label(label) in ("FEE", "FEES"):
+        return "fees"
     return detail_family(label) or family_of(label)
 
 
@@ -166,6 +201,17 @@ class TableRow:
     amount_cents: int
     direction: str
     balance_cents: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class _DocumentFacts:
+    institution: str
+    account_label: str
+    account_last4: str | None
+    period_start: date | None
+    period_end: date | None
+    period_read: bool  # both bounds were read from the document
+    end_date_read: bool  # only the end date was read
 
 
 def find_transactions(
@@ -398,3 +444,275 @@ def _direction(
     if section in ("withdrawals", "fees"):
         return magnitude, "expense"
     return magnitude, ""
+
+
+def parse_generic(words: Sequence[Word], *, source: str = "text") -> ParsedStatement:
+    """Parse a US checking or savings statement into a validated statement.
+
+    Document facts are read from the summary region, the statement's own summary figures and
+    transaction rows are extracted, and the rows must reconcile to those figures before anything is
+    returned. Credit-card, non-USD and unrecognizable layouts are refused outright; every gate
+    failure is reported together in one :class:`StatementValidationError`.
+    """
+    lines = group_lines(words)
+    header = _find_header(lines)
+    block_end_top = lines[header[0]][0].top if header is not None else float("inf")
+
+    facts = _document_facts(lines, block_end_top)
+    if header is None:
+        raise UnsupportedStatementError("Unrecognized statement layout")
+
+    summary = find_summary(words, block_end_top)
+    if facts.period_read:
+        anchor, anchor_on_end = facts.period_start, False
+    elif facts.end_date_read:
+        anchor, anchor_on_end = facts.period_end, True
+    else:
+        anchor, anchor_on_end = None, False
+
+    rows = find_transactions(
+        words,
+        anchor=anchor,
+        anchor_on_end=anchor_on_end,
+        beginning_cents=summary.beginning_cents,
+    )
+    period_start, period_end = _resolved_period(facts, rows)
+
+    errors = _validate(rows, summary, facts, period_start, period_end, "balance" in header[1])
+    if errors:
+        raise StatementValidationError(errors)
+
+    # The gate above refuses a document with no transactions and no readable period, so both
+    # bounds are present for every statement that reaches here.
+    if period_start is None or period_end is None:
+        raise UnsupportedStatementError("Unrecognized statement layout")
+    return ParsedStatement(
+        institution=facts.institution,
+        account_label=facts.account_label,
+        account_last4=facts.account_last4,
+        period_start=period_start,
+        period_end=period_end,
+        beginning_cents=cast(int, summary.beginning_cents),
+        deposits_cents=cast(int, summary.deposits_cents),
+        withdrawals_cents=cast(int, summary.withdrawals_cents),
+        fees_cents=summary.fees_cents if summary.fees_cents is not None else 0,
+        ending_cents=cast(int, summary.ending_cents),
+        transactions=[
+            ParsedTransaction(
+                occurred_on=row.occurred_on,
+                description=row.description,
+                amount_cents=row.amount_cents,
+                direction=row.direction,
+            )
+            for row in rows
+        ],
+        source=source,
+    )
+
+
+def _document_facts(lines: Sequence[Sequence[Word]], block_end_top: float) -> _DocumentFacts:
+    """Read header facts and refuse documents outside the importer's scope.
+
+    Only the summary region above ``block_end_top`` is inspected, so a checking statement whose
+    transaction rows mention a card brand or a foreign currency is not misclassified.
+    """
+    region = [line for line in lines if line[0].top < block_end_top]
+    _refuse_out_of_scope(region)
+    institution = next(
+        (name for line in region if (name := institution_of(collapsed(line))) is not None),
+        _UNKNOWN_INSTITUTION,
+    )
+    account_label = next(
+        (collapsed(line) for line in region if _ACCOUNT_TYPE_RE.search(collapsed(line))),
+        _DEFAULT_ACCOUNT_LABEL,
+    )
+    period_start, period_end, period_read, end_date_read = _read_period(region)
+    return _DocumentFacts(
+        institution=institution,
+        account_label=account_label,
+        account_last4=_account_last4(region),
+        period_start=period_start,
+        period_end=period_end,
+        period_read=period_read,
+        end_date_read=end_date_read,
+    )
+
+
+def _refuse_out_of_scope(lines: Sequence[Sequence[Word]]) -> None:
+    """Raise for credit-card and non-USD documents.
+
+    A standalone ISO code is a document-level declaration even when the header does not print the
+    word ``currency``; ``has_non_usd_marker`` only accepts codes in that declarative form.
+    """
+    for line in lines:
+        text = collapsed(line)
+        if is_credit_card_marker(text):
+            raise UnsupportedStatementError("Credit card statements are not supported")
+        if has_non_usd_marker(text) or normalize_label(text) in _NON_USD_CODES:
+            raise UnsupportedStatementError("Only US dollar statements are supported")
+
+
+def _read_period(
+    lines: Sequence[Sequence[Word]],
+) -> tuple[date | None, date | None, bool, bool]:
+    """Return ``(start, end, full_period_read, end_date_read)`` from the summary region."""
+    for line in lines:
+        match = _PERIOD_RE.search(collapsed(line))
+        if match is None:
+            continue
+        start = _parse_period_date(match.group(1))
+        end = _parse_period_date(match.group(2))
+        if start is not None and end is not None:
+            return start, end, True, False
+    for line in lines:
+        match = _PERIOD_END_RE.search(collapsed(line))
+        if match is None:
+            continue
+        end = _parse_period_date(match.group(1))
+        if end is not None:
+            return None, end, False, True
+    return None, None, False, False
+
+
+def _parse_period_date(text: str) -> date | None:
+    return parse_date(" ".join(text.split()), _SENTINEL_ANCHOR)
+
+
+def _account_last4(lines: Sequence[Sequence[Word]]) -> str | None:
+    """Return the last four digits of an account number, never of a card number."""
+    for line in lines:
+        text = collapsed(line)
+        if _CARD_RE.search(text) or _ACCOUNT_RE.search(text) is None:
+            continue
+        match = _DIGIT_RUN_RE.search(text)
+        if match is not None:
+            return match.group()[-4:]
+    return None
+
+
+def _resolved_period(
+    facts: _DocumentFacts, rows: Sequence[TableRow]
+) -> tuple[date | None, date | None]:
+    """Resolve the statement period, deriving bounds from the rows when the document omits them."""
+    dates = [row.occurred_on for row in rows]
+    if facts.period_read:
+        return facts.period_start, facts.period_end
+    if facts.end_date_read:
+        return (min(dates) if dates else facts.period_end), facts.period_end
+    if dates:
+        return min(dates), max(dates)
+    return None, None
+
+
+def _validate(
+    rows: Sequence[TableRow],
+    summary: SummaryFigures,
+    facts: _DocumentFacts,
+    period_start: date | None,
+    period_end: date | None,
+    balance_column: bool,
+) -> list[str]:
+    """Return one message per failed gate rule, in the documented order."""
+    errors: list[str] = []
+
+    if not rows:
+        errors.append("No transactions parsed")
+
+    for row in rows:
+        if row.amount_cents <= 0:
+            errors.append(f"Transaction dated {row.occurred_on.isoformat()} has no positive amount")
+        if row.direction not in ("income", "expense"):
+            errors.append(
+                f"Transaction dated {row.occurred_on.isoformat()} has no determined direction"
+            )
+
+    for value, name in (
+        (summary.beginning_cents, "beginning balance"),
+        (summary.deposits_cents, "total deposits"),
+        (summary.withdrawals_cents, "total withdrawals"),
+        (summary.ending_cents, "ending balance"),
+    ):
+        if value is None:
+            errors.append(f"Statement {name} not found")
+
+    parsed_deposits = sum(row.amount_cents for row in rows if row.direction == "income")
+    parsed_withdrawals = sum(row.amount_cents for row in rows if row.direction == "expense")
+    if summary.deposits_cents is not None and parsed_deposits != summary.deposits_cents:
+        errors.append(f"Deposits: parsed {parsed_deposits} != statement {summary.deposits_cents}")
+    if summary.withdrawals_cents is not None and parsed_withdrawals != summary.withdrawals_cents:
+        errors.append(
+            f"Withdrawals: parsed {parsed_withdrawals} != statement {summary.withdrawals_cents}"
+        )
+
+    if all(
+        value is not None
+        for value in (
+            summary.beginning_cents,
+            summary.deposits_cents,
+            summary.withdrawals_cents,
+            summary.ending_cents,
+        )
+    ):
+        beginning = cast(int, summary.beginning_cents)
+        deposits = cast(int, summary.deposits_cents)
+        withdrawals = cast(int, summary.withdrawals_cents)
+        ending = cast(int, summary.ending_cents)
+        plain = beginning + deposits - withdrawals
+        # Fees are either a memo already inside withdrawals or a separate subtraction; accept
+        # whichever the document itself demonstrates.
+        fees_separate = summary.fees_cents is not None and plain - summary.fees_cents == ending
+        if plain != ending and not fees_separate:
+            errors.append(
+                f"Ending balance: {beginning} + {deposits} - {withdrawals} = {plain} "
+                f"!= statement {ending}"
+            )
+
+    errors.extend(_period_errors(rows, facts, period_start, period_end))
+    if balance_column:
+        errors.extend(_balance_errors(rows, summary.beginning_cents))
+    return errors
+
+
+def _period_errors(
+    rows: Sequence[TableRow],
+    facts: _DocumentFacts,
+    period_start: date | None,
+    period_end: date | None,
+) -> list[str]:
+    if facts.period_read and period_start is not None and period_end is not None:
+        return [
+            f"Transaction dated {row.occurred_on.isoformat()} is outside the statement period "
+            f"{period_start.isoformat()}..{period_end.isoformat()}"
+            for row in rows
+            if not period_start <= row.occurred_on <= period_end
+        ]
+    if facts.end_date_read and period_end is not None:
+        return [
+            f"Transaction dated {row.occurred_on.isoformat()} is after the statement end "
+            f"{period_end.isoformat()}"
+            for row in rows
+            if row.occurred_on > period_end
+        ]
+    return []
+
+
+def _balance_errors(rows: Sequence[TableRow], beginning_cents: int | None) -> list[str]:
+    """Check the running-balance chain when a balance column was parsed."""
+    if beginning_cents is None or not rows:
+        return []
+    errors: list[str] = []
+    previous = beginning_cents
+    for row in rows:
+        if row.balance_cents is None:
+            errors.append(f"Transaction dated {row.occurred_on.isoformat()} has no running balance")
+            previous = None
+            continue
+        if row.direction in ("income", "expense") and previous is not None:
+            expected = previous + (row.amount_cents if row.direction == "income" else -row.amount_cents)
+            if row.balance_cents != expected:
+                errors.append(
+                    f"Running balance for transaction dated {row.occurred_on.isoformat()}: "
+                    f"expected {expected}, parsed {row.balance_cents}"
+                )
+        previous = row.balance_cents
+    return errors

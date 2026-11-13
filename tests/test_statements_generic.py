@@ -3,8 +3,12 @@ from datetime import date
 
 import pytest
 
-from budget_tracker.statements.generic import find_summary, find_transactions
-from budget_tracker.statements.model import StatementValidationError, Word
+from budget_tracker.statements.generic import find_summary, find_transactions, parse_generic
+from budget_tracker.statements.model import (
+    StatementValidationError,
+    UnsupportedStatementError,
+    Word,
+)
 
 def summary_words(rows, top=100):
     words = []
@@ -187,3 +191,73 @@ def test_yearless_date_without_anchor_is_rejected():
     )
     with pytest.raises(StatementValidationError, match="09/20"):
         find_transactions(words, anchor=None, anchor_on_end=False)
+
+def test_full_statement_passes_and_parses():
+    words = summary_words([
+        ("Beginning Balance", "$1,000.00"), ("Total Deposits", "$500.00"),
+        ("Total Withdrawals", "$40.00"), ("Ending Balance", "$1,460.00"),
+    ]) + table_words(["DATE", "DESCRIPTION", "DEBIT", "CREDIT", "BALANCE"],
+                     [{"date": "09/20/2026", "description": "Grocery", "debit": "40.00", "balance": "960.00"},
+                      {"date": "09/25/2026", "description": "Payroll", "credit": "500.00", "balance": "1,460.00"}])
+    stmt = parse_generic(words)
+    assert stmt.institution == "Unknown bank"
+    assert stmt.period_start == date(2026, 9, 20)
+    assert stmt.ending_cents == 146_000
+    assert [t.direction for t in stmt.transactions] == ["expense", "income"]
+
+def test_missing_summary_figures_are_refused():
+    words = summary_words([("Beginning Balance", "$1,000.00")]) + table_words(
+        ["DATE", "DESCRIPTION", "AMOUNT"], [{"date": "09/20/2026", "description": "X", "amount": "1.00 CR"}])
+    with pytest.raises(StatementValidationError) as ctx:
+        parse_generic(words)
+    assert any("deposits" in e.lower() for e in ctx.value.errors)
+
+def test_totals_mismatch_is_refused():
+    words = summary_words([
+        ("Beginning Balance", "$1,000.00"), ("Total Deposits", "$500.00"),
+        ("Total Withdrawals", "$41.00"), ("Ending Balance", "$1,460.00"),
+    ]) + table_words(["DATE", "DESCRIPTION", "DEBIT", "CREDIT"], [
+        {"date": "09/20/2026", "description": "Grocery", "debit": "40.00"},
+        {"date": "09/25/2026", "description": "Payroll", "credit": "500.00"}])
+    with pytest.raises(StatementValidationError):
+        parse_generic(words)
+
+def test_fees_inside_withdrawals_and_separate_both_accepted():
+    inside = summary_words([("Beginning Balance", "$1,000.00"), ("Total Deposits", "$0.00"),
+                            ("Total Withdrawals", "$40.00"), ("Fees", "$5.00"),
+                            ("Ending Balance", "$960.00")]) + table_words(
+        ["DATE", "DESCRIPTION", "DEBIT"], [{"date": "09/20/2026", "description": "Grocery", "debit": "40.00"}])
+    assert parse_generic(inside).ending_cents == 96_000
+    separate = summary_words([("Beginning Balance", "$1,000.00"), ("Total Deposits", "$0.00"),
+                              ("Total Withdrawals", "$40.00"), ("Fees", "$5.00"),
+                              ("Ending Balance", "$955.00")]) + table_words(
+        ["DATE", "DESCRIPTION", "DEBIT"], [{"date": "09/20/2026", "description": "Grocery", "debit": "40.00"}])
+    assert parse_generic(separate).ending_cents == 95_500
+
+def test_credit_card_and_non_usd_are_unsupported():
+    with pytest.raises(UnsupportedStatementError):
+        parse_generic([Word("CREDIT CARD", 40, 40), Word("Minimum Payment Due", 40, 52)])
+    with pytest.raises(UnsupportedStatementError):
+        parse_generic([Word("Statement currency: EUR", 40, 40)])
+
+def test_ambiguous_direction_is_refused():
+    words = summary_words([("Beginning Balance", "$1,000.00"), ("Total Deposits", "$0.00"),
+                           ("Total Withdrawals", "$40.00"), ("Ending Balance", "$960.00")]) + table_words(
+        ["DATE", "DESCRIPTION", "AMOUNT"], [{"date": "09/20/2026", "description": "X", "amount": "40.00"}])
+    with pytest.raises(StatementValidationError):
+        parse_generic(words)
+
+def test_card_number_is_not_used_as_account_last4():
+    words = [Word("CHECKING", 40, 40), Word("CARD NUMBER", 40, 60),
+             Word("2547-96574-2541-4004", 40, 72)] + summary_words([
+        ("Beginning Balance", "$1,000.00"), ("Total Deposits", "$0.00"),
+        ("Total Withdrawals", "$40.00"), ("Ending Balance", "$960.00")]) + table_words(
+        ["DATE", "DESCRIPTION", "DEBIT"], [{"date": "09/20/2026", "description": "X", "debit": "40.00"}])
+    assert parse_generic(words).account_last4 is None
+
+def test_foreign_text_in_description_does_not_reject():
+    words = summary_words([("Beginning Balance", "$1,000.00"), ("Total Deposits", "$0.00"),
+                           ("Total Withdrawals", "$40.00"), ("Ending Balance", "$960.00")]) + table_words(
+        ["DATE", "DESCRIPTION", "DEBIT"],
+        [{"date": "09/20/2026", "description": "PURCHASE 25.00 EUR", "debit": "40.00"}])
+    assert parse_generic(words).transactions[0].amount_cents == 4_000

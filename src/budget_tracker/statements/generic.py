@@ -94,6 +94,10 @@ _YEARED_DATE_RE = re.compile(
     re.IGNORECASE,
 )
 _SENTINEL_ANCHOR = date(2000, 1, 1)
+# A row's date starts at the leftmost date-column token and spans at most three words
+# (``January 5, 2026``). Bounding the span keeps the search linear in the line's token count.
+_MAX_DATE_TOKENS = 3
+_MAX_DATE_TEXT = 32
 
 _UNKNOWN_INSTITUTION = "Unknown bank"
 _DEFAULT_ACCOUNT_LABEL = "Statement"
@@ -359,19 +363,21 @@ def _row_date(
 
     Tokens whose centre lies within :data:`COLUMN_TOLERANCE` of the date column are joined before
     parsing, so a month-name date split into separate words (``Jan 05``, ``January 5, 2026``)
-    is recognised. The tokens are returned as well so they are not appended to the description.
+    is recognised. Only the first :data:`_MAX_DATE_TOKENS` candidates are considered, longest span
+    first, so a line cannot make the search quadratic. The tokens are returned as well so they are
+    not appended to the description.
     """
     candidates = [
         word for word in line if abs(_centre(word) - date_anchor) <= COLUMN_TOLERANCE
     ]
-    for start in range(len(candidates)):
-        for end in range(len(candidates), start, -1):
-            tokens = candidates[start:end]
-            parsed = _parse_row_date(
-                " ".join(word.text for word in tokens), anchor, anchor_on_end
-            )
-            if parsed is not None:
-                return tokens, parsed
+    for size in range(_MAX_DATE_TOKENS, 0, -1):
+        tokens = candidates[:size]
+        text = " ".join(word.text for word in tokens)
+        if len(text) > _MAX_DATE_TEXT:
+            continue
+        parsed = _parse_row_date(text, anchor, anchor_on_end)
+        if parsed is not None:
+            return tokens, parsed
     return None
 
 

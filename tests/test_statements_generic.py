@@ -343,3 +343,13 @@ def test_multi_word_month_dates_start_a_row(anchor, anchor_on_end, date_tokens):
     rows = find_transactions(words, anchor=anchor, anchor_on_end=anchor_on_end)
     assert [(r.occurred_on, r.amount_cents) for r in rows] == [(date(2026, 1, 5), 4_000)]
     assert rows[0].description == "Grocery"
+
+
+def test_many_date_column_tokens_do_not_form_a_row():
+    words = [Word("DATE", 40, 200), Word("DESCRIPTION", 130, 200), Word("AMOUNT", 400, 200)]
+    # Hundreds of non-date tokens fill the date column; the only real date is far to the right and
+    # must not be reached by an unbounded sub-slice search.
+    words += [Word("zz", 16 + (index % 49), 220) for index in range(300)]
+    words += [Word("01/05/2026", 40, 220), Word("Grocery", 130, 220), Word("40.00", 400, 220)]
+    rows = find_transactions(words, anchor=date(2026, 1, 15), anchor_on_end=False)
+    assert rows == []

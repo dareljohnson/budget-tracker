@@ -17,7 +17,16 @@ from .formatting import format_money
 from .repository import Repository
 from .services import BudgetService
 from .ui.context import AppContext
-from .ui.theme import EXPENSE_COLOR, SEED_COLOR, WARNING_COLOR, build_theme, fs, set_dark, set_text_scale
+from .ui.theme import (
+    EXPENSE_COLOR,
+    PRESETS,
+    SEED_COLOR,
+    WARNING_COLOR,
+    build_theme,
+    fs,
+    set_dark,
+    set_text_scale,
+)
 from .ui.views.accounts import AccountsView
 from .ui.views.bills import BillsView, bill_avatar, status_chip
 from .ui.views.budgets import BudgetsView
@@ -31,6 +40,7 @@ from .ui.views.year import YearView
 log = logging.getLogger(__name__)
 
 THEME_SETTING = "theme_mode"
+THEME_PRESET_SETTING = "theme_preset"
 TEXT_SIZE_SETTING = "text_scale"
 
 NAV_ITEMS = [
@@ -87,8 +97,11 @@ def main(page: ft.Page) -> None:
     ctx = AppContext(page=page, repo=repo, service=BudgetService(repo))
 
     page.title = APP_NAME
-    page.theme = build_theme()
-    page.dark_theme = build_theme(dark=True)
+    current_preset = repo.get_setting(THEME_PRESET_SETTING) or "indigo"
+    if current_preset not in PRESETS:
+        current_preset = "indigo"
+    page.theme = build_theme(preset=current_preset)
+    page.dark_theme = build_theme(dark=True, preset=current_preset)
     page.theme_mode = ft.ThemeMode.DARK if repo.get_setting(THEME_SETTING) == "dark" else ft.ThemeMode.LIGHT
     set_dark(page.theme_mode == ft.ThemeMode.DARK)
     set_text_scale(1.15 if repo.get_setting(TEXT_SIZE_SETTING) == "large" else 1.0)
@@ -128,13 +141,65 @@ def main(page: ft.Page) -> None:
     def navigate(e: ft.Event[ft.NavigationRail]) -> None:
         content.content = _pinned_page(views[e.control.selected_index].control)
 
-    def toggle_theme(_: ft.Event) -> None:
-        dark = page.theme_mode != ft.ThemeMode.DARK
+    def apply_mode(dark: bool) -> None:
         page.theme_mode = ft.ThemeMode.DARK if dark else ft.ThemeMode.LIGHT
         set_dark(dark)
         theme_button.icon = ft.Icons.LIGHT_MODE if dark else ft.Icons.DARK_MODE
         repo.set_setting(THEME_SETTING, "dark" if dark else "light")
         ctx.data_changed()
+
+    def apply_preset(name: str) -> None:
+        nonlocal current_preset
+        current_preset = name
+        page.theme = build_theme(preset=name)
+        page.dark_theme = build_theme(dark=True, preset=name)
+        repo.set_setting(THEME_PRESET_SETTING, name)
+        page.update()
+
+    def choose_appearance(_: ft.Event) -> None:
+        page.show_dialog(
+            ft.AlertDialog(
+                modal=True,
+                title=ft.Text("Appearance"),
+                content=ft.Container(
+                    width=340,
+                    content=ft.Column(
+                        [
+                            ft.Text("Mode", weight=ft.FontWeight.W_600),
+                            ft.Row(
+                                [
+                                    ft.FilledButton(
+                                        content="Light",
+                                        on_click=lambda _: apply_mode(False),
+                                    ),
+                                    ft.FilledButton(
+                                        content="Dark",
+                                        on_click=lambda _: apply_mode(True),
+                                    ),
+                                ],
+                                spacing=8,
+                            ),
+                            ft.Text("Theme", weight=ft.FontWeight.W_600),
+                            ft.Dropdown(
+                                label="Theme",
+                                options=[
+                                    ft.DropdownOption(key=key, text=preset.label)
+                                    for key, preset in PRESETS.items()
+                                ],
+                                value=current_preset,
+                                on_select=lambda event: apply_preset(event.control.value),
+                            ),
+                        ],
+                        spacing=12,
+                        tight=True,
+                    ),
+                ),
+                actions=[
+                    ft.TextButton(content="Close", on_click=lambda _: page.pop_dialog())
+                ],
+                actions_alignment=ft.MainAxisAlignment.END,
+            )
+        )
 
     def quick_add(_: ft.Event) -> None:
         rail.selected_index = TRANSACTIONS_INDEX
@@ -143,8 +208,8 @@ def main(page: ft.Page) -> None:
 
     theme_button = ft.IconButton(
         icon=ft.Icons.LIGHT_MODE if page.theme_mode == ft.ThemeMode.DARK else ft.Icons.DARK_MODE,
-        tooltip="Toggle light/dark theme",
-        on_click=toggle_theme,
+        tooltip="Appearance",
+        on_click=lambda event: choose_appearance(event),
     )
     text_button = ft.IconButton(
         icon=ft.Icons.FORMAT_SIZE,

@@ -61,9 +61,25 @@ class TestReceiptStorage(unittest.TestCase):
         with self.assertRaises(ReceiptReadError):
             storage.resolve_receipt(str(Path(self.tmp) / "receipts" / "x.png"))
 
+    def test_resolve_rejects_relative_paths_outside_receipts(self):
+        for bad in ("budget_tracker.db", "other/x.png", "/Windows/win.ini", "\\Windows\\win.ini"):
+            with self.subTest(bad=bad), self.assertRaises(ReceiptReadError):
+                storage.resolve_receipt(bad)
+
     def test_delete_receipt_file_is_safe_when_missing(self):
         storage.delete_receipt_file("receipts/missing.png")
         storage.delete_receipt_file(None)
+        storage.delete_receipt_file("a\x00b")
+
+    def test_store_failure_leaves_no_orphan(self):
+        def failing_copy(source, target):
+            Path(target).write_bytes(b"partial")
+            raise OSError("disk full")
+
+        with mock.patch.object(storage.shutil, "copyfile", side_effect=failing_copy):
+            with self.assertRaises(OSError):
+                storage.store_receipt(self.png)
+        self.assertEqual(list(storage.receipts_dir().iterdir()), [])
 
     def test_delete_receipt_file_removes_existing_file(self):
         stored = storage.store_receipt(self.png)

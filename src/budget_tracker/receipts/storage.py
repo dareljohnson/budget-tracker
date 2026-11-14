@@ -49,18 +49,34 @@ def store_receipt(source: Path) -> str:
             header = handle.read(8)
         extension = ".jpg" if header.startswith(_JPEG_MAGIC) else ".png"
     target = receipts_dir() / f"{uuid4().hex}{extension}"
-    shutil.copyfile(source, target)
+    try:
+        shutil.copyfile(source, target)
+    except BaseException:
+        try:
+            target.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
     return f"receipts/{target.name}"
 
 
 def resolve_receipt(stored: str) -> Path:
     """Return the absolute path for a stored receipt.
 
-    Absolute paths and any path containing a ``..`` part are rejected, so a tampered database
-    row cannot make the app read or delete a file outside its data folder.
+    Absolute paths, non-empty drives, rooted paths and any path containing a ``..`` part are
+    rejected, and the resolved join must stay inside the receipts folder. Without that
+    containment check a tampered row such as ``budget_tracker.db`` would resolve to the live
+    SQLite file, so the app could read or delete something outside its data folder.
     """
     path = Path(stored)
-    if path.is_absolute() or path.drive or ".." in path.parts:
+    if path.is_absolute() or path.drive or path.root or ".." in path.parts:
+        raise ReceiptReadError("Invalid receipt location")
+    try:
+        resolved = (data_dir() / path).resolve()
+        inside_receipts = resolved.is_relative_to(receipts_dir().resolve())
+    except (OSError, ValueError, TypeError) as exc:
+        raise ReceiptReadError("Invalid receipt location") from exc
+    if not inside_receipts:
         raise ReceiptReadError("Invalid receipt location")
     return data_dir() / path
 
@@ -74,7 +90,7 @@ def delete_receipt_file(stored: str | None) -> None:
         return
     try:
         resolve_receipt(stored).unlink(missing_ok=True)
-    except (ReceiptReadError, OSError):
+    except (ReceiptReadError, OSError, ValueError, TypeError):
         pass
 
 

@@ -94,11 +94,20 @@ def read_status() -> dict | None:
 def create_backup(*, kind: str = "manual", reason: str = "") -> Path:
     """Take a snapshot of the database and receipts and return the ZIP path."""
     with BACKUP_LOCK:
-        return _create_backup(kind=kind, reason=reason)
+        target = _create_backup(kind=kind, reason=reason)
+    if target is None:  # only possible for the internal due check
+        raise BackupError("The backup was skipped")
+    return target
 
 
-def _create_backup(*, kind: str, reason: str) -> Path:
-    """Create a backup; the caller holds :data:`BACKUP_LOCK`."""
+def _create_backup(*, kind: str, reason: str, only_if_due: bool = False) -> Path | None:
+    """Create a backup; the caller holds :data:`BACKUP_LOCK`.
+
+    ``only_if_due`` re-checks the 24-hour window under the lock so two callers cannot
+    produce two automatic snapshots.
+    """
+    if only_if_due and not _auto_due():
+        return None
     folder = backups_dir()
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     target = _unique_path(folder / f"{kind}-{stamp}.zip")
@@ -108,14 +117,15 @@ def _create_backup(*, kind: str, reason: str) -> Path:
         database = work / DB_FILENAME
         _copy_database(database)
         receipt_count = _copy_receipts(work / "receipts")
+        schema_version, transaction_count = _database_summary(database)
         manifest = {
             "format": BACKUP_FORMAT,
             "created_at": datetime.now().isoformat(timespec="seconds"),
             "reason": reason or kind,
             "kind": kind,
             "app_version": __version__,
-            "schema_version": _schema_version(database),
-            "transaction_count": _transaction_count(database),
+            "schema_version": schema_version,
+            "transaction_count": transaction_count,
             "receipt_count": receipt_count,
         }
         (work / "manifest.json").write_text(
@@ -142,7 +152,18 @@ def _create_backup(*, kind: str, reason: str) -> Path:
 
 
 def create_backup_if_due() -> Path | None:
-    """Create an automatic snapshot unless the newest one is under 24 hours old."""
+    """Create an automatic snapshot unless the newest one is under 24 hours old.
+
+    The check and the creation happen under one lock, and ``_create_backup`` re-checks,
+    so concurrent callers cannot create two automatic snapshots.
+    """
+    with BACKUP_LOCK:
+        if not _auto_due():
+            return None
+        return _create_backup(kind="auto", reason="automatic", only_if_due=True)
+
+
+def _auto_due() -> bool:
     newest = None
     for path in backups_dir().glob("auto-*.zip"):
         try:
@@ -151,9 +172,7 @@ def create_backup_if_due() -> Path | None:
             continue
         if newest is None or modified > newest:
             newest = modified
-    if newest is not None and time.time() - newest < DUE_AFTER_SECONDS:
-        return None
-    return create_backup(kind="auto", reason="automatic")
+    return newest is None or time.time() - newest >= DUE_AFTER_SECONDS
 
 
 def _copy_database(target: Path) -> None:
@@ -201,26 +220,21 @@ def _copy_receipts(target: Path) -> int:
     return count
 
 
-def _schema_version(database: Path) -> int:
+def _database_summary(database: Path) -> tuple[int, int]:
+    """Return ``(schema_version, transaction_count)`` for the copied database.
+
+    A copy that cannot be read is a failed backup, never a manifest full of zeros.
+    """
     try:
         conn = sqlite3.connect(str(database))
         try:
-            return int(conn.execute("PRAGMA user_version").fetchone()[0])
+            version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+            count = int(conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0])
         finally:
             conn.close()
-    except (sqlite3.Error, OSError, TypeError, ValueError):
-        return 0
-
-
-def _transaction_count(database: Path) -> int:
-    try:
-        conn = sqlite3.connect(str(database))
-        try:
-            return int(conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0])
-        finally:
-            conn.close()
-    except (sqlite3.Error, OSError, TypeError, ValueError):
-        return 0
+    except (sqlite3.Error, OSError, TypeError, ValueError) as exc:
+        raise BackupError(f"The copied database could not be read: {exc}") from exc
+    return version, count
 
 
 # -- listing and pruning -------------------------------------------------
@@ -316,13 +330,15 @@ def _stage_restore(zip_path: Path) -> Path:
         except (OSError, zipfile.BadZipFile) as exc:
             raise BackupError(f"The backup file could not be opened: {exc}") from exc
         with archive:
-            names = _validated_names(archive)
+            members = _validated_members(archive)
+            names = {name for name, _ in members}
             if "manifest.json" not in names:
                 raise BackupError("The backup is missing its manifest")
             if DB_FILENAME not in names:
                 raise BackupError("The backup is missing its database")
+            manifest_info = next(info for name, info in members if name == "manifest.json")
             try:
-                manifest = json.loads(archive.read("manifest.json"))
+                manifest = json.loads(archive.read(manifest_info))
             except (KeyError, ValueError, TypeError) as exc:
                 raise BackupError("The backup manifest could not be read") from exc
             if not isinstance(manifest, dict) or manifest.get("format") != BACKUP_FORMAT:
@@ -332,9 +348,9 @@ def _stage_restore(zip_path: Path) -> Path:
                 raise BackupError(
                     f"The backup uses schema version {declared}, newer than this app supports"
                 )
-            for name in names:
+            for name, info in members:
                 if name == "manifest.json" or name == DB_FILENAME or name.startswith("receipts/"):
-                    _extract_member(archive, name, work)
+                    _extract_member(archive, info, name, work)
         _validate_database(work / DB_FILENAME)
         if staging.exists():
             shutil.rmtree(staging)
@@ -358,9 +374,15 @@ def _stage_restore(zip_path: Path) -> Path:
     return staging
 
 
-def _validated_names(archive: zipfile.ZipFile) -> list[str]:
-    """Normalise member names and reject any that could escape the staging folder."""
-    names: list[str] = []
+def _validated_members(
+    archive: zipfile.ZipFile,
+) -> list[tuple[str, zipfile.ZipInfo]]:
+    """Normalise member names and reject any that could escape the staging folder.
+
+    The original :class:`zipfile.ZipInfo` is kept so extraction can open the member by
+    its real name even when the name uses backslashes on a POSIX platform.
+    """
+    members: list[tuple[str, zipfile.ZipInfo]] = []
     for info in archive.infolist():
         raw = info.filename
         name = raw.replace("\\", "/")
@@ -370,11 +392,16 @@ def _validated_names(archive: zipfile.ZipFile) -> list[str]:
             raise BackupError(f"The backup contains an unsafe path: {raw}")
         if any(part == ".." for part in name.split("/")):
             raise BackupError(f"The backup contains an unsafe path: {raw}")
-        names.append(name)
-    return names
+        members.append((name, info))
+    return members
 
 
-def _extract_member(archive: zipfile.ZipFile, name: str, destination: Path) -> None:
+def _extract_member(
+    archive: zipfile.ZipFile,
+    info: zipfile.ZipInfo,
+    name: str,
+    destination: Path,
+) -> None:
     if name.endswith("/"):
         return
     target = destination / name
@@ -383,7 +410,7 @@ def _extract_member(archive: zipfile.ZipFile, name: str, destination: Path) -> N
         raise BackupError(f"The backup contains an unsafe path: {name}")
     target.parent.mkdir(parents=True, exist_ok=True)
     try:
-        with archive.open(name) as source, target.open("wb") as sink:
+        with archive.open(info) as source, target.open("wb") as sink:
             shutil.copyfileobj(source, sink)
     except (OSError, KeyError, zipfile.BadZipFile) as exc:
         raise BackupError(f"The backup member {name} could not be read: {exc}") from exc
@@ -488,21 +515,41 @@ def _apply_pending_restore() -> str | None:
         write_status("restore", False, message)
         return message
 
-    staging = _staging_from_marker(marker)
-    if staging is None:
-        _clear_marker()
-        message = "The staged restore is missing; current data was kept."
-        write_status("restore", False, message)
-        return message
-
     data = data_dir()
     live_database = Path(str(db_path()))
     live_receipts = data / "receipts"
     step = str(marker.get("step") or "moving-current")
+
+    staging = _staging_from_marker(marker)
+    if staging is None:
+        if state == "applying" and not live_database.exists():
+            # The current files were already moved into the replaced folder before the
+            # staging folder disappeared. Put them back before clearing the marker.
+            try:
+                _rollback(
+                    _recorded_replaced(marker) or _replaced_from_marker(marker),
+                    live_database,
+                    live_receipts,
+                )
+            except Exception:  # noqa: BLE001 - rollback is best effort
+                pass
+            message = "The staged restore is missing; the previous data was restored."
+        else:
+            message = "The staged restore is missing; current data was kept."
+        _clear_marker()
+        write_status("restore", False, message)
+        return message
+
     if state == "applying":
-        replaced = _replaced_from_marker(marker)
-        if step == "moving-current" and not marker.get("replaced"):
-            replaced = None
+        replaced = _recorded_replaced(marker)
+        if replaced is None:
+            if step == "moving-current":
+                # Never adopt an older replaced folder for an interrupted move.
+                replaced = _new_replaced_dir()
+                marker["replaced"] = str(replaced)
+                _write_marker(marker)
+            else:
+                replaced = _replaced_from_marker(marker)
     else:
         replaced = None
 
@@ -525,6 +572,10 @@ def _apply_pending_restore() -> str | None:
         if replaced is None:
             replaced = _new_replaced_dir()
             marker["replaced"] = str(replaced)
+            try:
+                _write_marker(marker)
+            except OSError:
+                pass
 
         if step == "moving-current":
             _move_current(replaced, live_database, live_receipts)
@@ -560,6 +611,7 @@ def _apply_pending_restore() -> str | None:
             _write_marker(marker)
         except Exception:  # noqa: BLE001 - a marker write must not mask the failure
             pass
+        _rmtree(staging)
         write_status("restore", False, message)
         return message
 
@@ -579,15 +631,24 @@ def _staging_from_marker(marker: dict) -> Path | None:
     return staging
 
 
-def _replaced_from_marker(marker: dict) -> Path | None:
+def _recorded_replaced(marker: dict) -> Path | None:
+    """Return the recorded replaced folder only when it still exists."""
     raw = marker.get("replaced")
-    if raw:
-        try:
-            candidate = Path(str(raw))
-            if candidate.is_dir() and candidate.resolve().is_relative_to(backups_dir().resolve()):
-                return candidate
-        except (OSError, ValueError):
-            pass
+    if not raw:
+        return None
+    try:
+        candidate = Path(str(raw))
+        if candidate.is_dir() and candidate.resolve().is_relative_to(backups_dir().resolve()):
+            return candidate
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def _replaced_from_marker(marker: dict) -> Path | None:
+    recorded = _recorded_replaced(marker)
+    if recorded is not None:
+        return recorded
     candidates = sorted(
         (path for path in backups_dir().glob("replaced-*") if path.is_dir()),
         key=_mtime,
@@ -633,22 +694,23 @@ def _install_receipts(staged: Path, live: Path) -> None:
 
 
 def _rollback(replaced: Path | None, live_database: Path, live_receipts: Path) -> None:
+    """Put saved files back without ever deleting a live file that has no saved copy."""
     if replaced is None or not replaced.is_dir():
         return
     for suffix in ("", "-wal", "-shm"):
-        _unlink(Path(str(live_database) + suffix))
-    for suffix in ("", "-wal", "-shm"):
         source = replaced / (live_database.name + suffix)
-        if source.exists():
-            try:
-                os.replace(source, Path(str(live_database) + suffix))
-            except OSError:
-                pass
+        if not source.exists():
+            # Nothing was moved out, so the live file is the only copy: leave it alone.
+            continue
+        target = Path(str(live_database) + suffix)
+        try:
+            os.replace(source, target)  # atomically overwrites the live copy
+        except OSError:
+            pass
     old_receipts = replaced / "receipts"
     if old_receipts.exists():
-        _rmtree(live_receipts)
         try:
-            shutil.move(str(old_receipts), str(live_receipts))
+            _merge_move(old_receipts, live_receipts)
         except OSError:
             pass
 

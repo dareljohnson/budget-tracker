@@ -226,6 +226,36 @@ class TestCreateBackup(BackupTestCase):
         for path in manuals + pre_restores:
             self.assertTrue(path.exists(), path.name)
 
+    def test_unreadable_copied_database_fails_backup(self):
+        from budget_tracker import backups
+
+        self.make_live_db()
+        folder = backups.backups_dir()
+
+        def write_garbage(target):
+            Path(target).write_bytes(b"this is not a database")
+
+        with mock.patch.object(backups, "_copy_database", side_effect=write_garbage):
+            with self.assertRaises(backups.BackupError):
+                backups.create_backup(kind="manual", reason="broken copy")
+
+        self.assertEqual(list(folder.glob("*.zip")), [])
+        self.assertEqual(list(folder.rglob("*.tmp")), [])
+        self.assertFalse(backups.read_status()["ok"])
+
+    def test_due_is_rechecked_inside_the_create_path(self):
+        from budget_tracker import backups
+
+        self.make_live_db()
+        folder = backups.backups_dir()
+
+        # The outer check passes, but the re-check under the lock says another caller
+        # has just taken the automatic snapshot.
+        with mock.patch.object(backups, "_auto_due", side_effect=[True, False]):
+            self.assertIsNone(backups.create_backup_if_due())
+
+        self.assertEqual(list(folder.glob("auto-*.zip")), [])
+
     def test_failed_copy_leaves_no_partial_and_records_status(self):
         from budget_tracker import backups
 
@@ -337,7 +367,9 @@ class TestStageRestore(BackupTestCase):
     def test_extracts_safely_and_writes_marker(self):
         from budget_tracker import backups
 
-        archive = self.valid_restore_zip(extra={"notes.txt": b"ignored"})
+        archive = self.valid_restore_zip(
+            extra={"notes.txt": b"ignored", "receipts\\backslash.png": b"backslash"}
+        )
 
         staging = backups.stage_restore(archive)
 
@@ -345,6 +377,7 @@ class TestStageRestore(BackupTestCase):
         self.assertTrue((staging / "manifest.json").is_file())
         self.assertTrue((staging / "budget_tracker.db").is_file())
         self.assertTrue((staging / "receipts" / "new.png").is_file())
+        self.assertTrue((staging / "receipts" / "backslash.png").is_file())
         self.assertFalse((staging / "notes.txt").exists())
 
         marker = backups.pending_restore()
@@ -465,6 +498,154 @@ class TestApplyPendingRestore(BackupTestCase):
         finally:
             conn.close()
         self.assertEqual([row[0] for row in rows], ["current row"])
+
+    def test_move_failure_never_deletes_the_live_database(self):
+        from budget_tracker import backups
+
+        self.make_live_db("current row")
+        self.make_receipt("old.png")
+        backups.stage_restore(self.valid_restore_zip("restored row"))
+        real_replace = os.replace
+
+        def fail_first_move(source, target, *args, **kwargs):
+            if Path(target).name == "budget_tracker.db" and "replaced-" in str(target):
+                raise OSError("file is locked")
+            return real_replace(source, target, *args, **kwargs)
+
+        with mock.patch.object(backups.os, "replace", side_effect=fail_first_move):
+            message = backups.apply_pending_restore()
+
+        self.assertIn("locked", message)
+        marker = backups.pending_restore()
+        self.assertEqual(marker["state"], "failed")
+        self.assertFalse((self.data / "restore-staging").exists())
+
+        conn = sqlite3.connect(db_path())
+        try:
+            rows = conn.execute("SELECT description FROM transactions").fetchall()
+        finally:
+            conn.close()
+        self.assertEqual([row[0] for row in rows], ["current row"])
+        self.assertTrue((self.data / "receipts" / "old.png").is_file())
+
+    def test_moving_current_without_recorded_folder_uses_a_fresh_folder(self):
+        from budget_tracker import backups
+
+        folder = backups.backups_dir()
+        older = folder / "replaced-20200101-000000"
+        older.mkdir()
+        (older / "budget_tracker.db").write_bytes(b"older copy")
+
+        self.make_live_db("current row")
+        staging = self.data / "restore-staging"
+        (staging / "receipts").mkdir(parents=True)
+        (staging / "budget_tracker.db").write_bytes(self.make_db_bytes("restored row"))
+        (staging / "manifest.json").write_bytes(self.manifest_bytes())
+        (self.data / "restore-pending.json").write_text(
+            json.dumps(
+                {
+                    "state": "applying",
+                    "step": "moving-current",
+                    "staging": str(staging),
+                    "created_at": "2026-01-02T03:04:05",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        message = backups.apply_pending_restore()
+
+        self.assertIn("restored", message.lower())
+        replaced_dirs = [path for path in folder.glob("replaced-*") if path.is_dir()]
+        self.assertEqual(len(replaced_dirs), 2)
+        self.assertIn(older, replaced_dirs)
+        self.assertEqual((older / "budget_tracker.db").read_bytes(), b"older copy")
+        fresh = next(path for path in replaced_dirs if path != older)
+        self.assertTrue((fresh / "budget_tracker.db").is_file())
+        conn = sqlite3.connect(db_path())
+        try:
+            rows = conn.execute("SELECT description FROM transactions").fetchall()
+        finally:
+            conn.close()
+        self.assertEqual([row[0] for row in rows], ["restored row"])
+
+    def test_missing_staging_while_applying_restores_moved_database(self):
+        from budget_tracker import backups
+
+        self.make_live_db("current row")
+        replaced = backups.backups_dir() / "replaced-20260101-000000"
+        replaced.mkdir()
+        os.replace(db_path(), replaced / "budget_tracker.db")
+        (self.data / "restore-pending.json").write_text(
+            json.dumps(
+                {
+                    "state": "applying",
+                    "step": "moved-current",
+                    "staging": str(self.data / "gone"),
+                    "replaced": str(replaced),
+                    "created_at": "2026-01-02T03:04:05",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        message = backups.apply_pending_restore()
+
+        self.assertIn("restored", message.lower())
+        self.assertIsNone(backups.pending_restore())
+        self.assertTrue(db_path().is_file())
+        conn = sqlite3.connect(db_path())
+        try:
+            rows = conn.execute("SELECT description FROM transactions").fetchall()
+        finally:
+            conn.close()
+        self.assertEqual([row[0] for row in rows], ["current row"])
+
+    def test_install_database_failure_rolls_back(self):
+        from budget_tracker import backups
+
+        self.make_live_db("current row")
+        self.make_receipt("old.png")
+        backups.stage_restore(self.valid_restore_zip("restored row"))
+
+        with mock.patch.object(
+            backups, "_install_database", side_effect=OSError("database install failed")
+        ):
+            message = backups.apply_pending_restore()
+
+        self.assertIn("database install failed", message)
+        self.assertEqual(backups.pending_restore()["state"], "failed")
+        self.assertFalse((self.data / "restore-staging").exists())
+        conn = sqlite3.connect(db_path())
+        try:
+            rows = conn.execute("SELECT description FROM transactions").fetchall()
+        finally:
+            conn.close()
+        self.assertEqual([row[0] for row in rows], ["current row"])
+        self.assertTrue((self.data / "receipts" / "old.png").is_file())
+
+    def test_install_receipts_failure_rolls_back(self):
+        from budget_tracker import backups
+
+        self.make_live_db("current row")
+        self.make_receipt("old.png")
+        backups.stage_restore(self.valid_restore_zip("restored row"))
+
+        with mock.patch.object(
+            backups, "_install_receipts", side_effect=OSError("receipt install failed")
+        ):
+            message = backups.apply_pending_restore()
+
+        self.assertIn("receipt install failed", message)
+        self.assertEqual(backups.pending_restore()["state"], "failed")
+        conn = sqlite3.connect(db_path())
+        try:
+            rows = conn.execute("SELECT description FROM transactions").fetchall()
+        finally:
+            conn.close()
+        self.assertEqual([row[0] for row in rows], ["current row"])
+        self.assertTrue((self.data / "receipts" / "old.png").is_file())
+        self.assertFalse((self.data / "receipts" / "new.png").exists())
 
     def test_failed_marker_clears_and_keeps_current_data(self):
         from budget_tracker import backups

@@ -16,7 +16,7 @@ from ...repository import RepositoryError
 from ..components import card, confirm_dialog, date_field, empty_state, page_header, transaction_row
 from ..context import AppContext
 from ..theme import EXPENSE_COLOR, GAP, INCOME_COLOR, fs
-from .receipts import ReceiptImportDialog
+from .receipts import ReceiptAttachmentDialog, ReceiptImportDialog
 from .statement_import import StatementImportDialog, open_imported_statements
 
 ALL = "all"
@@ -361,6 +361,37 @@ class TransactionEditor:
         self.category = ft.Dropdown(label="Category", expand=True)
         self.date = date_field(ctx.page, "Date", tx.occurred_on if tx else date.today())
         self.description = ft.TextField(label="Description (optional)", value=tx.description if tx else "", max_length=120, on_submit=self._save)
+        attached = bool(tx and tx.receipt_path)
+        self.receipt_status = ft.Text(
+            "Receipt attached" if attached else "No receipt attached",
+            size=fs(13),
+            color=ft.Colors.ON_SURFACE_VARIANT,
+        )
+        self.attach_receipt_button = ft.OutlinedButton(
+            content="Replace receipt" if attached else "Attach receipt",
+            icon=ft.Icons.ATTACH_FILE,
+            on_click=self._attach_receipt,
+        )
+        self.remove_receipt_button = ft.OutlinedButton(
+            content="Remove receipt",
+            icon=ft.Icons.DELETE_OUTLINE,
+            tooltip="Removes the link and the stored copy",
+            visible=attached,
+            on_click=self._remove_receipt,
+        )
+        self.receipt_section = ft.Column(
+            [
+                ft.Row(
+                    [self.receipt_status, self.attach_receipt_button, self.remove_receipt_button],
+                    spacing=8,
+                    wrap=True,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                )
+            ],
+            visible=bool(tx and tx.id),
+            spacing=4,
+        )
+        self._attach_dialog_open = False
         self.account_row = ft.Row(spacing=12)
         if self.is_adjustment:
             self._setup_adjustment()
@@ -382,6 +413,7 @@ class TransactionEditor:
                         self.category,
                         self.date,
                         self.description,
+                        self.receipt_section,
                     ],
                     spacing=14,
                     tight=True,
@@ -438,6 +470,52 @@ class TransactionEditor:
         self.type = TransactionType(e.control.selected[0])
         self._load_categories()
         self._apply_type()
+
+    # ---------- receipt ----------
+    def _attach_receipt(self, _: ft.Event | None = None) -> None:
+        """Open the attachment dialog once; a second click while it is open is ignored."""
+        if self.tx is None or self.tx.id is None or self._attach_dialog_open:
+            return
+        self._attach_dialog_open = True
+        ReceiptAttachmentDialog(
+            self.ctx,
+            self.tx,
+            on_changed=self._receipt_changed,
+            on_close=self._attach_closed,
+        ).open()
+
+    def _attach_closed(self) -> None:
+        self._attach_dialog_open = False
+
+    def _receipt_changed(self, stored: str | None) -> None:
+        if self.tx is not None:
+            self.tx.receipt_path = stored
+        attached = bool(stored)
+        self.receipt_status.value = "Receipt attached" if attached else "No receipt attached"
+        self.attach_receipt_button.content = "Replace receipt" if attached else "Attach receipt"
+        self.remove_receipt_button.visible = attached
+        if self._is_mounted():
+            self.dialog.update()
+
+    def _remove_receipt(self, _: ft.Event | None = None) -> None:
+        if self.tx is None or self.tx.id is None:
+            return
+        try:
+            self.ctx.service.remove_receipt(self.tx.id)
+        except (RepositoryError, OSError) as exc:
+            self.ctx.notify(str(exc), error=True)
+            return
+        self.ctx.notify("Receipt removed")
+        self._receipt_changed(None)
+        self.ctx.data_changed()
+
+    def _is_mounted(self) -> bool:
+        control: ft.Control | None = self.dialog
+        while control is not None:
+            if isinstance(control, ft.Page):
+                return True
+            control = control.parent
+        return False
 
     def _save(self, _: ft.Event) -> None:
         valid = True

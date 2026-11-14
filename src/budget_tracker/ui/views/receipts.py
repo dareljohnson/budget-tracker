@@ -13,7 +13,7 @@ from pathlib import Path
 import flet as ft
 
 from ...formatting import parse_date, parse_money
-from ...models import TransactionType
+from ...models import Transaction, TransactionType
 from ...receipts import (
     ReceiptDraft,
     ReceiptError,
@@ -23,6 +23,7 @@ from ...receipts import (
     read_receipt,
 )
 from ...receipts.scanner import scan_receipt
+from ...receipts.storage import resolve_receipt
 from ...repository import RepositoryError
 from ..components import date_field
 from ..context import AppContext
@@ -35,6 +36,10 @@ _MAX_PREVIEW_BYTES = 8 * 1024 * 1024
 _EMPTY_PREVIEW = "Scan or choose a receipt to see its preview"
 _UNREADABLE_NOTE = "That file could not be read. Choose another file."
 _MISSING_CATEGORY_NOTE = "Create an expense category first."
+_ATTACHED_STATUS = "A receipt is attached."
+_NO_RECEIPT_STATUS = "No receipt attached."
+_NO_PREVIEW = "No receipt attached"
+_BROKEN_PREVIEW = "The saved receipt file could not be found."
 
 
 def _file_row(icon: ft.IconData, path: Path) -> ft.Row:
@@ -415,3 +420,243 @@ class ReceiptImportDialog:
         self._close()
         self.ctx.notify("Receipt saved as a transaction")
         self.ctx.data_changed()
+
+
+class ReceiptAttachmentDialog:
+    """Attach, replace, or remove the receipt of an already-saved transaction.
+
+    Attaching and removing happen immediately; closing the dialog changes nothing else.
+    """
+
+    def __init__(
+        self,
+        ctx: AppContext,
+        tx: Transaction,
+        *,
+        on_changed: Callable[[str | None], None] | None = None,
+        on_close: Callable[[], None] | None = None,
+    ) -> None:
+        self.ctx = ctx
+        self.tx = tx
+        self.on_changed = on_changed
+        self.on_close = on_close
+        self._closed_notified = False
+        self._busy = False
+        self._temp_dir: Path | None = None
+        self._file_picker = ft.FilePicker()
+
+        self.status = ft.Text(
+            _ATTACHED_STATUS if tx.receipt_path else _NO_RECEIPT_STATUS,
+            size=fs(13),
+            color=ft.Colors.ON_SURFACE_VARIANT,
+        )
+        self.progress = ft.ProgressRing(visible=False, width=fs(18), height=fs(18), stroke_width=2)
+        self.choose_button = ft.OutlinedButton(
+            content="Choose file",
+            icon=ft.Icons.FOLDER_OPEN,
+            on_click=self._choose_file,
+        )
+        self.scan_button = ft.FilledTonalButton(
+            content="Scan with scanner",
+            icon=ft.Icons.DOCUMENT_SCANNER,
+            on_click=self._scan,
+        )
+        self.remove_button = ft.OutlinedButton(
+            content="Remove receipt",
+            icon=ft.Icons.DELETE_OUTLINE,
+            tooltip="Removes the link and the stored copy",
+            visible=bool(tx.receipt_path),
+            on_click=self._remove,
+        )
+        self.preview_holder = ft.Container(
+            height=220,
+            border=ft.Border.all(1, ft.Colors.OUTLINE_VARIANT),
+            border_radius=10,
+            alignment=ft.Alignment.CENTER,
+        )
+        self._refresh_preview()
+
+        self.dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Receipt"),
+            content=ft.Container(
+                width=560,
+                height=420,
+                content=ft.Column(
+                    [
+                        ft.Row(
+                            [self.choose_button, self.scan_button, self.progress],
+                            spacing=12,
+                            wrap=True,
+                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                        ),
+                        self.preview_holder,
+                        self.status,
+                        ft.Row([self.remove_button], spacing=8, wrap=True),
+                    ],
+                    spacing=GAP,
+                    scroll=ft.ScrollMode.AUTO,
+                ),
+            ),
+            actions=[ft.TextButton(content="Close", on_click=lambda _: self._close())],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+
+    # ---------- opening and closing ----------
+    def open(self) -> None:
+        self.ctx.page.show_dialog(self.dialog)
+
+    def _close(self) -> None:
+        """Close this dialog even when a SnackBar is stacked on top of it."""
+        while self.dialog.open:
+            if self.ctx.page.pop_dialog() is None:
+                break
+        self._finish()
+
+    def _finish(self) -> None:
+        """Release the opener and any scanner temporary files exactly once."""
+        if self._closed_notified:
+            return
+        self._closed_notified = True
+        self._cleanup_temp()
+        if self.on_close is not None:
+            self.on_close()
+
+    def _cleanup_temp(self) -> None:
+        """Remove the scanner's temporary folder; the user's own source file is never touched."""
+        if self._temp_dir is not None:
+            shutil.rmtree(self._temp_dir, ignore_errors=True)
+            self._temp_dir = None
+
+    # ---------- sources ----------
+    async def _choose_file(self, _: ft.Event | None = None) -> None:
+        if self._busy:
+            return
+        self._set_busy(True)
+        try:
+            files = await self._file_picker.pick_files(
+                dialog_title="Choose a receipt",
+                file_type=ft.FilePickerFileType.CUSTOM,
+                allowed_extensions=["pdf", "png", "jpg", "jpeg"],
+            )
+        except Exception as exc:  # noqa: BLE001 - native picker can be unavailable
+            self.ctx.notify(f"Could not open the file picker: {exc}", error=True)
+            return
+        finally:
+            self._set_busy(False)
+        chosen = next((f for f in files or [] if f.path), None)
+        if chosen is None:
+            return
+        self._attach(Path(chosen.path))
+
+    async def _scan(self, _: ft.Event | None = None) -> None:
+        if self._busy:
+            return
+        self._cleanup_temp()
+        self._set_busy(True)
+        try:
+            self._temp_dir = Path(tempfile.mkdtemp(prefix="budget-tracker-scan-"))
+            destination = self._temp_dir / "scan.png"
+            await asyncio.to_thread(scan_receipt, destination)
+        except ReceiptScanError as exc:
+            self._cleanup_temp()
+            self.ctx.notify(str(exc), error=True)
+            return
+        except OSError as exc:
+            self._cleanup_temp()
+            self.ctx.notify(f"Could not scan a receipt: {exc}", error=True)
+            return
+        finally:
+            self._set_busy(False)
+        try:
+            # The service copies the scan synchronously, so the temp folder can go now.
+            self._attach(destination)
+        finally:
+            self._cleanup_temp()
+
+    # ---------- attach and remove ----------
+    def _attach(self, path: Path) -> None:
+        if self._busy or self.tx.id is None:
+            return
+        self._set_busy(True)
+        try:
+            stored = self.ctx.service.attach_receipt(self.tx.id, Path(path))
+        except (RepositoryError, ReceiptError, OSError) as exc:
+            self.ctx.notify(str(exc), error=True)
+            return
+        finally:
+            self._set_busy(False)
+        self.tx.receipt_path = stored
+        self._refresh()
+        self.ctx.data_changed()
+        if self.on_changed is not None:
+            self.on_changed(stored)
+        self.ctx.notify("Receipt attached")
+
+    def _remove(self, _: ft.Event | None = None) -> None:
+        if self._busy or self.tx.id is None:
+            return
+        self._set_busy(True)
+        try:
+            self.ctx.service.remove_receipt(self.tx.id)
+        except (RepositoryError, ReceiptError, OSError) as exc:
+            self.ctx.notify(str(exc), error=True)
+            return
+        finally:
+            self._set_busy(False)
+        self.tx.receipt_path = None
+        self._refresh()
+        self.ctx.data_changed()
+        if self.on_changed is not None:
+            self.on_changed(None)
+        self.ctx.notify("Receipt removed")
+        self._close()
+
+    # ---------- presentation ----------
+    def _refresh_preview(self) -> None:
+        self.preview_holder.alignment = ft.Alignment.CENTER
+        if not self.tx.receipt_path:
+            self.preview_holder.content = ft.Text(
+                _NO_PREVIEW,
+                size=fs(13),
+                color=ft.Colors.ON_SURFACE_VARIANT,
+            )
+            return
+        try:
+            path = resolve_receipt(self.tx.receipt_path)
+        except ReceiptReadError:
+            self.preview_holder.content = ft.Text(
+                _BROKEN_PREVIEW,
+                size=fs(13),
+                color=EXPENSE_COLOR,
+            )
+            return
+        self.preview_holder.content = preview_for(path)
+
+    def _refresh(self) -> None:
+        attached = bool(self.tx.receipt_path)
+        self.status.value = _ATTACHED_STATUS if attached else _NO_RECEIPT_STATUS
+        self.remove_button.visible = attached
+        self._refresh_preview()
+        self._refresh_ui()
+
+    def _set_busy(self, busy: bool) -> None:
+        self._busy = busy
+        self.progress.visible = busy
+        self.choose_button.disabled = busy
+        self.scan_button.disabled = busy
+        self.remove_button.disabled = busy
+        self._refresh_ui()
+
+    def _is_mounted(self) -> bool:
+        control: ft.Control | None = self.dialog
+        while control is not None:
+            if isinstance(control, ft.Page):
+                return True
+            control = control.parent
+        return False
+
+    def _refresh_ui(self) -> None:
+        """Refresh the dialog when it is mounted; direct tests build it without a page."""
+        if self._is_mounted():
+            self.dialog.update()

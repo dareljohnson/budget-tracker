@@ -507,6 +507,98 @@ class TestReceiptImportDialog(ReceiptDialogTestCase):
         self.assertEqual(preview.controls[1].value, "large.png")
 
 
+class TestTransactionEditorReceipts(ReceiptDialogTestCase):
+    def _editor(self, tx):
+        from budget_tracker.ui.views.transactions import TransactionEditor
+
+        return TransactionEditor(self.ctx, tx)
+
+    def _saved_transaction(self, receipt_path: str | None = None) -> Transaction:
+        return self.repo.add_transaction(Transaction(
+            500, TransactionType.EXPENSE, self.groceries.id, date(2026, 11, 14), "Shop",
+            account_id=self.checking.id, receipt_path=receipt_path,
+        ))
+
+    def test_editor_shows_receipt_actions_only_for_saved_transactions(self):
+        new_editor = self._editor(None)
+        self.assertFalse(new_editor.receipt_section.visible)
+
+        stored = storage.store_receipt(self.png)
+        saved = self._saved_transaction(receipt_path=stored)
+        editor = self._editor(saved)
+        self.assertTrue(editor.receipt_section.visible)
+        self.assertEqual(editor.receipt_status.value, "Receipt attached")
+        self.assertTrue(editor.remove_receipt_button.visible)
+
+        plain = self._saved_transaction()
+        plain_editor = self._editor(plain)
+        self.assertFalse(plain_editor.remove_receipt_button.visible)
+        self.assertEqual(plain_editor.receipt_status.value, "No receipt attached")
+
+    def test_editing_a_receipt_transaction_preserves_the_link(self):
+        stored = storage.store_receipt(self.png)
+        saved = self._saved_transaction(receipt_path=stored)
+        editor = self._editor(saved)
+        editor.description.value = "Changed description"
+
+        editor._save(None)
+
+        updated = self.repo.get_transaction(saved.id)
+        self.assertEqual(updated.description, "Changed description")
+        self.assertEqual(updated.receipt_path, stored)
+
+
+class TestReceiptAttachmentDialog(ReceiptDialogTestCase):
+    def _saved_transaction(self) -> Transaction:
+        return self.repo.add_transaction(Transaction(
+            500, TransactionType.EXPENSE, self.groceries.id, date(2026, 11, 14), "Shop",
+            account_id=self.checking.id,
+        ))
+
+    def test_attachment_dialog_attaches_and_removes(self):
+        from budget_tracker.ui.views.receipts import ReceiptAttachmentDialog
+
+        saved = self._saved_transaction()
+        seen: list[str | None] = []
+        dialog = ReceiptAttachmentDialog(self.ctx, saved, on_changed=seen.append)
+
+        dialog._attach(self.png)
+
+        stored = self.repo.get_transaction(saved.id).receipt_path
+        self.assertTrue(stored.startswith("receipts/"))
+        self.assertEqual(seen, [stored])
+        self.assertEqual(dialog.status.value, "A receipt is attached.")
+        self.assertTrue(dialog.remove_button.visible)
+        stored_file = self.tmp / stored
+        self.assertTrue(stored_file.exists())
+        self.assertTrue(self.png.exists())
+
+        dialog._remove()
+
+        self.assertIsNone(self.repo.get_transaction(saved.id).receipt_path)
+        self.assertFalse(stored_file.exists())
+        self.assertEqual(seen[-1], None)
+        self.assertEqual(dialog.status.value, "No receipt attached.")
+        self.assertFalse(dialog.remove_button.visible)
+
+    def test_attachment_failure_keeps_the_dialog_and_link_usable(self):
+        from budget_tracker.ui.views.receipts import ReceiptAttachmentDialog
+
+        stored = storage.store_receipt(self.png)
+        saved = self._saved_transaction()
+        self.repo.set_transaction_receipt(saved.id, stored)
+        saved.receipt_path = stored
+        dialog = ReceiptAttachmentDialog(self.ctx, saved)
+        with mock.patch.object(
+            self.ctx.service, "attach_receipt", side_effect=RepositoryError("disk problem")
+        ):
+            dialog._attach(self.png)
+
+        self.assertEqual(saved.receipt_path, stored)
+        self.assertTrue(dialog.remove_button.visible)
+        self.assertIn("disk problem", self.page.errors[0])
+
+
 class TestReceiptHeaderButton(ReceiptDialogTestCase):
     def test_header_has_a_scan_receipt_button(self):
         from budget_tracker.ui.views.transactions import TransactionsView

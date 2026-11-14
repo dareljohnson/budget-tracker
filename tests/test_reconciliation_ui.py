@@ -877,6 +877,39 @@ class TestStatementMatchColumn(StatementMatchTestCase):
         other.row.include = False
         self.assertEqual(dialog._included_effect(self.checking.id), 0)
 
+    def test_import_anyway_re_adds_the_transaction_to_the_other_rows_candidates(self):
+        existing = self._add_expense(
+            description="FEL LINIS PIZZA", amount_cents=3_485, occurred_on=date(2026, 9, 19)
+        )
+        dialog = self._dialog([self._row(), self._row()])
+        first, second = dialog._row_widgets
+        dialog._apply_match(first, existing)
+        self.assertNotIn(existing.id, [tx.id for tx in second.row.match_candidates])
+
+        dialog._clear_match(first)
+
+        self.assertIn(existing.id, [tx.id for tx in second.row.match_candidates])
+        self.assertIn("Possible match", _texts(second.match_action))
+
+    def test_a_released_duplicate_row_stays_unchecked_and_select_all_follows(self):
+        existing = self._add_expense(
+            description="FEL LINIS PIZZA", amount_cents=3_485, occurred_on=date(2026, 9, 19)
+        )
+        duplicate = self._row()
+        duplicate.duplicate = True
+        dialog = self._dialog([duplicate, self._row()])
+        first, second = dialog._row_widgets
+        dialog._apply_match(first, existing)
+
+        # A stale second selection releases the duplicate; it must not become included.
+        dialog._apply_match(second, existing)
+
+        self.assertIsNone(first.row.matched)
+        self.assertFalse(first.row.include)
+        self.assertFalse(first.include.value)
+        self.assertFalse(first.include.disabled)
+        self.assertFalse(dialog.select_all.value)
+
     def test_commit_passes_only_inserted_rows_and_reports_matched_separately(self):
         existing = self._add_expense(
             description="FEL LINIS PIZZA", amount_cents=3_485, occurred_on=date(2026, 9, 19)
@@ -887,6 +920,9 @@ class TestStatementMatchColumn(StatementMatchTestCase):
         ])
         matched, inserted = dialog._row_widgets
         dialog._apply_match(matched, existing)
+        # Force the matched row on to prove commit still filters it out.
+        matched.row.include = True
+        matched.include.value = True
 
         with mock.patch.object(
             self.ctx.service, "commit_import", return_value=dialog.preview.statement

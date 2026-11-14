@@ -793,10 +793,15 @@ class StatementImportDialog:
             matched.type is not chosen
             or matched.id not in {tx.id for tx in widgets.row.match_candidates}
         ):
-            # The retyped row can no longer be this transaction; return to a normal row.
+            # The retyped row can no longer be this transaction; return to a normal row and
+            # let every other row consider the released transaction again.
             widgets.row.matched = None
             widgets.row.include = True
-        self._sync_match(widgets)
+            self._recompute_all_candidates()
+            self._refresh_match_widgets()
+        else:
+            self._sync_match(widgets)
+        self.select_all.value = self._all_editable_included()
         self._refresh_counts()
         self._refresh_projection()
         self.ctx.page.update()
@@ -855,6 +860,15 @@ class StatementImportDialog:
             if candidate.transaction.id not in used
         ]
 
+    def _recompute_all_candidates(self) -> None:
+        """Keep every row's candidates consistent after a match is taken or released."""
+        for widgets in self._row_widgets:
+            self._recompute_candidates(widgets)
+
+    def _refresh_match_widgets(self) -> None:
+        for widgets in self._row_widgets:
+            self._sync_match(widgets)
+
     def _open_match(self, widgets: _RowWidgets) -> None:
         if widgets.row.match_candidates:
             _MatchDialog(self, widgets).open()
@@ -873,17 +887,17 @@ class StatementImportDialog:
                 tx for tx in other.row.match_candidates if tx.id != transaction.id
             ]
             if other.row.matched is not None and other.row.matched.id == transaction.id:
-                # The chosen transaction belongs to this row now; the other row is importable.
+                # The chosen transaction belongs to this row now; the other row is importable
+                # again unless it was a duplicate that was never meant to be included.
                 other.row.matched = None
-                other.row.include = True
-            self._sync_match(other)
+                other.row.include = not other.row.duplicate
 
         widgets.row.matched = transaction
         widgets.row.include = False
-        widgets.include.value = False
-        widgets.include.disabled = True
-        self._sync_match(widgets)
+        self._recompute_all_candidates()
+        self._refresh_match_widgets()
         self._edited = True
+        self.select_all.value = self._all_editable_included()
         self._refresh_counts()
         self._refresh_projection()
         self.ctx.page.update()
@@ -895,8 +909,10 @@ class StatementImportDialog:
             return
         widgets.row.matched = None
         widgets.row.include = True
-        self._sync_match(widgets)
+        self._recompute_all_candidates()
+        self._refresh_match_widgets()
         self._edited = True
+        self.select_all.value = self._all_editable_included()
         self._refresh_counts()
         self._refresh_projection()
         self.ctx.page.update()

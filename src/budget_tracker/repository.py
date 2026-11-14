@@ -196,9 +196,10 @@ class Repository:
         debt = self.conn.execute(
             "SELECT name FROM debts WHERE account_id = ?", (account.id,)
         ).fetchone()
-        if debt is not None and account.kind is not AccountKind.CREDIT_CARD:
+        existing = self.get_account(account.id)
+        if debt is not None and existing is not None and account.kind is not existing.kind:
             raise RepositoryError(
-                f"Account is linked to the debt '{debt['name']}'; keep it a credit-card account"
+                f"Account is linked to the debt '{debt['name']}'; unlink it before changing its type"
             )
         try:
             with self.conn:
@@ -910,13 +911,13 @@ class Repository:
         if debt.original_balance_cents is not None and debt.original_balance_cents < 0:
             raise RepositoryError("Original balance cannot be negative")
         if debt.account_id is not None:
-            if debt.kind is not DebtKind.CREDIT_CARD:
-                raise RepositoryError("A linked debt must be a credit card")
             account = self.get_account(debt.account_id)
-            if account is None:
-                raise RepositoryError("Select a credit-card account")
-            if account.kind is not AccountKind.CREDIT_CARD:
-                raise RepositoryError("Link a debt only to a credit-card account")
+            if account is None or not account.kind.is_liability:
+                raise RepositoryError("Link a debt only to a credit-card or loan account")
+            if account.kind is AccountKind.CREDIT_CARD and debt.kind is not DebtKind.CREDIT_CARD:
+                raise RepositoryError("A linked card debt must be a credit card")
+            if account.kind is AccountKind.LOAN and debt.kind is DebtKind.CREDIT_CARD:
+                raise RepositoryError("Choose a loan kind for a loan account")
             linked = self.conn.execute(
                 "SELECT id FROM debts WHERE account_id = ? AND id IS NOT ?",
                 (debt.account_id, debt.id),

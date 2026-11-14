@@ -3,8 +3,8 @@ import unittest
 from datetime import date
 
 from budget_tracker.db import MIGRATIONS, _seed, connect, migrate, schema_version
-from budget_tracker.models import Account, AccountKind, Transaction, TransactionType
-from budget_tracker.repository import Repository
+from budget_tracker.models import Account, AccountKind, DebtKind, Transaction, TransactionType
+from budget_tracker.repository import Repository, RepositoryError
 
 
 class TestLoanAccountKind(unittest.TestCase):
@@ -159,3 +159,49 @@ class TestLoanBalances(unittest.TestCase):
         self.repo.add_account(Account("Mortgage", AccountKind.LOAN, opening_balance_cents=-100_000))
         names = [a.name for a in self.repo.list_accounts()]
         self.assertEqual(names[-2:], ["Credit Card", "Mortgage"])
+
+
+class TestLoanDebtLink(unittest.TestCase):
+    def setUp(self) -> None:
+        from budget_tracker.services import BudgetService
+        self.repo = Repository(connect(":memory:"))
+        self.service = BudgetService(self.repo)
+        self.accounts = {a.name: a for a in self.repo.list_accounts()}
+        self.loan = self.repo.add_account(
+            Account("Mortgage", AccountKind.LOAN, opening_balance_cents=-12_400_000)
+        )
+        self.checking = self.accounts["Checking"]
+
+    def tearDown(self) -> None:
+        self.repo.close()
+
+    def test_link_a_mortgage_debt_and_use_the_stored_minimum(self):
+        debt = self.service.create_debt(
+            "Mortgage", DebtKind.MORTGAGE, 0, 365, 105_549, account_id=self.loan.id
+        )
+        summary = self.service.debt_summary(debt.id)
+        self.assertEqual(summary.balance_cents, 12_400_000)
+        self.assertEqual(summary.effective_minimum_cents, 105_549)
+        self.assertFalse(summary.minimum_from_statement)
+
+    def test_a_card_kind_is_rejected_for_a_loan_link(self):
+        with self.assertRaises(RepositoryError):
+            self.service.create_debt("Mortgage", DebtKind.CREDIT_CARD, 0, 365, 1_000, account_id=self.loan.id)
+
+    def test_linked_loan_payment_is_a_tagged_transfer(self):
+        debt = self.service.create_debt(
+            "Mortgage", DebtKind.MORTGAGE, 0, 365, 105_549, account_id=self.loan.id
+        )
+        tx = self.service.record_debt_payment(
+            debt.id, self.checking.id, 105_549, date(2026, 11, 14), today=date(2026, 11, 14)
+        )
+        self.assertEqual((tx.type, tx.transfer_account_id), (TransactionType.TRANSFER, self.loan.id))
+        self.assertEqual(self.service.debt_summary(debt.id).balance_cents, 12_294_451)
+
+    def test_any_kind_change_is_refused_while_linked(self):
+        debt = self.service.create_debt(
+            "Mortgage", DebtKind.MORTGAGE, 0, 365, 105_549, account_id=self.loan.id
+        )
+        self.loan.kind = AccountKind.OTHER
+        with self.assertRaises(RepositoryError):
+            self.repo.update_account(self.loan)

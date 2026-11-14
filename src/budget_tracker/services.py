@@ -499,10 +499,12 @@ class BudgetService:
             raise RepositoryError("Original balance cannot be negative")
         if account_id is not None:
             account = self.repo.get_account(account_id)
-            if account is None or account.kind is not AccountKind.CREDIT_CARD:
-                raise RepositoryError("Link a debt only to a credit-card account")
-            if kind is not DebtKind.CREDIT_CARD:
-                raise RepositoryError("A linked debt must be a credit card")
+            if account is None or not account.kind.is_liability:
+                raise RepositoryError("Link a debt only to a credit-card or loan account")
+            if account.kind is AccountKind.CREDIT_CARD and kind is not DebtKind.CREDIT_CARD:
+                raise RepositoryError("A linked card debt must be a credit card")
+            if account.kind is AccountKind.LOAN and kind is DebtKind.CREDIT_CARD:
+                raise RepositoryError("Choose a loan kind for a loan account")
             linked = [d for d in self.repo.list_debts() if d.account_id == account_id and d.id != debt_id]
             if linked:
                 raise RepositoryError("This credit card is already linked to a debt")
@@ -525,9 +527,10 @@ class BudgetService:
         if debt.account_id is not None:
             account = self.repo.get_account(debt.account_id)
             account_name = account.name if account else None
-            status = self.current_minimum_payment(debt.account_id)
-            if status is not None:
-                minimum, from_statement, statement_month = status.amount_cents, True, status.month
+            if account is not None and account.kind is AccountKind.CREDIT_CARD:
+                status = self.current_minimum_payment(debt.account_id)
+                if status is not None:
+                    minimum, from_statement, statement_month = status.amount_cents, True, status.month
         interest = monthly_interest_cents(balance, debt.apr_bps)
         return DebtSummary(
             debt=debt,

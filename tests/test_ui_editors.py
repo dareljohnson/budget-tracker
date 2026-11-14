@@ -1289,6 +1289,22 @@ class TestEditors(unittest.TestCase):
         view.custom_calculate.on_click(None)
         self.assertEqual(view.extra_cents, 7_500)
 
+    def test_debt_editor_lists_loan_accounts_and_uses_loan_kind(self):
+        from budget_tracker.models import Account, AccountKind, DebtKind
+        from budget_tracker.ui.views.debts import DebtEditor
+
+        loan = self.repo.add_account(Account("Mortgage", AccountKind.LOAN, opening_balance_cents=-100_000))
+        editor = DebtEditor(self.ctx, None)
+        self.assertIn(str(loan.id), [o.key for o in editor.link.options])
+        editor.name.value = "Mortgage"
+        editor.kind.value = DebtKind.MORTGAGE.value
+        editor.apr.value = "3.65"
+        editor.minimum.value = "500.00"
+        editor.link.value = str(loan.id)
+        editor._save(None)
+        debt = self.repo.list_debts()[0]
+        self.assertEqual((debt.kind, debt.balance_cents), (DebtKind.MORTGAGE, 100_000))
+
 
 def _dialog_rule_texts(dialog) -> list:
     return [row.content.controls[1] for row in dialog.content.content.controls]

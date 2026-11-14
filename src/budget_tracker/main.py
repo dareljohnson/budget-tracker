@@ -51,6 +51,30 @@ def _icon_path() -> Path:
     return Path(__file__).resolve().parent.parent / "assets" / "icon.ico"
 
 
+def _pinned_page(control: ft.Control) -> ft.Control:
+    """Pin a view's page header and let everything below it scroll.
+
+    Every view's control is a Column whose first child is its ``page_header``. Splitting that
+    Column keeps the title and its actions fixed while the body scrolls beneath them.
+    """
+    if not isinstance(control, ft.Column) or len(control.controls) < 2:
+        return control
+    header, *body = control.controls
+    return ft.Column(
+        [
+            header,
+            ft.Column(
+                body,
+                spacing=control.spacing,
+                expand=True,
+                scroll=ft.ScrollMode.AUTO,
+            ),
+        ],
+        spacing=control.spacing,
+        expand=True,
+    )
+
+
 def main(page: ft.Page) -> None:
     repo = Repository(connect(db_path()))
     ctx = AppContext(page=page, repo=repo, service=BudgetService(repo))
@@ -69,7 +93,7 @@ def main(page: ft.Page) -> None:
 
     def show_view(index: int) -> None:
         rail.selected_index = index
-        content.content = views[index].control
+        content.content = _pinned_page(views[index].control)
         page.update()
 
     views = [
@@ -80,10 +104,14 @@ def main(page: ft.Page) -> None:
         BudgetsView(ctx),
         CategoriesView(ctx),
     ]
-    content = ft.Container(content=views[0].control, padding=ft.Padding.symmetric(horizontal=32, vertical=24), expand=True)
+    content = ft.Container(
+        content=_pinned_page(views[0].control),
+        padding=ft.Padding.symmetric(horizontal=32, vertical=24),
+        expand=True,
+    )
 
     def navigate(e: ft.Event[ft.NavigationRail]) -> None:
-        content.content = views[e.control.selected_index].control
+        content.content = _pinned_page(views[e.control.selected_index].control)
 
     def toggle_theme(_: ft.Event) -> None:
         dark = page.theme_mode != ft.ThemeMode.DARK
@@ -93,7 +121,7 @@ def main(page: ft.Page) -> None:
 
     def quick_add(_: ft.Event) -> None:
         rail.selected_index = TRANSACTIONS_INDEX
-        content.content = views[TRANSACTIONS_INDEX].control
+        content.content = _pinned_page(views[TRANSACTIONS_INDEX].control)
         views[TRANSACTIONS_INDEX].open_editor()
 
     theme_button = ft.IconButton(

@@ -19,7 +19,11 @@ class AccountsView:
     def __init__(self, ctx: AppContext) -> None:
         self.ctx = ctx
         self.stats = ft.ResponsiveRow(spacing=GAP, run_spacing=GAP)
-        self.grid = ft.ResponsiveRow(spacing=GAP, run_spacing=GAP)
+        self.grid = ft.ResponsiveRow(
+            spacing=GAP,
+            run_spacing=GAP,
+            vertical_alignment=ft.CrossAxisAlignment.STRETCH,
+        )
         self.control = ft.Column(
             [
                 page_header(

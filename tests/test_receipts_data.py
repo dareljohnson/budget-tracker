@@ -1,7 +1,8 @@
+import sqlite3
 import unittest
 from datetime import date
 
-from budget_tracker.db import MIGRATIONS, connect, schema_version
+from budget_tracker.db import MIGRATIONS, connect, migrate, schema_version
 from budget_tracker.models import Transaction, TransactionType
 from budget_tracker.repository import Repository, RepositoryError
 
@@ -55,3 +56,32 @@ class TestReceiptPath(unittest.TestCase):
 
     def test_get_transaction_missing_returns_none(self):
         self.assertIsNone(self.repo.get_transaction(9999))
+
+
+class TestUpgradeFromV8(unittest.TestCase):
+    def test_upgrade_from_v8_keeps_transactions(self):
+        conn = sqlite3.connect(":memory:")
+        self.addCleanup(conn.close)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        for version, script in enumerate(MIGRATIONS[:8], start=1):
+            conn.executescript(f"BEGIN;\n{script}\nPRAGMA user_version = {version};\nCOMMIT;")
+        conn.execute("INSERT INTO accounts (name, kind) VALUES ('Savings', 'savings')")
+        conn.execute("INSERT INTO categories (name, type) VALUES ('Other', 'expense')")
+        conn.execute(
+            "INSERT INTO transactions (amount_cents, type, account_id, category_id, occurred_on) "
+            "VALUES (500, 'expense', (SELECT id FROM accounts WHERE name = 'Savings'), "
+            "(SELECT id FROM categories WHERE name = 'Other'), '2026-01-02')"
+        )
+        conn.commit()
+        tx_id = conn.execute("SELECT id FROM transactions").fetchone()[0]
+
+        migrate(conn)
+
+        self.assertEqual(schema_version(conn), len(MIGRATIONS))
+        repo = Repository(conn)
+        kept = repo.get_transaction(tx_id)
+        self.assertEqual(kept.amount_cents, 500)
+        self.assertIsNone(kept.receipt_path)
+        repo.set_transaction_receipt(tx_id, "receipts/v8.png")
+        self.assertEqual(repo.get_transaction(tx_id).receipt_path, "receipts/v8.png")

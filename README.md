@@ -120,7 +120,7 @@ Limits:
 Use the **Debts** page to track what you owe and see how different monthly payments would pay it down. Credit cards, auto loans, student loans, personal loans, mortgages, and other debts are all supported.
 
 1. Click **Add debt** and enter a name, the **kind** (credit card, auto, student, personal, mortgage, or other), the current **balance**, the **APR**, and the **minimum monthly payment**. You can also enter the **original balance** to see a paid-down bar on the card.
-2. A **standalone debt** keeps its balance in the app: update it yourself, or log payments to move it. A **linked debt** is tied to a credit-card or loan account you already track, and its balance is the card's live amount owed. A card can be linked to only one debt.
+2. A **standalone debt** keeps its balance in the app: update it yourself, or log payments to move it. A **linked debt** is tied to a credit-card or loan account you already track, and its balance is the account's live amount owed. An account can be linked to only one debt.
 3. For a linked card, the plan minimum follows the **latest statement minimum** recorded for that card — the current month when recorded, otherwise the most recent. The minimum entered on the debt is only a fallback until a statement minimum exists.
 
 ### Loan accounts

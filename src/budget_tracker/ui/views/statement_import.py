@@ -10,7 +10,8 @@ from pathlib import Path
 import flet as ft
 
 from ...formatting import format_money
-from ...models import Account, Category, Reconciliation, Statement, TransactionType
+from ...matching import source_label
+from ...models import Account, Category, Reconciliation, Statement, Transaction, TransactionType
 from ...repository import RepositoryError
 from ...statements.model import (
     ImportPreview,
@@ -31,6 +32,13 @@ CATEGORY_WIDTH = 148
 DESTINATION_WIDTH = 148
 RULE_WIDTH = 40
 DUPLICATE_WIDTH = 76
+MATCH_WIDTH = 108
+
+POSSIBLE_MATCH = "Possible match"
+MATCHED = "Matched"
+IMPORT_ANYWAY = "Import anyway"
+_MATCH_TITLE = "Match to an existing transaction"
+_NO_SELECTION_NOTE = "Select a transaction above to use it."
 
 
 _UNSUPPORTED_MESSAGES = {
@@ -70,6 +78,21 @@ def _period(statement: Statement) -> str:
     return f"{statement.period_start:%b %d, %Y} – {statement.period_end:%b %d, %Y}"
 
 
+def _candidate_label(tx: Transaction) -> str:
+    """Date, description, amount and provenance, in the order the owner scans them."""
+    return (
+        f"{tx.occurred_on.isoformat()} · {tx.description or '(no description)'} · "
+        f"{format_money(tx.amount_cents)} · {source_label(tx.source)}"
+    )
+
+
+def _match_detail(tx: Transaction) -> str:
+    return (
+        f"Matched to {tx.description or '(no description)'} on {tx.occurred_on:%Y-%m-%d} · "
+        f"{format_money(tx.amount_cents)}"
+    )
+
+
 @dataclass(slots=True)
 class _RowWidgets:
     row: ImportRow
@@ -79,6 +102,8 @@ class _RowWidgets:
     category_dd: ft.Dropdown
     destination_dd: ft.Dropdown
     save_rule: ft.IconButton
+    match_action: ft.Container
+    match_detail: ft.Column
 
 
 class SaveCategoryRuleDialog:
@@ -174,6 +199,10 @@ class StatementImportDialog:
         self.projection_balance_label = ft.Text("", size=fs(13), color=ft.Colors.ON_SURFACE_VARIANT)
         self.projection_balance = ft.Text("", weight=ft.FontWeight.W_600)
         self.projection_difference = ft.Text("", weight=ft.FontWeight.W_600)
+        self.projection_matched = ft.Text("", weight=ft.FontWeight.W_600)
+        self.projection_matched_note = ft.Text(
+            "", size=fs(12), color=ft.Colors.ON_SURFACE_VARIANT, visible=False
+        )
         self.projection_note = ft.Text("", size=fs(12), color=ft.Colors.ON_SURFACE_VARIANT, visible=False)
         self.projection_panel = ft.Container(
             content=ft.Column(
@@ -186,10 +215,16 @@ class StatementImportDialog:
                     ),
                     ft.Row([self.projection_balance_label, self.projection_balance], spacing=8),
                     ft.Row(
+                        [ft.Text("Matched rows", size=fs(13), color=ft.Colors.ON_SURFACE_VARIANT, expand=True),
+                         self.projection_matched],
+                        spacing=8,
+                    ),
+                    ft.Row(
                         [ft.Text("Projected difference", size=fs(13), color=ft.Colors.ON_SURFACE_VARIANT, expand=True),
                          self.projection_difference],
                         spacing=8,
                     ),
+                    self.projection_matched_note,
                     self.projection_note,
                 ],
                 spacing=4,
@@ -338,6 +373,9 @@ class StatementImportDialog:
     # ---------- preview ----------
     def _install_preview(self, preview: ImportPreview) -> None:
         self.preview = preview
+        # ``prepare_import`` already matches, but previews assembled by callers (and account
+        # changes that reuse one) must still get fresh candidates.
+        self.ctx.service.match_import_preview(preview)
         statement = preview.statement
         self.statement_meta.value = (
             f"{statement.institution}  •  {statement.account_label}  •  {_period(statement)}"
@@ -371,24 +409,54 @@ class StatementImportDialog:
         ]
         self.ocr_badge.visible = preview.source == "ocr"
 
-        # Duplicates are flagged and left unchecked; the owner may include one deliberately.
+        # Duplicates are flagged and left unchecked; a matched row is excluded from insertion.
         for row in preview.rows:
-            row.include = not row.duplicate
+            row.include = False if row.matched is not None else not row.duplicate
+        self._apply_one_to_one()
         self._row_widgets = []
         self.rows_column.controls = [self._header_row()]
         for row in preview.rows:
             container, widgets = self._build_row(row)
             self.rows_column.controls.append(container)
             self._row_widgets.append(widgets)
-        duplicates = sum(1 for row in preview.rows if row.duplicate)
-        count_text = f"{len(preview.rows)} transaction(s) parsed"
-        if duplicates:
-            count_text += f"  •  {duplicates} flagged as duplicate(s)"
-        self.rows_count.value = count_text
-        self.select_all.value = bool(preview.rows) and all(row.include for row in preview.rows)
+        self._refresh_counts()
+        self.select_all.value = self._all_editable_included()
         self._edited = False
         self._refresh_account_dependent()
         self.ctx.page.update()
+
+    def _apply_one_to_one(self) -> None:
+        """A transaction already matched in this review cannot be offered to another row."""
+        if self.preview is None:
+            return
+        used = {
+            row.matched.id
+            for row in self.preview.rows
+            if row.matched is not None and row.matched.id is not None
+        }
+        if not used:
+            return
+        for row in self.preview.rows:
+            if row.matched is not None:
+                continue
+            row.match_candidates = [tx for tx in row.match_candidates if tx.id not in used]
+
+    def _refresh_counts(self) -> None:
+        """Parsed, duplicate and matched counts; matched rows are already in the ledger."""
+        if self.preview is None:
+            return
+        duplicates = sum(1 for row in self.preview.rows if row.duplicate)
+        matched = sum(1 for row in self.preview.rows if row.matched is not None)
+        count_text = f"{len(self.preview.rows)} transaction(s) parsed"
+        if duplicates:
+            count_text += f"  •  {duplicates} flagged as duplicate(s)"
+        if matched:
+            count_text += f"  •  {matched} matched to existing"
+        self.rows_count.value = count_text
+
+    def _all_editable_included(self) -> bool:
+        editable = [widgets for widgets in self._row_widgets if widgets.row.matched is None]
+        return bool(editable) and all(widgets.include.value for widgets in editable)
 
     def _summary_stats(self, statement: Statement) -> list[ft.Control]:
         def stat(label: str, cents: int, color: str | None = None) -> ft.Control:
@@ -421,6 +489,7 @@ class StatementImportDialog:
                     ft.Text("Type", width=TYPE_WIDTH, **header_style),
                     ft.Text("Category", width=CATEGORY_WIDTH, **header_style),
                     ft.Text("Destination", width=DESTINATION_WIDTH, **header_style),
+                    ft.Text("Match", width=MATCH_WIDTH, **header_style),
                     ft.Text("", width=RULE_WIDTH, **header_style),
                     ft.Text("", width=DUPLICATE_WIDTH, **header_style),
                 ],
@@ -432,7 +501,9 @@ class StatementImportDialog:
 
     def _build_row(self, row: ImportRow) -> tuple[ft.Control, _RowWidgets]:
         tx = row.transaction
-        include = ft.Checkbox(value=row.include, width=INCLUDE_WIDTH)
+        include = ft.Checkbox(
+            value=row.include, width=INCLUDE_WIDTH, disabled=row.matched is not None
+        )
         amount = ft.Text("", width=AMOUNT_WIDTH, text_align=ft.TextAlign.RIGHT, weight=ft.FontWeight.W_600)
         type_dd = ft.Dropdown(
             width=TYPE_WIDTH,
@@ -455,6 +526,8 @@ class StatementImportDialog:
             width=RULE_WIDTH,
             disabled=True,
         )
+        match_action = ft.Container(width=MATCH_WIDTH)
+        match_detail = ft.Column([], spacing=2, tight=True, visible=False)
         widgets = _RowWidgets(
             row=row,
             include=include,
@@ -463,10 +536,13 @@ class StatementImportDialog:
             category_dd=category_dd,
             destination_dd=destination_dd,
             save_rule=save_rule,
+            match_action=match_action,
+            match_detail=match_detail,
         )
         self._sync_category(widgets)
         self._sync_destination(widgets)
         self._sync_amount(widgets)
+        self._sync_match(widgets)
         include.on_change = lambda _: self._row_toggled(widgets)
         type_dd.on_select = lambda _: self._type_changed(widgets)
         category_dd.on_select = lambda _: self._category_changed(widgets)
@@ -488,32 +564,98 @@ class StatementImportDialog:
             duplicate_badge = ft.Container(width=DUPLICATE_WIDTH)
 
         container = ft.Container(
-            content=ft.Row(
+            content=ft.Column(
                 [
-                    include,
-                    ft.Text(f"{tx.occurred_on:%Y-%m-%d}", width=DATE_WIDTH, size=fs(13)),
-                    ft.Text(
-                        tx.description or "(no description)",
-                        expand=True,
-                        max_lines=1,
-                        overflow=ft.TextOverflow.ELLIPSIS,
-                        tooltip=tx.description or None,
+                    ft.Row(
+                        [
+                            include,
+                            ft.Text(f"{tx.occurred_on:%Y-%m-%d}", width=DATE_WIDTH, size=fs(13)),
+                            ft.Text(
+                                tx.description or "(no description)",
+                                expand=True,
+                                max_lines=1,
+                                overflow=ft.TextOverflow.ELLIPSIS,
+                                tooltip=tx.description or None,
+                            ),
+                            amount,
+                            type_dd,
+                            category_dd,
+                            destination_dd,
+                            match_action,
+                            save_rule,
+                            duplicate_badge,
+                        ],
+                        spacing=8,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     ),
-                    amount,
-                    type_dd,
-                    category_dd,
-                    destination_dd,
-                    save_rule,
-                    duplicate_badge,
+                    match_detail,
                 ],
-                spacing=8,
-                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                spacing=2,
+                tight=True,
             ),
             padding=ft.Padding.symmetric(horizontal=8, vertical=4),
             border_radius=8,
             bgcolor=ft.Colors.with_opacity(0.05, WARNING_COLOR) if row.duplicate else None,
         )
         return container, widgets
+
+    def _match_chip(self, label: str, color: str) -> ft.Container:
+        return ft.Container(
+            content=ft.Text(label, size=fs(10), weight=ft.FontWeight.W_600, color=color),
+            padding=ft.Padding.symmetric(horizontal=6, vertical=2),
+            border_radius=10,
+            alignment=ft.Alignment.CENTER,
+            bgcolor=ft.Colors.with_opacity(0.14, color),
+        )
+
+    def _sync_match(self, widgets: _RowWidgets) -> None:
+        """Reflect the row's match state in its checkbox, action cell and detail line."""
+        row = widgets.row
+        if row.matched is not None:
+            row.include = False
+            widgets.include.value = False
+            widgets.include.disabled = True
+            widgets.match_action.content = ft.Column(
+                [self._match_chip(MATCHED, INCOME_COLOR)],
+                spacing=0,
+                tight=True,
+                width=MATCH_WIDTH,
+            )
+            widgets.match_detail.controls = [
+                ft.Text(
+                    _match_detail(row.matched),
+                    size=fs(12),
+                    color=ft.Colors.ON_SURFACE_VARIANT,
+                ),
+                ft.TextButton(
+                    content=IMPORT_ANYWAY,
+                    style=ft.ButtonStyle(padding=ft.Padding.symmetric(horizontal=6, vertical=0)),
+                    on_click=lambda _: self._clear_match(widgets),
+                ),
+            ]
+            widgets.match_detail.visible = True
+            return
+
+        widgets.include.disabled = False
+        widgets.include.value = row.include
+        widgets.match_detail.controls = []
+        widgets.match_detail.visible = False
+        if row.match_candidates:
+            widgets.match_action.content = ft.Column(
+                [
+                    self._match_chip(POSSIBLE_MATCH, WARNING_COLOR),
+                    ft.TextButton(
+                        content="Match…",
+                        style=ft.ButtonStyle(padding=ft.Padding.symmetric(horizontal=6, vertical=0)),
+                        on_click=lambda _: self._open_match(widgets),
+                    ),
+                ],
+                spacing=0,
+                tight=True,
+                width=MATCH_WIDTH,
+            )
+        else:
+            widgets.match_action.content = None
 
     # ---------- row helpers ----------
     @staticmethod
@@ -611,18 +753,26 @@ class StatementImportDialog:
             widgets.amount.color = INCOME_COLOR
 
     def _row_toggled(self, widgets: _RowWidgets) -> None:
-        widgets.row.include = bool(widgets.include.value)
+        if widgets.row.matched is not None:
+            # A matched row is never inserted; keep the checkbox and model in agreement.
+            widgets.include.value = False
+            widgets.row.include = False
+        else:
+            widgets.row.include = bool(widgets.include.value)
         self._edited = True
-        self.select_all.value = bool(self._row_widgets) and all(w.include.value for w in self._row_widgets)
+        self.select_all.value = self._all_editable_included()
         self._refresh_projection()
         self.ctx.page.update()
 
     def _select_all_changed(self, _: ft.Event[ft.Checkbox]) -> None:
         value = bool(self.select_all.value)
         for widgets in self._row_widgets:
+            if widgets.row.matched is not None:
+                continue
             widgets.row.include = value
             widgets.include.value = value
         self._edited = True
+        self.select_all.value = self._all_editable_included()
         self._refresh_projection()
         self.ctx.page.update()
 
@@ -637,6 +787,17 @@ class StatementImportDialog:
         self._sync_category(widgets)
         self._sync_destination(widgets)
         self._sync_amount(widgets)
+        self._recompute_candidates(widgets)
+        matched = widgets.row.matched
+        if matched is not None and (
+            matched.type is not chosen
+            or matched.id not in {tx.id for tx in widgets.row.match_candidates}
+        ):
+            # The retyped row can no longer be this transaction; return to a normal row.
+            widgets.row.matched = None
+            widgets.row.include = True
+        self._sync_match(widgets)
+        self._refresh_counts()
         self._refresh_projection()
         self.ctx.page.update()
 
@@ -665,6 +826,80 @@ class StatementImportDialog:
         )
         self._edited = True
         self._refresh_projection()
+
+    # ---------- matching ----------
+    def _widgets_for(self, target: _RowWidgets | ImportRow) -> _RowWidgets | None:
+        """Accept either row widgets or an ``ImportRow`` so callers need not know the wrapper."""
+        if isinstance(target, _RowWidgets):
+            return target
+        return next(
+            (widgets for widgets in self._row_widgets if widgets.row is target), None
+        )
+
+    def _recompute_candidates(self, widgets: _RowWidgets) -> None:
+        """Re-run the hard filters after an edit, keeping other rows' chosen rows out."""
+        if self.preview is None:
+            widgets.row.match_candidates = []
+            return
+        candidates = self.ctx.service.import_row_candidates(self.preview, widgets.row)
+        used = {
+            other.row.matched.id
+            for other in self._row_widgets
+            if other is not widgets
+            and other.row.matched is not None
+            and other.row.matched.id is not None
+        }
+        widgets.row.match_candidates = [
+            candidate.transaction
+            for candidate in candidates
+            if candidate.transaction.id not in used
+        ]
+
+    def _open_match(self, widgets: _RowWidgets) -> None:
+        if widgets.row.match_candidates:
+            _MatchDialog(self, widgets).open()
+
+    def _apply_match(
+        self, target: _RowWidgets | ImportRow, transaction: Transaction
+    ) -> None:
+        """Use an existing ledger row for one statement row, enforcing one-to-one."""
+        widgets = self._widgets_for(target)
+        if widgets is None:
+            return
+        for other in self._row_widgets:
+            if other is widgets:
+                continue
+            other.row.match_candidates = [
+                tx for tx in other.row.match_candidates if tx.id != transaction.id
+            ]
+            if other.row.matched is not None and other.row.matched.id == transaction.id:
+                # The chosen transaction belongs to this row now; the other row is importable.
+                other.row.matched = None
+                other.row.include = True
+            self._sync_match(other)
+
+        widgets.row.matched = transaction
+        widgets.row.include = False
+        widgets.include.value = False
+        widgets.include.disabled = True
+        self._sync_match(widgets)
+        self._edited = True
+        self._refresh_counts()
+        self._refresh_projection()
+        self.ctx.page.update()
+
+    def _clear_match(self, target: _RowWidgets | ImportRow) -> None:
+        """Import anyway: drop the match and return the row to its normal include state."""
+        widgets = self._widgets_for(target)
+        if widgets is None:
+            return
+        widgets.row.matched = None
+        widgets.row.include = True
+        self._sync_match(widgets)
+        self._edited = True
+        self._refresh_counts()
+        self._refresh_projection()
+        self.ctx.page.update()
 
     def _apply_category(self, _: ft.Event) -> None:
         if not self.apply_category.value:
@@ -706,8 +941,13 @@ class StatementImportDialog:
         account_id = int(self.account.value)
         if self.preview is not None and account_id == self.preview.account_id:
             # Reuse the existing preview, but no row may transfer to its own source account.
+            # Re-match because a destination edit changes which transfer rows are eligible.
+            self.ctx.service.match_import_preview(self.preview)
+            self._apply_one_to_one()
             for widgets in self._row_widgets:
                 self._sync_destination(widgets)
+                self._sync_match(widgets)
+            self._refresh_counts()
             self._refresh_account_dependent()
             self.ctx.page.update()
             return
@@ -842,10 +1082,14 @@ class StatementImportDialog:
         self._refresh_projection()
 
     def _included_effect(self, account_id: int) -> int:
-        """Net change the included preview rows would make to ``account_id``'s balance."""
+        """Net change the included preview rows would make to ``account_id``'s balance.
+
+        A matched row is already in the ledger through its existing transaction, so it never
+        contributes an insertion effect, even if its checkbox was forced on.
+        """
         effect = 0
         for row in self.preview.rows if self.preview is not None else []:
-            if not row.include:
+            if not row.include or row.matched is not None:
                 continue
             tx = self._oriented(row, account_id).transaction
             if tx.type in (TransactionType.INCOME, TransactionType.REFUND):
@@ -887,9 +1131,15 @@ class StatementImportDialog:
         else:
             projected_cents = current_cents + effect_cents
         difference_cents = projected_cents - statement.ending_cents
+        matched_count = sum(1 for row in self.preview.rows if row.matched is not None)
         self.projection_statement.value = format_money(statement.ending_cents)
         self.projection_balance_label.value = f"Account balance at {statement.period_end:%Y-%m-%d}"
         self.projection_balance.value = format_money(current_cents)
+        self.projection_matched.value = str(matched_count)
+        self.projection_matched_note.value = (
+            f"{matched_count} matched row(s) already in the ledger."
+        )
+        self.projection_matched_note.visible = matched_count > 0
         self.projection_difference.value = format_money(difference_cents, signed=True)
         self.projection_difference.color = INCOME_COLOR if difference_cents == 0 else EXPENSE_COLOR
         if difference_cents == 0:
@@ -911,10 +1161,13 @@ class StatementImportDialog:
             self.ctx.notify("Choose the account again so the preview can refresh", error=True)
             return
         included = [row for row in self.preview.rows if row.include]
-        if not included:
+        matched_rows = [row for row in self.preview.rows if row.matched is not None]
+        # A matched row is already in the ledger: it is never inserted, even if include is forced.
+        inserted = [row for row in included if row.matched is None]
+        if not inserted and not matched_rows:
             self.ctx.notify("Select at least one transaction to import", error=True)
             return
-        for row in included:
+        for row in inserted:
             if row.transaction.type is TransactionType.TRANSFER and row.transaction.transfer_account_id is None:
                 self.ctx.notify(
                     "Choose the From account for every imported deposit transfer"
@@ -927,7 +1180,7 @@ class StatementImportDialog:
         remember = bool(self.remember.visible and self.remember.value)
         last4 = self.preview.statement.account_last4
         account_id = self.preview.account_id
-        commit_rows = [self._oriented(row, account_id) for row in included]
+        commit_rows = [self._oriented(row, account_id) for row in inserted]
         try:
             statement = self.ctx.service.commit_import(
                 self.preview, commit_rows, set_opening_balance=set_opening
@@ -947,7 +1200,8 @@ class StatementImportDialog:
             except Exception as exc:  # noqa: BLE001 - the import already succeeded
                 number_error = exc
 
-        count = len(included)
+        count = len(inserted)
+        matched_count = len(matched_rows)
         # Use this import's own reconciliation; last_reconciliation is ordered by as_of and may
         # belong to a newer manual balance check.
         reconciliation = (
@@ -965,7 +1219,7 @@ class StatementImportDialog:
                 error=True,
             )
         if account is not None:
-            ImportResultDialog(self.ctx, account, reconciliation, count).open()
+            ImportResultDialog(self.ctx, account, reconciliation, count, matched_count).open()
 
     def _oriented(self, row: ImportRow, statement_account_id: int) -> ImportRow:
         """Orient a transfer so the ledger's debit/credit convention matches the parsed direction.
@@ -989,6 +1243,84 @@ class StatementImportDialog:
         ))
 
 
+class _MatchDialog:
+    """Pick one existing ledger transaction to stand in for a statement row."""
+
+    def __init__(self, owner: StatementImportDialog, target: _RowWidgets | ImportRow) -> None:
+        self.owner = owner
+        self.widgets = owner._widgets_for(target)
+        candidates = self.widgets.row.match_candidates if self.widgets is not None else []
+        self.match_group = ft.RadioGroup(
+            content=ft.Column(
+                [
+                    ft.Radio(
+                        value=str(tx.id),
+                        label=_candidate_label(tx),
+                        label_style=ft.TextStyle(size=fs(13)),
+                    )
+                    for tx in candidates
+                ],
+                spacing=4,
+                tight=True,
+            ),
+            on_change=self._selected,
+        )
+        self.match_note = ft.Text("", size=fs(12), color=EXPENSE_COLOR, visible=False)
+        self.use_button = ft.FilledButton(
+            content="Use this transaction", icon=ft.Icons.CHECK, on_click=self._use
+        )
+        self.dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text(_MATCH_TITLE),
+            content=ft.Container(
+                width=560,
+                content=ft.Column(
+                    [
+                        ft.Text(
+                            "The existing transaction keeps its own date, amount, category, account "
+                            "and description. It is not tagged with this statement.",
+                            size=fs(13),
+                            color=ft.Colors.ON_SURFACE_VARIANT,
+                        ),
+                        self.match_group,
+                        self.match_note,
+                    ],
+                    spacing=10,
+                    tight=True,
+                    scroll=ft.ScrollMode.AUTO,
+                ),
+            ),
+            actions=[
+                ft.TextButton(content="Cancel", on_click=lambda _: owner.ctx.page.pop_dialog()),
+                self.use_button,
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+
+    def open(self) -> None:
+        self.owner.ctx.page.show_dialog(self.dialog)
+
+    def _selected(self, _: ft.Event | None = None) -> None:
+        self.match_note.visible = False
+
+    def _use(self, _: ft.Event | None = None) -> None:
+        chosen = next(
+            (
+                tx
+                for tx in (self.widgets.row.match_candidates if self.widgets is not None else [])
+                if str(tx.id) == self.match_group.value
+            ),
+            None,
+        )
+        if chosen is None:
+            self.match_note.value = _NO_SELECTION_NOTE
+            self.match_note.visible = True
+            self.owner.ctx.page.update()
+            return
+        self.owner.ctx.page.pop_dialog()
+        self.owner._apply_match(self.widgets, chosen)
+
+
 class ImportResultDialog:
     """Post-import reconciliation summary, with a path into the balance-check dialog."""
 
@@ -998,6 +1330,7 @@ class ImportResultDialog:
         account: Account,
         reconciliation: Reconciliation | None,
         count: int,
+        matched_count: int = 0,
     ) -> None:
         self.ctx = ctx
         self.account = account
@@ -1007,6 +1340,14 @@ class ImportResultDialog:
         controls: list[ft.Control] = [
             ft.Text(f"Imported {count} transaction(s) into {account.name}.", size=fs(13)),
         ]
+        if matched_count:
+            controls.append(
+                ft.Text(
+                    f"{matched_count} matched row(s) were already in the ledger and were left unchanged.",
+                    size=fs(13),
+                    color=ft.Colors.ON_SURFACE_VARIANT,
+                )
+            )
         if reconciliation is None:
             controls.append(
                 ft.Text("No reconciliation was recorded for this import.", size=fs(13),

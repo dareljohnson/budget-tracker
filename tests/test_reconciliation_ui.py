@@ -699,5 +699,277 @@ class TestBillMismatch(BillMatchTestCase):
         self.assertEqual(len(self.repo.list_transactions()), 1)
 
 
+def _texts(control) -> list[str]:
+    """Collect every string value under a Flet control tree (Text values and button labels)."""
+    if control is None:
+        return []
+    found: list[str] = []
+    value = getattr(control, "value", None)
+    if isinstance(value, str):
+        found.append(value)
+    content = getattr(control, "content", None)
+    if isinstance(content, str):
+        found.append(content)
+    elif content is not None:
+        found.extend(_texts(content))
+    for child in getattr(control, "controls", None) or []:
+        found.extend(_texts(child))
+    return found
+
+
+def _find_button(control, label: str):
+    """Depth-first search for a button whose visible label matches."""
+    if control is None:
+        return None
+    if getattr(control, "content", None) == label and isinstance(
+        control,
+        (ft.TextButton, ft.FilledButton, ft.OutlinedButton, ft.FilledTonalButton),
+    ):
+        return control
+    for attr in ("content",):
+        child = getattr(control, attr, None)
+        if child is not None and not isinstance(child, str):
+            found = _find_button(child, label)
+            if found is not None:
+                return found
+    for child in getattr(control, "controls", None) or []:
+        found = _find_button(child, label)
+        if found is not None:
+            return found
+    return None
+
+
+class StatementMatchTestCase(MatchPanelTestCase):
+    """Shared helpers for the statement-import match column."""
+
+    def _statement(self, *, sha: str = "a" * 64):
+        from budget_tracker.models import Statement
+
+        return Statement(
+            account_id=self.checking.id,
+            institution="Regions Bank",
+            account_label="Checking",
+            period_start=date(2026, 9, 1),
+            period_end=date(2026, 9, 30),
+            beginning_cents=0,
+            deposits_cents=0,
+            withdrawals_cents=3_485,
+            fees_cents=0,
+            ending_cents=-3_485,
+            file_sha256=sha,
+        )
+
+    def _row(
+        self,
+        *,
+        description: str = "FEL LINIS PIZZA",
+        amount_cents: int = 3_485,
+        occurred_on: date = date(2026, 9, 19),
+        type_: TransactionType = TransactionType.EXPENSE,
+    ):
+        from budget_tracker.statements.model import ImportRow
+
+        category_id = self.groceries.id if type_.category_type is not None else None
+        return ImportRow(
+            transaction=Transaction(
+                amount_cents,
+                type_,
+                category_id,
+                occurred_on,
+                description,
+                account_id=self.checking.id,
+            ),
+            direction="income" if type_ in (TransactionType.INCOME, TransactionType.REFUND) else "expense",
+        )
+
+    def _dialog(self, rows, *, sha: str = "a" * 64):
+        from budget_tracker.statements.model import ImportPreview
+        from budget_tracker.ui.views.statement_import import StatementImportDialog
+
+        dialog = StatementImportDialog(self.ctx)
+        dialog.account.value = str(self.checking.id)
+        dialog._install_preview(
+            ImportPreview(
+                statement=self._statement(sha=sha),
+                account_id=self.checking.id,
+                rows=rows,
+            )
+        )
+        return dialog
+
+
+class TestStatementMatchColumn(StatementMatchTestCase):
+    def test_candidates_show_a_possible_match_chip_and_matching_excludes_the_row(self):
+        existing = self._add_expense(
+            description="FEL LINIS PIZZA", amount_cents=3_485, occurred_on=date(2026, 9, 19)
+        )
+        dialog = self._dialog([self._row()])
+        [widgets] = dialog._row_widgets
+
+        self.assertEqual([tx.id for tx in widgets.row.match_candidates], [existing.id])
+        self.assertIn("Possible match", _texts(widgets.match_action))
+        self.assertIn("Match…", _texts(widgets.match_action))
+
+        dialog._apply_match(widgets, existing)
+
+        self.assertIs(widgets.row.matched, existing)
+        self.assertFalse(widgets.row.include)
+        self.assertFalse(widgets.include.value)
+        self.assertTrue(widgets.include.disabled)
+        self.assertIn("Matched", _texts(widgets.match_action))
+        self.assertTrue(any(text.startswith("Matched to") for text in _texts(widgets.match_detail)))
+        self.assertIn("1 matched to existing", dialog.rows_count.value)
+
+    def test_import_anyway_clears_the_match_and_re_enables_the_row(self):
+        existing = self._add_expense(
+            description="FEL LINIS PIZZA", amount_cents=3_485, occurred_on=date(2026, 9, 19)
+        )
+        dialog = self._dialog([self._row()])
+        [widgets] = dialog._row_widgets
+        dialog._apply_match(widgets, existing)
+
+        button = _find_button(dialog.rows_column, "Import anyway")
+        self.assertIsNotNone(button)
+        button.on_click(None)
+
+        self.assertIsNone(widgets.row.matched)
+        self.assertTrue(widgets.row.include)
+        self.assertTrue(widgets.include.value)
+        self.assertFalse(widgets.include.disabled)
+        self.assertIn("Possible match", _texts(widgets.match_action))
+
+    def test_choosing_a_transaction_for_a_second_row_clears_the_first(self):
+        existing = self._add_expense(
+            description="FEL LINIS PIZZA", amount_cents=3_485, occurred_on=date(2026, 9, 19)
+        )
+        dialog = self._dialog([self._row(), self._row()])
+        first, second = dialog._row_widgets
+        self.assertIn(existing.id, [tx.id for tx in second.row.match_candidates])
+
+        dialog._apply_match(first, existing)
+        self.assertNotIn(existing.id, [tx.id for tx in second.row.match_candidates])
+
+        # A stale UI can still ask for the same row; the other row must release it.
+        dialog._apply_match(second, existing)
+
+        self.assertIsNone(first.row.matched)
+        self.assertTrue(first.row.include)
+        self.assertFalse(first.include.disabled)
+        self.assertIs(second.row.matched, existing)
+        self.assertFalse(second.row.include)
+
+    def test_included_effect_ignores_a_matched_row_even_when_forced_on(self):
+        existing = self._add_expense(
+            description="FEL LINIS PIZZA", amount_cents=3_485, occurred_on=date(2026, 9, 19)
+        )
+        dialog = self._dialog([
+            self._row(description="FEL LINIS PIZZA", amount_cents=3_485),
+            self._row(description="Rent", amount_cents=10_000),
+        ])
+        matched, other = dialog._row_widgets
+        dialog._apply_match(matched, existing)
+
+        # Force the checkbox on to prove the guard does not depend on the include flag.
+        matched.row.include = True
+        matched.include.value = True
+        self.assertEqual(dialog._included_effect(self.checking.id), -10_000)
+
+        other.row.include = False
+        self.assertEqual(dialog._included_effect(self.checking.id), 0)
+
+    def test_commit_passes_only_inserted_rows_and_reports_matched_separately(self):
+        existing = self._add_expense(
+            description="FEL LINIS PIZZA", amount_cents=3_485, occurred_on=date(2026, 9, 19)
+        )
+        dialog = self._dialog([
+            self._row(description="FEL LINIS PIZZA", amount_cents=3_485),
+            self._row(description="Rent", amount_cents=10_000),
+        ])
+        matched, inserted = dialog._row_widgets
+        dialog._apply_match(matched, existing)
+
+        with mock.patch.object(
+            self.ctx.service, "commit_import", return_value=dialog.preview.statement
+        ) as commit:
+            dialog._commit(None)
+
+        commit.assert_called_once()
+        payload = commit.call_args.args[1]
+        self.assertEqual([row.transaction.description for row in payload], ["Rent"])
+        [result] = self.page.open_dialogs
+        texts = _texts(result.content)
+        self.assertIn("Imported 1 transaction(s) into Checking.", texts)
+        self.assertTrue(any("1 matched row(s)" in text for text in texts))
+        self.assertEqual(self.page.errors, [])
+
+    def test_retyping_a_row_recomputes_candidates_and_clears_an_incompatible_match(self):
+        expense = self._add_expense(
+            description="FEL LINIS PIZZA", amount_cents=3_485, occurred_on=date(2026, 9, 19)
+        )
+        transfer = self.repo.add_transaction(
+            Transaction(
+                3_485,
+                TransactionType.TRANSFER,
+                None,
+                date(2026, 9, 19),
+                "TRANSFER TO CASH",
+                account_id=self.checking.id,
+                transfer_account_id=self.cash.id,
+            )
+        )
+        dialog = self._dialog([self._row()])
+        [widgets] = dialog._row_widgets
+        dialog._apply_match(widgets, expense)
+
+        widgets.type_dd.value = TransactionType.TRANSFER.value
+        dialog._type_changed(widgets)
+
+        self.assertEqual(widgets.row.transaction.type, TransactionType.TRANSFER)
+        self.assertEqual([tx.id for tx in widgets.row.match_candidates], [transfer.id])
+        self.assertIsNone(widgets.row.matched)
+        self.assertTrue(widgets.row.include)
+        self.assertFalse(widgets.include.disabled)
+
+    def test_projection_counts_matched_rows_and_leaves_the_difference_alone(self):
+        existing = self._add_expense(
+            description="FEL LINIS PIZZA",
+            amount_cents=3_485,
+            occurred_on=date(2026, 9, 19),
+        )
+        dialog = self._dialog([self._row()])
+        [widgets] = dialog._row_widgets
+        dialog._apply_match(widgets, existing)
+
+        self.assertTrue(dialog.projection_panel.visible)
+        self.assertEqual(dialog.projection_matched.value, "1")
+        self.assertIn("already in the ledger", dialog.projection_matched_note.value)
+        self.assertEqual(dialog.projection_difference.value, "$0.00")
+
+    def test_undo_leaves_the_matched_existing_transaction(self):
+        existing = self._add_expense(
+            description="FEL LINIS PIZZA",
+            amount_cents=3_485,
+            occurred_on=date(2026, 9, 19),
+        )
+        dialog = self._dialog([self._row()], sha="u" * 64)
+        [widgets] = dialog._row_widgets
+        dialog._apply_match(widgets, existing)
+
+        dialog._commit(None)
+
+        [statement] = self.repo.list_statements()
+        kept = self.repo.get_transaction(existing.id)
+        self.assertIsNotNone(kept)
+        self.assertIsNone(kept.statement_id)
+
+        self.repo.delete_statement(statement.id)
+
+        kept = self.repo.get_transaction(existing.id)
+        self.assertIsNotNone(kept)
+        self.assertIsNone(kept.statement_id)
+        self.assertEqual(kept.source, "manual")
+        self.assertEqual(kept.description, "FEL LINIS PIZZA")
+
+
 if __name__ == "__main__":
     unittest.main()

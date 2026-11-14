@@ -175,7 +175,8 @@ class TestEditors(unittest.TestCase):
         self.assertFalse(duplicate.include.value)
         self.assertFalse(duplicate.row.include)
         row_container = dialog.rows_column.controls[1]
-        self.assertIn("Duplicate", str(row_container.content.controls[-1].content.value))
+        row = row_container.content.controls[0]
+        self.assertIn("Duplicate", str(row.controls[-1].content.value))
 
         # The user may deliberately include a duplicate; only then is it part of the payload.
         duplicate.include.value = True

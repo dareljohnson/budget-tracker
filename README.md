@@ -129,7 +129,7 @@ Every payment moves real money and appears on the **Transactions** page.
 
 - A **standalone debt** payment is an **expense** from the funding account you choose, categorized as **Debt payments** by default. It lowers the debt's balance, and the amount cannot exceed the current balance.
 - A **linked card** payment is a **transfer** from the funding account into the card, so the card's amount owed goes down. Paying more than the balance is allowed and leaves a credit on the card, like any other card payment.
-- Payments logged from a debt card are tagged to that debt and listed in its **History**. Card payments made elsewhere (for example **Pay card** on the Accounts page) still change the card's balance but are not listed in the debt's history.
+- Payments logged from a debt's **Log payment** dialog are tagged to that debt and listed in its **History**. Card payments made elsewhere (for example **Pay card** on the Accounts page) still change the card's balance but are not listed in the debt's history.
 - The payment date cannot be in the future, and a liability account cannot fund a payment.
 
 ### The payoff plan
@@ -141,7 +141,7 @@ The plan panel compares two strategies, each with an **extra monthly amount on t
 
 For the selected extra amount, the panel shows each strategy's debt-free date, months, total interest, and total paid, and marks the strategy that saves interest when both plans finish. It also compares several extra amounts ($0, $50, $100, $200, and a custom amount) side by side, and shows the month-by-month schedule and the order debts are paid off. A cleared debt's minimum rolls into the next target, so the monthly budget stays fixed until you are debt-free.
 
-A minimum may be **zero** (a deferred student loan, for example). A zero minimum with no extra never pays the debt off; the plan says so instead of showing a date. The panel also warns when a minimum does not cover that month's interest.
+A minimum may be **zero** (a deferred student loan, for example). A plan with only a zero minimum and no extra never pays the debt off; the plan says so instead of showing a date. The panel also warns when a minimum does not cover that month's interest.
 
 The projection is an **estimate**: it assumes a fixed APR, monthly compounding, the minimums you record, and constant payments, and it ignores fees, escrow, and rate changes. A mortgage in particular may differ from its real amortization. A plan that cannot finish within **50 years (600 months)** is reported as not paid off rather than given a payoff date.
 

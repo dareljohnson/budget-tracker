@@ -183,11 +183,12 @@ class DebtEditor:
         self.ctx.page.show_dialog(self.dialog)
 
     def _refresh_dialog(self) -> None:
-        """Repaint the dialog when it is attached; unit tests drive ``_save`` without opening it."""
-        try:
-            self.dialog.update()
-        except RuntimeError:
-            pass
+        """Repaint the page (and its dialog overlay) after setting validation errors.
+
+        Updating the page rather than the dialog itself works before the dialog has been
+        attached, which is how the editor's tests drive ``_save`` directly.
+        """
+        self.ctx.page.update()
 
     def _save(self, _: ft.Event) -> None:
         for field in (self.name, self.balance, self.apr, self.minimum, self.original):

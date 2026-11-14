@@ -1044,6 +1044,51 @@ class TestEditors(unittest.TestCase):
             [("2026-11", 3500)],
         )
 
+    def test_standalone_payment_dialog_moves_money(self):
+        from budget_tracker.models import DebtKind
+        from budget_tracker.ui.views.debts import DebtPaymentDialog
+
+        debt = self.ctx.service.create_debt("Loan", DebtKind.PERSONAL, 100_000, 1200, 2_000)
+        summary = self.ctx.service.debt_summary(debt.id)
+        dialog = DebtPaymentDialog(self.ctx, summary)
+        dialog.amount.value = "200.00"
+        dialog.funding.value = str(self.accts["Checking"].id)
+        dialog._save(None)
+        self.assertEqual(self.ctx.repo.get_debt(debt.id).balance_cents, 80_000)
+        [tx] = self.ctx.repo.list_debt_payments(debt.id)
+        self.assertEqual((tx.type, tx.category_name), (TransactionType.EXPENSE, "Debt payments"))
+
+    def test_linked_payment_dialog_creates_a_transfer(self):
+        from budget_tracker.models import AccountKind, DebtKind, Transaction, TransactionType
+        from budget_tracker.ui.views.debts import DebtPaymentDialog
+
+        card = self.accts["Credit Card"]
+        other = next(c for c in self.repo.list_categories() if c.name == "Other")
+        self.repo.add_transaction(Transaction(
+            40_000, TransactionType.EXPENSE, other.id, date(2026, 11, 1),
+            "Purchase", account_id=card.id,
+        ))
+        debt = self.ctx.service.create_debt("Visa", DebtKind.CREDIT_CARD, 0, 2499, 10_500, account_id=card.id)
+        dialog = DebtPaymentDialog(self.ctx, self.ctx.service.debt_summary(debt.id))
+        dialog.amount.value = "100.00"
+        dialog.funding.value = str(self.accts["Checking"].id)
+        dialog._save(None)
+        [tx] = self.ctx.repo.list_debt_payments(debt.id)
+        self.assertEqual((tx.type, tx.transfer_account_id), (TransactionType.TRANSFER, card.id))
+
+    def test_history_lists_payments_newest_first(self):
+        from budget_tracker.models import DebtKind
+        from budget_tracker.ui.views.debts import DebtHistoryDialog
+
+        debt = self.ctx.service.create_debt("Loan", DebtKind.PERSONAL, 100_000, 1200, 2_000)
+        self.ctx.service.record_debt_payment(debt.id, self.accts["Checking"].id, 10_000,
+                                             date(2026, 11, 1), today=date(2026, 11, 14))
+        self.ctx.service.record_debt_payment(debt.id, self.accts["Checking"].id, 20_000,
+                                             date(2026, 11, 10), today=date(2026, 11, 14))
+        dialog = DebtHistoryDialog(self.ctx, debt)
+        texts = self._texts(dialog.dialog.content)
+        self.assertLess(texts.index("$200.00"), texts.index("$100.00"))
+
 
 def _dialog_rule_texts(dialog) -> list:
     return [row.content.controls[1] for row in dialog.content.content.controls]

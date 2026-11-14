@@ -2,13 +2,23 @@
 
 from __future__ import annotations
 
+from datetime import date
+
 import flet as ft
 
-from ...formatting import format_money, format_percent, month_label, parse_percent_bps, parse_signed_money
-from ...models import AccountKind, Debt, DebtKind
+from ...formatting import (
+    format_money,
+    format_percent,
+    month_label,
+    parse_date,
+    parse_money,
+    parse_percent_bps,
+    parse_signed_money,
+)
+from ...models import AccountKind, Debt, DebtKind, TransactionType
 from ...repository import RepositoryError
 from ...services import DebtSummary
-from ..components import card, confirm_dialog, empty_state, page_header
+from ..components import card, confirm_dialog, date_field, empty_state, page_header
 from ..context import AppContext
 from ..theme import EXPENSE_COLOR, GAP, SEED_COLOR
 
@@ -79,6 +89,10 @@ class DebtsView:
         if summary.minimum_below_interest:
             details.append(ft.Text("The minimum does not cover monthly interest", size=12, color=EXPENSE_COLOR))
         actions = [
+            ft.FilledTonalButton(content="Log payment", icon=ft.Icons.PAYMENT,
+                                 on_click=lambda _: DebtPaymentDialog(self.ctx, summary).open()),
+            ft.OutlinedButton(content="History", icon=ft.Icons.HISTORY,
+                              on_click=lambda _: DebtHistoryDialog(self.ctx, debt).open()),
             ft.OutlinedButton(content="Edit", icon=ft.Icons.EDIT_OUTLINED,
                               on_click=lambda _: DebtEditor(self.ctx, debt).open()),
             ft.IconButton(ft.Icons.DELETE_OUTLINE, tooltip="Delete", icon_color=EXPENSE_COLOR,
@@ -86,7 +100,7 @@ class DebtsView:
         ]
         return card(
             ft.Column([ft.Text(debt.name, size=16, weight=ft.FontWeight.W_600), *details,
-                       ft.Row(actions, alignment=ft.MainAxisAlignment.END, spacing=4)],
+                       ft.Row(actions, alignment=ft.MainAxisAlignment.END, spacing=4, wrap=True)],
                       spacing=8),
             col={"xs": 12, "md": 6, "xl": 4},
         )
@@ -253,3 +267,176 @@ class DebtEditor:
         self.ctx.page.pop_dialog()
         self.ctx.notify(f"Debt '{name}' saved")
         self.ctx.data_changed()
+
+
+class DebtPaymentDialog:
+    """Record a real payment against a debt, moving money from a funding account."""
+
+    def __init__(self, ctx: AppContext, summary: DebtSummary) -> None:
+        self.ctx = ctx
+        self.summary = summary
+        debt = summary.debt
+        self.amount = ft.TextField(
+            label="Amount",
+            prefix_icon=ft.Icons.ATTACH_MONEY,
+            keyboard_type=ft.KeyboardType.NUMBER,
+            autofocus=True,
+            on_submit=self._save,
+        )
+        funding = [
+            a for a in ctx.repo.list_accounts()
+            if not a.kind.is_liability and a.id != debt.account_id
+        ]
+        default_funding = next(
+            (a for a in funding if a.kind is AccountKind.CHECKING),
+            funding[0] if funding else None,
+        )
+        self.funding = ft.Dropdown(
+            label="From account",
+            options=[ft.DropdownOption(key=str(a.id), text=f"{a.name} ({a.kind.label})") for a in funding],
+            value=str(default_funding.id) if default_funding else None,
+        )
+        self.date = date_field(ctx.page, "Payment date", date.today())
+        self.note = ft.TextField(label="Note", hint_text="Optional")
+        categories = [c for c in ctx.repo.list_categories() if c.type is TransactionType.EXPENSE]
+        preferred = next(
+            (c for c in categories if c.name == "Debt payments"),
+            categories[0] if categories else None,
+        )
+        self.category = ft.Dropdown(
+            label="Category",
+            options=[ft.DropdownOption(key=str(c.id), text=c.name) for c in categories],
+            value=str(preferred.id) if preferred else None,
+            visible=debt.account_id is None,
+        )
+        self.error = ft.Text("", size=12, color=EXPENSE_COLOR, visible=False)
+
+        self.dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text(f"Log payment — {debt.name}"),
+            content=ft.Container(width=420, content=ft.Column(
+                [
+                    ft.Text(
+                        f"{format_money(summary.balance_cents)} owed.",
+                        size=12,
+                        color=ft.Colors.ON_SURFACE_VARIANT,
+                    ),
+                    self.amount,
+                    self.funding,
+                    self.date,
+                    self.note,
+                    self.category,
+                    self.error,
+                ],
+                spacing=14,
+                tight=True,
+                horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
+            )),
+            actions=[
+                ft.TextButton(content="Cancel", on_click=lambda _: ctx.page.pop_dialog()),
+                ft.FilledButton(content="Record payment", icon=ft.Icons.PAYMENT, on_click=self._save),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+
+    def open(self) -> None:
+        self.ctx.page.show_dialog(self.dialog)
+
+    def _save(self, _: ft.Event) -> None:
+        self.amount.error = None
+        self.date.error = None
+        self.funding.error_text = None
+        self.error.visible = False
+        valid = True
+        try:
+            amount = parse_money(self.amount.value)
+        except ValueError as exc:
+            self.amount.error = str(exc)
+            valid = False
+        try:
+            on_date = parse_date(self.date.value)
+        except ValueError as exc:
+            self.date.error = str(exc)
+            valid = False
+        if not self.funding.value:
+            self.funding.error_text = "Select a funding account"
+            valid = False
+        if not valid:
+            # Repaint through the page so validation works even before the dialog is attached.
+            self.ctx.page.update()
+            return
+
+        debt = self.summary.debt
+        category_id = (
+            int(self.category.value)
+            if debt.account_id is None and self.category.value
+            else None
+        )
+        try:
+            self.ctx.service.record_debt_payment(
+                debt.id,
+                int(self.funding.value),
+                amount,
+                on_date,
+                category_id,
+                (self.note.value or "").strip(),
+            )
+        except RepositoryError as exc:
+            self.error.value = str(exc)
+            self.error.visible = True
+            self.ctx.page.update()
+            return
+        self.ctx.page.pop_dialog()
+        self.ctx.notify(f"Payment of {format_money(amount)} recorded for '{debt.name}'")
+        self.ctx.data_changed()
+
+
+class DebtHistoryDialog:
+    """Every payment tagged to a debt, newest first."""
+
+    def __init__(self, ctx: AppContext, debt: Debt) -> None:
+        self.ctx = ctx
+        self.debt = debt
+        payments = ctx.service.debt_payments(debt.id)
+        rows: list[ft.Control] = []
+        for tx in payments:
+            if tx.category_name:
+                source = tx.category_name
+            elif tx.transfer_account_name:
+                source = f"Transfer to {tx.transfer_account_name}"
+            else:
+                source = "Transfer"
+            rows.append(ft.Row(
+                [
+                    ft.Text(f"{tx.occurred_on:%b %d, %Y}", size=12, width=110),
+                    ft.Text(format_money(tx.amount_cents), size=12, width=90,
+                            text_align=ft.TextAlign.RIGHT),
+                    ft.Text(tx.account_name or "", size=12, width=120),
+                    ft.Text(source, size=12, expand=True),
+                ],
+                spacing=GAP,
+            ))
+        body: list[ft.Control] = [
+            ft.Column(rows, spacing=6, tight=True)
+            if payments
+            else ft.Text("No payments recorded yet.", size=12, color=ft.Colors.ON_SURFACE_VARIANT)
+        ]
+        if debt.account_id is not None:
+            body.append(ft.Text(
+                "Payments made outside the Log payment dialog still change the balance but are not listed here.",
+                size=11,
+                color=ft.Colors.ON_SURFACE_VARIANT,
+            ))
+        self.dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text(f"{debt.name} — payments"),
+            content=ft.Container(
+                width=560,
+                content=ft.Column(body, spacing=10, tight=True, scroll=ft.ScrollMode.AUTO),
+            ),
+            actions=[ft.TextButton(content="Close", on_click=lambda _: ctx.page.pop_dialog())],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+
+    def open(self) -> None:
+        self.ctx.page.show_dialog(self.dialog)

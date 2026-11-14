@@ -202,6 +202,24 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX ix_minimum_payments_account ON minimum_payments(account_id, month DESC);
     """,
+    # v6: savings goals and the transfer tag that records a contribution to one.
+    # Deleting a goal clears the tag on its transfers but keeps the transactions.
+    """
+    CREATE TABLE savings_goals (
+        id            INTEGER PRIMARY KEY,
+        name          TEXT NOT NULL,
+        target_cents  INTEGER NOT NULL CHECK (target_cents > 0),
+        target_date   TEXT NOT NULL,
+        start_date    TEXT NOT NULL,
+        account_id    INTEGER NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
+        initial_cents INTEGER NOT NULL DEFAULT 0 CHECK (initial_cents >= 0),
+        created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX ix_savings_goals_account ON savings_goals(account_id);
+
+    ALTER TABLE transactions ADD COLUMN goal_id INTEGER REFERENCES savings_goals(id) ON DELETE SET NULL;
+    CREATE INDEX ix_transactions_goal ON transactions(goal_id);
+    """,
 ]
 
 DEFAULT_EXTRA_ACCOUNTS: list[tuple[str, str, str]] = [

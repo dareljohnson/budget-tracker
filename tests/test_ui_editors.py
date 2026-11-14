@@ -1353,6 +1353,19 @@ class TestEditors(unittest.TestCase):
         self.assertFalse(editor.minimum.disabled)
         self.assertFalse(editor.minimum_note.visible)
 
+    def test_bill_paid_to_a_loan_says_loan_payment(self):
+        from budget_tracker.models import Account, AccountKind, Bill, BillFrequency
+        from budget_tracker.ui.views.bills import BillsView
+
+        loan = self.repo.add_account(Account("Mortgage", AccountKind.LOAN, opening_balance_cents=-100_000))
+        self.repo.add_bill(Bill(
+            "Mortgage", 1_000, BillFrequency.MONTHLY, date(2026, 12, 1),
+            self.accts["Checking"].id, pay_to_account_id=loan.id,
+        ))
+        view = BillsView(self.ctx)
+        texts = self._texts(view.list)
+        self.assertTrue(any("Loan payment" in text for text in texts))
+
 
 def _dialog_rule_texts(dialog) -> list:
     return [row.content.controls[1] for row in dialog.content.content.controls]

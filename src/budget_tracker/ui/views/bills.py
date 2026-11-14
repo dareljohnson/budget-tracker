@@ -113,7 +113,8 @@ class BillsView:
 
     def _row(self, bill: Bill, due: DueBill | None, today: date) -> ft.Container:
         if bill.is_card_payment:
-            detail = f"Card payment  •  {bill.account_name} → {bill.pay_to_account_name}"
+            payment_kind = "Loan payment" if bill.pay_to_account_kind is AccountKind.LOAN else "Card payment"
+            detail = f"{payment_kind}  •  {bill.account_name} → {bill.pay_to_account_name}"
         else:
             detail = f"{bill.category_name}  •  from {bill.account_name}"
         if bill.amount_cents:
@@ -277,7 +278,7 @@ class BillEditor:
             selected=[self.kind],
             segments=[
                 ft.Segment(value=BILL_KIND, label=ft.Text("Bill"), icon=ft.Icon(ft.Icons.RECEIPT)),
-                ft.Segment(value=CARD_KIND, label=ft.Text("Card payment"), icon=ft.Icon(ft.Icons.CREDIT_CARD)),
+                ft.Segment(value=CARD_KIND, label=ft.Text("Card or loan payment"), icon=ft.Icon(ft.Icons.CREDIT_CARD)),
             ],
             on_change=self._kind_changed,
         )
@@ -355,7 +356,7 @@ class BillEditor:
         self.payment_row.controls = [self.account, self.pay_to if is_card else self.category]
         self.amount.hint_text = "0 = pay the full balance owed" if is_card else None
         self.hint.value = (
-            "A recurring payment to a credit card or loan. Recorded as a transfer, so it isn't counted as spending twice."
+            "Paid as a transfer to a card or loan account."
             if is_card
             else "A recurring expense such as rent, utilities or a subscription."
         )

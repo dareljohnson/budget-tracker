@@ -324,6 +324,7 @@ class Bill:
     category_color: str | None = None
     category_icon: str | None = None
     pay_to_account_name: str | None = None
+    pay_to_account_kind: AccountKind | None = None
 
     @property
     def is_card_payment(self) -> bool:

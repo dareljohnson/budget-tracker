@@ -1187,7 +1187,7 @@ class Repository:
     _BILL_SELECT = (
         "SELECT b.id, b.name, b.amount_cents, b.frequency, b.next_due, b.anchor_day, b.account_id, b.category_id, "
         "b.pay_to_account_id, b.active, a.name AS account_name, c.name AS category_name, c.color AS category_color, "
-        "c.icon AS category_icon, pa.name AS pay_to_account_name "
+        "c.icon AS category_icon, pa.name AS pay_to_account_name, pa.kind AS pay_to_account_kind "
         "FROM bills b JOIN accounts a ON a.id = b.account_id "
         "LEFT JOIN categories c ON c.id = b.category_id "
         "LEFT JOIN accounts pa ON pa.id = b.pay_to_account_id"
@@ -1211,6 +1211,7 @@ class Repository:
             category_color=row["category_color"],
             category_icon=row["category_icon"],
             pay_to_account_name=row["pay_to_account_name"],
+            pay_to_account_kind=AccountKind(row["pay_to_account_kind"]) if row["pay_to_account_kind"] else None,
         )
 
     def list_bills(self, *, include_inactive: bool = True) -> list[Bill]:

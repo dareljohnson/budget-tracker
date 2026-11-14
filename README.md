@@ -123,6 +123,14 @@ Use the **Debts** page to track what you owe and see how different monthly payme
 2. A **standalone debt** keeps its balance in the app: update it yourself, or log payments to move it. A **linked debt** is tied to a credit-card account you already track, and its balance is the card's live amount owed. A card can be linked to only one debt.
 3. For a linked card, the plan minimum follows the **latest statement minimum** recorded for that card — the current month when recorded, otherwise the most recent. The minimum entered on the debt is only a fallback until a statement minimum exists.
 
+### Loan accounts
+
+To track a mortgage, auto, student, or personal loan alongside your other accounts, create an account with the **Loan** kind and enter the amount owed as its opening balance.
+
+- Link a debt to the loan account to make the debt's balance follow the account's live amount owed, just like a linked credit card.
+- Pay the loan with **Log payment** on the debt's card, **Pay loan** on the Accounts page, or a bill whose target is the loan account. Each payment is a transfer into the loan, so the owed balance drops without counting it as spending.
+- Loan payments are tracked as a single amount: the app does not split them into principal and interest.
+
 ### Logging payments
 
 Every payment moves real money and appears on the **Transactions** page.

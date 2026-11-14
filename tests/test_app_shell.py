@@ -1,6 +1,18 @@
+import tomllib
+from pathlib import Path
+
 import flet as ft
 
 from budget_tracker.main import _pinned_page
+
+
+def test_app_version_matches_pyproject():
+    from budget_tracker import __version__
+
+    root = Path(__file__).resolve().parents[1]
+    with (root / "pyproject.toml").open("rb") as handle:
+        project_version = tomllib.load(handle)["project"]["version"]
+    assert __version__ == project_version
 
 
 def test_pinned_page_pins_the_header_and_scrolls_the_body():

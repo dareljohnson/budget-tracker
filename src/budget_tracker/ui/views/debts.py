@@ -47,6 +47,19 @@ def savings_cents(first: DebtPlan, second: DebtPlan) -> int | None:
     return difference or None
 
 
+def plans_coincide(first: DebtPlan, second: DebtPlan) -> bool:
+    """True when both strategies produce the same order and totals."""
+    if (first.finished, first.months, first.total_interest_cents) != (
+        second.finished,
+        second.months,
+        second.total_interest_cents,
+    ):
+        return False
+    return [debt.id for debt, _ in first.payoff_order] == [
+        debt.id for debt, _ in second.payoff_order
+    ]
+
+
 class DebtsView:
     def __init__(self, ctx: AppContext) -> None:
         self.ctx = ctx
@@ -196,6 +209,12 @@ class DebtsView:
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
         ))
         controls.append(self._strategy_cards(plans, len(included)))
+        if plans_coincide(plans[DebtStrategy.AVALANCHE], plans[DebtStrategy.SNOWBALL]):
+            controls.append(ft.Text(
+                "Avalanche and snowball target the same debt here, so the plans match.",
+                size=12,
+                color=ft.Colors.ON_SURFACE_VARIANT,
+            ))
         controls.append(section_title("What extra buys"))
         controls.append(self._comparison_table())
         controls.append(self._included_table(included))

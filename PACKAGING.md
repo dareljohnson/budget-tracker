@@ -109,9 +109,10 @@ Statement import runs entirely locally and uses these runtime dependencies:
   scans, photos, and PDFs with no usable text layer.
 
 All of them are normal runtime dependencies in `pyproject.toml`, so `flet build` bundles them
-automatically. Expect the OCR models and ONNX Runtime to add **roughly 200 MB** to the installer and
-portable payload. The build scripts already pass `--no-compile-packages`: compiling `cv2/config.py` to
-a `.pyc` breaks the OCR import.
+automatically. Receipt capture reuses this same stack, so it needs no new dependency. Expect the OCR
+models and ONNX Runtime to add **roughly 200 MB** to the installer and portable payload. The build
+scripts already pass `--no-compile-packages`: compiling `cv2/config.py` to a `.pyc` breaks the OCR
+import.
 
 Import supports most US checking or savings statements — specifically, those that print a standard
 date / description / amount transaction table — in PDF, PNG, or JPEG form, and is accepted only when
@@ -216,7 +217,7 @@ To use it:
 2. **Actions → Build installers → Run workflow** builds the installers and attaches them as artifacts.
 3. Or tag a release to also publish a **GitHub Release** with all installers attached:
    ```bash
-   git tag v1.4.0 && git push origin v1.4.0
+   git tag v1.5.0 && git push origin v1.5.0
    ```
 
 Signing secrets aren't wired in by default. Add them as repository secrets and export `MACOS_SIGN_IDENTITY` /

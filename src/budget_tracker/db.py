@@ -261,6 +261,11 @@ MIGRATIONS: list[str] = [
     DROP TABLE accounts;
     ALTER TABLE accounts_new RENAME TO accounts;
     """,
+    # v9: receipts. The path is relative to the app data folder; the file is kept when a
+    # transaction is deleted. No table rebuild is needed for a plain ADD COLUMN.
+    """
+    ALTER TABLE transactions ADD COLUMN receipt_path TEXT;
+    """,
 ]
 
 FOREIGN_KEYS_OFF_MIGRATIONS = {8}

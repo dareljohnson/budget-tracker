@@ -258,8 +258,8 @@ class Repository:
     # ---------- transactions ----------
     _TX_SELECT = (
         "SELECT t.id, t.amount_cents, t.type, t.category_id, t.account_id, t.transfer_account_id, "
-        "t.goal_id, t.debt_id, t.occurred_on, t.description, t.statement_id, t.import_ref, c.name AS category_name, "
-        "c.color AS category_color, c.icon AS category_icon, a.name AS account_name, "
+        "t.goal_id, t.debt_id, t.receipt_path, t.occurred_on, t.description, t.statement_id, t.import_ref, "
+        "c.name AS category_name, c.color AS category_color, c.icon AS category_icon, a.name AS account_name, "
         "ta.name AS transfer_account_name"
     )
     _TX_FROM = (
@@ -289,6 +289,7 @@ class Repository:
             import_ref=row["import_ref"],
             goal_id=row["goal_id"],
             debt_id=row["debt_id"],
+            receipt_path=row["receipt_path"],
         )
 
     def _validate_transaction(self, tx: Transaction) -> None:
@@ -376,9 +377,9 @@ class Repository:
         with self.conn:
             cur = self.conn.execute(
                 "INSERT INTO transactions (amount_cents, type, account_id, category_id, transfer_account_id, "
-                "goal_id, debt_id, occurred_on, description, statement_id, import_ref) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (*self._tx_params(tx), tx.statement_id, tx.import_ref),
+                "goal_id, debt_id, occurred_on, description, statement_id, import_ref, receipt_path) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (*self._tx_params(tx), tx.statement_id, tx.import_ref, tx.receipt_path),
             )
             if (debt := self._payment_debt(tx)) is not None:
                 cur_debt = self.conn.execute(
@@ -419,6 +420,18 @@ class Repository:
                 )
                 if cur.rowcount == 0:
                     raise RepositoryError("Payment is more than the remaining balance")
+
+    def get_transaction(self, tx_id: int) -> Transaction | None:
+        row = self.conn.execute(self._TX_SELECT + self._TX_FROM + " WHERE t.id = ?", (tx_id,)).fetchone()
+        return self._row_to_transaction(row) if row is not None else None
+
+    def set_transaction_receipt(self, tx_id: int, path: str | None) -> None:
+        with self.conn:
+            updated = self.conn.execute(
+                "UPDATE transactions SET receipt_path = ? WHERE id = ?", (path, tx_id)
+            )
+            if updated.rowcount != 1:
+                raise RepositoryError("Transaction not found")
 
     def delete_transaction(self, tx_id: int) -> None:
         row = self._tx_debt_row(tx_id)

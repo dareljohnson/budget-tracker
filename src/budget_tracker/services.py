@@ -584,7 +584,7 @@ class BudgetService:
         self._validate_goal(name, target_cents, target_date, account_id, initial_cents)
         if account_id != goal.account_id and self.repo.goal_contribution_count(goal_id) > 0:
             raise RepositoryError(
-                "This goal already has contributions; delete and recreate it to use another account"
+                "This goal already has contributions; remove them or create a new goal for that account"
             )
         goal.name = name.strip()
         goal.target_cents = target_cents

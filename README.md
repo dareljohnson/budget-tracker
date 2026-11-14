@@ -176,6 +176,18 @@ The import is rejected — and nothing is written — if the parsed rows don't a
 - No bank feeds, and no OFX, QIF, CAMT, or CSV import. CSV is export-only.
 - Everything is parsed and stored locally. PDFs and images are never copied into the database: of the statement file itself, the app records only the SHA-256 hash (to detect repeat imports) and, at most, the last four account digits.
 
+## Scanning receipts
+
+On the **Transactions** page, click **Scan receipt** to turn a paper receipt into an expense with its image attached. Choose **Scan with scanner** to scan one page with the first scanner connected to a Windows PC, or **Choose photo or scan file** to pick a PDF, PNG, or JPEG on any platform.
+
+- Text recognition runs on your PC with the same local OCR engine the statement importer uses. The image is never uploaded.
+- Review the merchant, amount, and date before saving. **Save** stays disabled until the amount, date, account, and category are filled in; a total the receipt does not print is left blank rather than guessed.
+- When the receipt prints a card that matches no saved account, the account is left blank. Choose one, or add the card's last four digits on the **Accounts** page so future receipts match it.
+- The image is copied to `<data folder>/receipts/` when you save. The original file is never changed.
+- Only page 1 of a multi-page PDF is read.
+- Rows with a receipt show a receipt icon; click it to open the image. The transaction editor can attach, replace, or remove a receipt later.
+- Deleting a transaction leaves its stored receipt image on disk.
+
 ## Reconciling accounts
 
 - A statement import records its own reconciliation at the statement's ending balance.

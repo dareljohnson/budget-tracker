@@ -366,7 +366,7 @@ class ReceiptImportDialog:
 
     # ---------- saving ----------
     def _save(self, _: ft.Event | None = None) -> None:
-        if self._saving or self._closed_notified:
+        if self._busy or self._saving or self._closed_notified:
             return
         valid = True
         try:

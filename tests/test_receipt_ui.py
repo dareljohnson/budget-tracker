@@ -14,7 +14,7 @@ import flet as ft
 from budget_tracker.db import connect
 from budget_tracker.models import Transaction, TransactionType
 from budget_tracker.receipts import storage
-from budget_tracker.repository import Repository
+from budget_tracker.repository import Repository, RepositoryError
 from budget_tracker.services import BudgetService
 
 
@@ -286,6 +286,48 @@ class TestReceiptImportDialog(ReceiptDialogTestCase):
         with mock.patch("budget_tracker.ui.views.receipts.scan_receipt") as scan:
             asyncio.run(dialog._scan())
         scan.assert_not_called()
+
+    def test_save_is_ignored_while_loading(self):
+        dialog = self._dialog()
+        asyncio.run(dialog.open())
+        dialog._source_path = self.png
+        dialog._install(self._draft())
+        dialog._busy = True
+        dialog._save(None)
+        self.assertEqual(self.repo.list_transactions(), [])
+        self.assertTrue(dialog.dialog.open)
+
+    def test_save_failure_reenables_save_and_can_retry(self):
+        dialog = self._dialog()
+        asyncio.run(dialog.open())
+        dialog._source_path = self.png
+        dialog._install(self._draft())
+        with mock.patch.object(
+            self.ctx.service,
+            "create_receipt_transaction",
+            side_effect=RepositoryError("disk problem"),
+        ):
+            dialog._save(None)
+        self.assertFalse(dialog._saving)
+        self.assertFalse(dialog.save_button.disabled)
+        self.assertTrue(dialog.dialog.open)
+        dialog._save(None)
+        self.assertEqual(len(self.repo.list_transactions()), 1)
+
+    def test_repeated_scan_cleans_the_previous_temp_dir(self):
+        dialog = self._dialog()
+        first = Path(tempfile.mkdtemp(prefix="budget-tracker-scan-test-"))
+        second = Path(tempfile.mkdtemp(prefix="budget-tracker-scan-test-"))
+        self.addCleanup(lambda: second.exists() and second.rmdir())
+        dialog._temp_dir = first
+        with mock.patch(
+            "budget_tracker.ui.views.receipts.tempfile.mkdtemp", return_value=str(second)
+        ), mock.patch(
+            "budget_tracker.ui.views.receipts.scan_receipt",
+            return_value=second / "scan.png",
+        ), mock.patch.object(dialog, "_load", new=mock.AsyncMock()):
+            asyncio.run(dialog._scan())
+        self.assertFalse(first.exists())
 
     def test_no_accounts_blocks_capture(self):
         closed = []

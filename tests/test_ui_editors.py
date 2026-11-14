@@ -945,6 +945,73 @@ class TestEditors(unittest.TestCase):
         loaded = self.repo.list_transactions(limit=1)[0]
         self.assertEqual((loaded.amount_cents, loaded.goal_id), (6_000, goal.id))
 
+    def test_debts_view_empty_and_after_adding(self):
+        from budget_tracker.models import DebtKind
+        from budget_tracker.ui.views.debts import DebtsView
+
+        view = DebtsView(self.ctx)
+        self.assertTrue(any("No debts" in text for text in self._texts(view.grid.controls[0])))
+        debt = self.ctx.service.create_debt("Loan", DebtKind.PERSONAL, 100_000, 1200, 2_000)
+        view.refresh()
+        texts = self._texts(view.grid.controls[0])
+        self.assertIn("Loan", texts)
+        self.assertTrue(any("$1,000.00" in text for text in texts))
+
+    def test_debts_grid_is_not_stretch_aligned(self):
+        from budget_tracker.ui.views.debts import DebtsView
+
+        view = DebtsView(self.ctx)
+        self.assertNotEqual(view.grid.vertical_alignment, ft.CrossAxisAlignment.STRETCH)
+
+    def test_debt_editor_creates_and_links(self):
+        from budget_tracker.models import Account, AccountKind, DebtKind
+        from budget_tracker.ui.views.debts import DebtEditor
+
+        card = self.accts["Credit Card"]
+        other = next(c for c in self.repo.list_categories() if c.name == "Other")
+        self.repo.add_transaction(Transaction(
+            40_000, TransactionType.EXPENSE, other.id, date(2026, 11, 1),
+            "Purchase", account_id=card.id,
+        ))
+        editor = DebtEditor(self.ctx, None)
+        editor.name.value = "Visa"
+        editor.kind.value = DebtKind.CREDIT_CARD.value
+        editor.apr.value = "24.99"
+        editor.minimum.value = "105.00"
+        editor.link.value = str(card.id)
+        editor._save(None)
+        debt = self.ctx.repo.list_debts()[0]
+        self.assertEqual((debt.name, debt.balance_cents, debt.apr_bps), ("Visa", 40_000, 2499))
+        self.assertEqual(debt.account_id, card.id)
+
+    def test_debt_editor_rejects_a_bad_apr(self):
+        from budget_tracker.models import DebtKind
+        from budget_tracker.ui.views.debts import DebtEditor
+
+        editor = DebtEditor(self.ctx, None)
+        editor.name.value = "Loan"
+        editor.kind.value = DebtKind.PERSONAL.value
+        editor.balance.value = "500.00"
+        editor.apr.value = "150"
+        editor.minimum.value = "10.00"
+        editor._save(None)
+        self.assertEqual(self.ctx.repo.list_debts(), [])
+        self.assertEqual(editor.apr.error, "Enter a rate between 0 and 100")
+
+    def test_nav_indices_stay_in_sync_with_debts(self):
+        from budget_tracker import main as shell
+        self.assertEqual(shell.NAV_ITEMS[5][0], "Debts")
+        self.assertEqual(shell.NAV_ITEMS[shell.BILLS_INDEX][0], "Bills")
+
+    def test_percent_parsing_and_formatting(self):
+        from budget_tracker.formatting import format_percent, parse_percent_bps
+        self.assertEqual(parse_percent_bps("24.99"), 2499)
+        self.assertEqual(parse_percent_bps("0"), 0)
+        self.assertEqual(parse_percent_bps("24.99%"), 2499)
+        self.assertEqual(format_percent(2499), "24.99%")
+        with self.assertRaises(ValueError):
+            parse_percent_bps("101")
+
     def test_editing_a_debt_payment_preserves_the_tag(self):
         from budget_tracker.models import Debt, DebtKind
         from budget_tracker.ui.views.transactions import TransactionEditor

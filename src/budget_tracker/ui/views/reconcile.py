@@ -7,7 +7,7 @@ from datetime import date
 import flet as ft
 
 from ...formatting import format_money, month_key, parse_date, parse_money, parse_signed_money
-from ...models import Account, Reconciliation
+from ...models import Account, AccountKind, Reconciliation
 from ...repository import RepositoryError
 from ..components import date_field
 from ..context import AppContext
@@ -47,7 +47,7 @@ class BalanceCheckDialog:
             prefix_icon=ft.Icons.PAYMENT,
             keyboard_type=ft.KeyboardType.NUMBER,
             hint_text="Minimum printed on this statement",
-            visible=self.is_liability,
+            visible=account.kind is AccountKind.CREDIT_CARD,
         )
 
         self.computed_value = ft.Text(size=15, weight=ft.FontWeight.W_600)

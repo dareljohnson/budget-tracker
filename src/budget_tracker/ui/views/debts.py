@@ -617,6 +617,8 @@ class DebtEditor:
                     self.minimum_note.value = f"Driven by the {month_label(status.month)} statement minimum"
                     self.minimum_note.visible = True
                 else:
+                    if was_statement_driven:
+                        self.minimum.value = self._stored_minimum_value()
                     self.minimum.disabled = False
                     self.minimum_note.visible = False
         else:

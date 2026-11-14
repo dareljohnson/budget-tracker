@@ -266,7 +266,7 @@ class BudgetService:
         account = self.repo.get_account(account_id)
         if account is None:
             raise RepositoryError("Account not found")
-        if not account.kind.is_liability:
+        if account.kind is not AccountKind.CREDIT_CARD:
             raise RepositoryError("Minimum payments apply to credit cards only")
         try:
             datetime.strptime(month, "%Y-%m")

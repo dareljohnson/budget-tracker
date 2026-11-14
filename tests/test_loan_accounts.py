@@ -15,6 +15,60 @@ class TestLoanAccountKind(unittest.TestCase):
 
 
 class TestMigrationV8(unittest.TestCase):
+    def _v7_database(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        for version, script in enumerate(MIGRATIONS[:7], start=1):
+            conn.executescript(f"BEGIN;\n{script}\nPRAGMA user_version = {version};\nCOMMIT;")
+        _seed(conn)
+        return conn
+
+    def test_failed_v8_migration_preserves_the_database(self):
+        conn = self._v7_database()
+        self.addCleanup(conn.close)
+        before = [
+            tuple(row)
+            for row in conn.execute(
+                "SELECT id, name, kind, opening_balance_cents, color, created_at, number_last4 "
+                "FROM accounts ORDER BY id"
+            )
+        ]
+        original = MIGRATIONS[7]
+        MIGRATIONS[7] = "CREATE TABLE broken (;"
+        try:
+            with self.assertRaises(sqlite3.OperationalError):
+                migrate(conn)
+        finally:
+            MIGRATIONS[7] = original
+
+        self.assertEqual(schema_version(conn), 7)
+        self.assertEqual(conn.execute("PRAGMA foreign_keys").fetchone()[0], 1)
+        after = [
+            tuple(row)
+            for row in conn.execute(
+                "SELECT id, name, kind, opening_balance_cents, color, created_at, number_last4 "
+                "FROM accounts ORDER BY id"
+            )
+        ]
+        self.assertEqual(after, before)
+
+    def test_preexisting_foreign_key_violation_blocks_migration(self):
+        conn = self._v7_database()
+        self.addCleanup(conn.close)
+        conn.execute("PRAGMA foreign_keys = OFF")
+        conn.execute(
+            "INSERT INTO transactions (amount_cents, type, account_id, category_id, occurred_on) "
+            "VALUES (500, 'expense', 9999, 1, '2026-01-02')"
+        )
+        conn.commit()
+        conn.execute("PRAGMA foreign_keys = ON")
+
+        with self.assertRaises(sqlite3.IntegrityError) as raised:
+            migrate(conn)
+
+        self.assertIn("Pre-existing foreign key violations", str(raised.exception))
+        self.assertEqual(schema_version(conn), 7)
+
     def test_fresh_schema_accepts_a_loan_account(self):
         repo = Repository(connect(":memory:"))
         self.addCleanup(repo.close)
@@ -197,6 +251,10 @@ class TestLoanDebtLink(unittest.TestCase):
         )
         self.assertEqual((tx.type, tx.transfer_account_id), (TransactionType.TRANSFER, self.loan.id))
         self.assertEqual(self.service.debt_summary(debt.id).balance_cents, 12_294_451)
+
+    def test_a_loan_rejects_a_statement_minimum(self):
+        with self.assertRaisesRegex(RepositoryError, "credit cards only"):
+            self.service.record_minimum_payment(self.loan.id, "2026-11", 100_000)
 
     def test_any_kind_change_is_refused_while_linked(self):
         debt = self.service.create_debt(

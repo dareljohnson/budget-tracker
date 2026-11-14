@@ -385,6 +385,28 @@ class TestExportAndFormatting(RepoTestCase):
         self.assertAlmostEqual(float(budgets["D2"][1]), 35.0)  # expense minus refund
         self.assertEqual(budgets["G2"][1], "On track")
 
+    def test_xlsx_amount_owed_formula_covers_loan_accounts(self):
+        self.repo.add_account(Account("Mortgage", AccountKind.LOAN, opening_balance_cents=-100_000))
+        with tempfile.TemporaryDirectory() as tmp:
+            path = BudgetService(self.repo).export_xlsx(Path(tmp) / "out.xlsx", today=date(2026, 3, 10))
+            sheets = self._read_xlsx(path)
+        accounts = sheets["Accounts"]
+
+        loan_row = next(
+            ref[1:] for ref, (_, value) in accounts.items()
+            if ref[0] == "A" and value == "Mortgage"
+        )
+        formula, cached = accounts[f"G{loan_row}"]
+        self.assertIn("Credit Card", formula)
+        self.assertIn("Loan", formula)
+        self.assertAlmostEqual(float(cached), 1000.0)
+
+        total_row = next(
+            ref[1:] for ref, (_, value) in accounts.items()
+            if ref[0] == "A" and value == "Net worth"
+        )
+        self.assertAlmostEqual(float(accounts[f"G{total_row}"][1]), 1000.0)
+
     def test_xlsx_rejects_invalid_sheet_names(self):
         for bad in ("", "a/b", "x" * 32):
             with self.assertRaises(ValueError, msg=bad):

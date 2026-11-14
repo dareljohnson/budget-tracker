@@ -1163,6 +1163,15 @@ class TestEditors(unittest.TestCase):
             [("2026-11", 3500)],
         )
 
+    def test_balance_check_statement_minimum_is_only_for_credit_cards(self):
+        from budget_tracker.ui.views.reconcile import BalanceCheckDialog
+
+        card_dialog = BalanceCheckDialog(self.ctx, self.accts["Credit Card"])
+        self.assertTrue(card_dialog.minimum.visible)
+        loan = self.repo.add_account(Account("Mortgage", AccountKind.LOAN, opening_balance_cents=-100_000))
+        loan_dialog = BalanceCheckDialog(self.ctx, loan)
+        self.assertFalse(loan_dialog.minimum.visible)
+
     def test_standalone_payment_dialog_moves_money(self):
         from budget_tracker.models import DebtKind
         from budget_tracker.ui.views.debts import DebtPaymentDialog
@@ -1349,6 +1358,37 @@ class TestEditors(unittest.TestCase):
         self.assertEqual(editor.minimum.value, "75.00")
         editor.link.value = str(loan.id)
         editor._link_changed()
+        self.assertEqual(editor.minimum.value, "105.00")
+        self.assertFalse(editor.minimum.disabled)
+        self.assertFalse(editor.minimum_note.visible)
+
+    def test_debt_editor_restores_the_stored_minimum_when_unlinking(self):
+        from budget_tracker.ui.views.debts import DebtEditor
+
+        debt = self._statement_driven_debt()
+        editor = DebtEditor(self.ctx, debt)
+        self.assertTrue(editor.minimum.disabled)
+        self.assertEqual(editor.minimum.value, "75.00")
+
+        editor.link.value = "none"
+        editor._link_changed()
+
+        self.assertEqual(editor.minimum.value, "105.00")
+        self.assertFalse(editor.minimum.disabled)
+        self.assertFalse(editor.minimum_note.visible)
+
+    def test_debt_editor_restores_the_stored_minimum_for_a_card_without_a_statement(self):
+        from budget_tracker.ui.views.debts import DebtEditor
+
+        visa = self.repo.add_account(Account("Visa", AccountKind.CREDIT_CARD))
+        debt = self._statement_driven_debt()
+        editor = DebtEditor(self.ctx, debt)
+        self.assertTrue(editor.minimum.disabled)
+        self.assertEqual(editor.minimum.value, "75.00")
+
+        editor.link.value = str(visa.id)
+        editor._link_changed()
+
         self.assertEqual(editor.minimum.value, "105.00")
         self.assertFalse(editor.minimum.disabled)
         self.assertFalse(editor.minimum_note.visible)

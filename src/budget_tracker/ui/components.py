@@ -181,8 +181,18 @@ def transaction_row(
     tx: Transaction,
     on_edit: Callable[[Transaction], None] | None = None,
     on_delete: Callable[[Transaction], None] | None = None,
+    on_open_receipt: Callable[[Transaction], None] | None = None,
 ) -> ft.Container:
     actions: list[ft.Control] = []
+    if tx.receipt_path and on_open_receipt:
+        actions.append(
+            ft.IconButton(
+                ft.Icons.RECEIPT_LONG,
+                tooltip="Open receipt",
+                icon_size=20,
+                on_click=lambda _: on_open_receipt(tx),
+            )
+        )
     if on_edit:
         actions.append(ft.IconButton(ft.Icons.EDIT_OUTLINED, tooltip="Edit", icon_size=20, on_click=lambda _: on_edit(tx)))
     if on_delete:

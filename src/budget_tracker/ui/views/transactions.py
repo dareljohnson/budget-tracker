@@ -10,6 +10,7 @@ import flet as ft
 from ...config import export_dir
 from ...formatting import format_money, month_label, parse_date, parse_money, parse_signed_money
 from ...models import Transaction, TransactionType
+from ...receipts.storage import open_receipt
 from ...repository import RepositoryError
 from ..components import card, confirm_dialog, date_field, empty_state, page_header, transaction_row
 from ..context import AppContext
@@ -144,7 +145,10 @@ class TransactionsView:
         self._sync_filter_options()
         transactions = self._current_transactions()
         if transactions:
-            self.list_column.controls = [transaction_row(t, self.open_editor, self._confirm_delete) for t in transactions]
+            self.list_column.controls = [
+                transaction_row(t, self.open_editor, self._confirm_delete, on_open_receipt=self._open_receipt)
+                for t in transactions
+            ]
         else:
             self.list_column.controls = [
                 empty_state(
@@ -179,6 +183,14 @@ class TransactionsView:
     def _import_closed(self) -> None:
         self.import_button.disabled = False
         self.import_button.update()
+
+    def _open_receipt(self, tx: Transaction) -> None:
+        try:
+            open_receipt(tx.receipt_path)
+        except FileNotFoundError:
+            self.ctx.notify("The receipt file is missing", error=True)
+        except OSError as exc:
+            self.ctx.notify(f"Could not open the receipt: {exc}", error=True)
 
     def _confirm_delete(self, tx: Transaction) -> None:
         def delete() -> None:

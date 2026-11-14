@@ -523,9 +523,20 @@ class ReceiptAttachmentDialog:
             self.on_close()
 
     def _cleanup_temp(self) -> None:
-        """Remove the scanner's temporary folder; the user's own source file is never touched."""
-        if self._temp_dir is not None:
-            shutil.rmtree(self._temp_dir, ignore_errors=True)
+        """Remove the scanner's temporary folder; the user's own source file is never touched.
+
+        The path is kept until a removal actually succeeds, so a failed attempt (for
+        example while the scanner still holds the file) can be retried when the dialog closes.
+        """
+        if self._temp_dir is None:
+            return
+        try:
+            shutil.rmtree(self._temp_dir)
+        except FileNotFoundError:
+            self._temp_dir = None
+        except OSError:
+            return
+        else:
             self._temp_dir = None
 
     # ---------- sources ----------
@@ -544,6 +555,8 @@ class ReceiptAttachmentDialog:
             return
         finally:
             self._set_busy(False)
+        if self._closed_notified:
+            return
         chosen = next((f for f in files or [] if f.path), None)
         if chosen is None:
             return
@@ -569,14 +582,15 @@ class ReceiptAttachmentDialog:
         finally:
             self._set_busy(False)
         try:
-            # The service copies the scan synchronously, so the temp folder can go now.
-            self._attach(destination)
+            if not self._closed_notified:
+                # The service copies the scan synchronously, so the temp folder can go now.
+                self._attach(destination)
         finally:
             self._cleanup_temp()
 
     # ---------- attach and remove ----------
     def _attach(self, path: Path) -> None:
-        if self._busy or self.tx.id is None:
+        if self._busy or self._closed_notified or self.tx.id is None:
             return
         self._set_busy(True)
         try:
@@ -609,8 +623,9 @@ class ReceiptAttachmentDialog:
         self.ctx.data_changed()
         if self.on_changed is not None:
             self.on_changed(None)
-        self.ctx.notify("Receipt removed")
+        # Close before notifying so _close cannot pop the "Receipt removed" SnackBar.
         self._close()
+        self.ctx.notify("Receipt removed")
 
     # ---------- presentation ----------
     def _refresh_preview(self) -> None:

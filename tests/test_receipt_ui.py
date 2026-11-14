@@ -547,6 +547,40 @@ class TestTransactionEditorReceipts(ReceiptDialogTestCase):
         self.assertEqual(updated.description, "Changed description")
         self.assertEqual(updated.receipt_path, stored)
 
+    def test_editor_receipt_section_wiring(self):
+        saved = self._saved_transaction()
+        editor = self._editor(saved)
+        opened = []
+
+        class FakeAttachmentDialog:
+            def __init__(self, ctx, tx, *, on_changed=None, on_close=None):
+                opened.append((ctx, tx, on_changed))
+
+            def open(self) -> None:
+                pass
+
+        with mock.patch(
+            "budget_tracker.ui.views.transactions.ReceiptAttachmentDialog",
+            FakeAttachmentDialog,
+        ):
+            editor._attach_receipt(None)
+        self.assertEqual(len(opened), 1)
+        self.assertIs(opened[0][1], saved)
+
+        editor._receipt_changed("receipts/x.png")
+        self.assertEqual(editor.receipt_status.value, "Receipt attached")
+        self.assertEqual(editor.attach_receipt_button.content, "Replace receipt")
+        self.assertTrue(editor.remove_receipt_button.visible)
+
+        # Inline removal clears the DB link and restores the attach state.
+        self.repo.set_transaction_receipt(saved.id, "receipts/x.png")
+        editor._remove_receipt()
+
+        self.assertEqual(editor.receipt_status.value, "No receipt attached")
+        self.assertEqual(editor.attach_receipt_button.content, "Attach receipt")
+        self.assertFalse(editor.remove_receipt_button.visible)
+        self.assertIsNone(self.repo.get_transaction(saved.id).receipt_path)
+
 
 class TestReceiptAttachmentDialog(ReceiptDialogTestCase):
     def _saved_transaction(self) -> Transaction:
@@ -581,22 +615,49 @@ class TestReceiptAttachmentDialog(ReceiptDialogTestCase):
         self.assertEqual(dialog.status.value, "No receipt attached.")
         self.assertFalse(dialog.remove_button.visible)
 
-    def test_attachment_failure_keeps_the_dialog_and_link_usable(self):
+    def test_attachment_after_close_does_not_attach(self):
         from budget_tracker.ui.views.receipts import ReceiptAttachmentDialog
 
         stored = storage.store_receipt(self.png)
         saved = self._saved_transaction()
         self.repo.set_transaction_receipt(saved.id, stored)
         saved.receipt_path = stored
-        dialog = ReceiptAttachmentDialog(self.ctx, saved)
+        seen: list[str | None] = []
+        dialog = ReceiptAttachmentDialog(self.ctx, saved, on_changed=seen.append)
+        dialog._closed_notified = True
+
+        dialog._attach(self.png)
+
+        self.assertEqual(self.repo.get_transaction(saved.id).receipt_path, stored)
+        self.assertTrue((self.tmp / stored).exists())
+        self.assertEqual(seen, [])
+
+    def test_attachment_failure_keeps_the_db_link_and_allows_retry(self):
+        from budget_tracker.ui.views.receipts import ReceiptAttachmentDialog
+
+        saved = self._saved_transaction()
+        seen: list[str | None] = []
+        dialog = ReceiptAttachmentDialog(self.ctx, saved, on_changed=seen.append)
+        dialog._attach(self.png)
+        first = self.repo.get_transaction(saved.id).receipt_path
+        first_file = self.tmp / first
+
         with mock.patch.object(
             self.ctx.service, "attach_receipt", side_effect=RepositoryError("disk problem")
         ):
             dialog._attach(self.png)
 
-        self.assertEqual(saved.receipt_path, stored)
-        self.assertTrue(dialog.remove_button.visible)
+        self.assertEqual(self.repo.get_transaction(saved.id).receipt_path, first)
+        self.assertTrue(first_file.exists())
+        self.assertFalse(dialog._busy)
+        self.assertEqual(seen, [first])
         self.assertIn("disk problem", self.page.errors[0])
+
+        dialog._attach(self.png)
+        second = self.repo.get_transaction(saved.id).receipt_path
+        self.assertNotEqual(second, first)
+        self.assertEqual(seen, [first, second])
+        self.assertTrue((self.tmp / second).exists())
 
 
 class TestReceiptHeaderButton(ReceiptDialogTestCase):

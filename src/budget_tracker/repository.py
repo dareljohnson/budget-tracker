@@ -20,6 +20,7 @@ from .models import (
     CategoryTotal,
     DueBill,
     MonthTotal,
+    MinimumPayment,
     Reconciliation,
     Statement,
     Summary,
@@ -611,6 +612,61 @@ class Repository:
             (account_id,),
         )
         return [self._row_to_reconciliation(r) for r in rows]
+
+    # ---------- credit card minimum payments ----------
+    def list_minimum_payments(self, account_id: int) -> list[MinimumPayment]:
+        rows = self.conn.execute(
+            "SELECT id, account_id, month, amount_cents FROM minimum_payments "
+            "WHERE account_id = ? ORDER BY month",
+            (account_id,),
+        )
+        return [
+            MinimumPayment(
+                id=row["id"],
+                account_id=row["account_id"],
+                month=row["month"],
+                amount_cents=row["amount_cents"],
+            )
+            for row in rows
+        ]
+
+    def set_minimum_payment(self, account_id: int, month: str, amount_cents: int) -> MinimumPayment:
+        """Insert or update one month's minimum; the pair (account, month) is unique."""
+        if amount_cents <= 0:
+            raise RepositoryError("Minimum payment must be greater than zero")
+        with self.conn:
+            self.conn.execute(
+                "INSERT INTO minimum_payments (account_id, month, amount_cents) VALUES (?, ?, ?) "
+                "ON CONFLICT(account_id, month) DO UPDATE SET amount_cents = excluded.amount_cents",
+                (account_id, month, amount_cents),
+            )
+        row = self.conn.execute(
+            "SELECT id, account_id, month, amount_cents FROM minimum_payments "
+            "WHERE account_id = ? AND month = ?",
+            (account_id, month),
+        ).fetchone()
+        return MinimumPayment(
+            id=row["id"],
+            account_id=row["account_id"],
+            month=row["month"],
+            amount_cents=row["amount_cents"],
+        )
+
+    def delete_minimum_payment(self, account_id: int, month: str) -> None:
+        with self.conn:
+            self.conn.execute(
+                "DELETE FROM minimum_payments WHERE account_id = ? AND month = ?",
+                (account_id, month),
+            )
+
+    def card_payments(self, account_id: int) -> list[tuple[date, int]]:
+        """Transfers into a credit card, oldest first."""
+        rows = self.conn.execute(
+            "SELECT occurred_on, amount_cents FROM transactions "
+            "WHERE type = 'transfer' AND transfer_account_id = ? ORDER BY occurred_on, id",
+            (account_id,),
+        )
+        return [(date.fromisoformat(row["occurred_on"]), row["amount_cents"]) for row in rows]
 
     def reconciliation_for_statement(self, statement_id: int) -> Reconciliation | None:
         """The reconciliation written by one import, independent of other checks' dates."""

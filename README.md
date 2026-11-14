@@ -87,6 +87,7 @@ tests/             data-layer and UI editor tests
 1. Add the card on the **Accounts** page. If it already has a balance, enter that as **Amount currently owed**.
 2. Record purchases as **Expenses** paid with the card. The card's balance owed goes up.
 3. When you pay the bill, click **Pay card** (or add a **Transfer** from checking to the card). Checking goes down and the amount owed goes down. Your spending doesn't change, because you already counted it when you made the purchases.
+4. Each month, record the **minimum payment** printed on the card's statement — from the card's **Minimum** row, or while using **Check balance**. The card shows whether that month's minimum has been paid: payments into the card are matched oldest-unpaid first, so a payment made the following month still counts, and anything above a minimum rolls into the next recorded month.
 
 Existing databases are upgraded automatically: transactions recorded before accounts existed are assigned to a **Checking** account.
 

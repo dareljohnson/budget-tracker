@@ -800,6 +800,43 @@ class TestEditors(unittest.TestCase):
         self.assertEqual(self.repo.list_category_rules(), [])
         self.assertIsNone(self.repo.suggest_category_id("Card Purchase Kroger #443", TransactionType.EXPENSE))
 
+    def test_minimum_payment_dialog_records_and_lists(self):
+        from budget_tracker.ui.views.minimum_payments import MinimumPaymentDialog
+
+        card = self.accts["Credit Card"]
+        dialog = MinimumPaymentDialog(self.ctx, card)
+        dialog.month.value = "2026-11"
+        dialog.amount.value = "35.00"
+        dialog._save(None)
+        self.assertEqual(
+            [(payment.month, payment.amount_cents) for payment in self.repo.list_minimum_payments(card.id)],
+            [("2026-11", 3500)],
+        )
+        self.assertEqual(dialog.history.controls[0].controls[0].value, "November 2026")
+
+    def test_minimum_status_chip_states(self):
+        from budget_tracker.models import MinimumPaymentStatus
+        from budget_tracker.ui.views.minimum_payments import minimum_status_chip
+
+        self.assertEqual(minimum_status_chip(MinimumPaymentStatus("2026-11", 3500, 3500)).value, "Paid")
+        self.assertIn("Partial", minimum_status_chip(MinimumPaymentStatus("2026-11", 3500, 1000)).value)
+        self.assertEqual(minimum_status_chip(MinimumPaymentStatus("2026-11", 3500, 0)).value, "Unpaid")
+        self.assertEqual(minimum_status_chip(None).value, "Not recorded")
+
+    def test_balance_check_records_the_statement_minimum(self):
+        from budget_tracker.ui.views.reconcile import BalanceCheckDialog
+
+        card = self.accts["Credit Card"]
+        dialog = BalanceCheckDialog(self.ctx, card)
+        dialog.date.value = "2026-11-15"
+        dialog.stated.value = "100.00"
+        dialog.minimum.value = "35.00"
+        dialog._save(None)
+        self.assertEqual(
+            [(payment.month, payment.amount_cents) for payment in self.repo.list_minimum_payments(card.id)],
+            [("2026-11", 3500)],
+        )
+
 
 def _dialog_rule_texts(dialog) -> list:
     return [row.content.controls[1] for row in dialog.content.content.controls]

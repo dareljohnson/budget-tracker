@@ -140,6 +140,31 @@ class Reconciliation:
 
 
 @dataclass(slots=True, frozen=True)
+class MinimumPayment:
+    """The minimum payment printed on one credit card statement."""
+
+    account_id: int
+    month: str  # 'YYYY-MM'
+    amount_cents: int
+    id: int | None = None
+
+
+@dataclass(slots=True, frozen=True)
+class MinimumPaymentStatus:
+    """One month's minimum plus how much of it has been paid."""
+
+    month: str
+    amount_cents: int
+    paid_cents: int = 0
+
+    @property
+    def state(self) -> str:
+        if self.paid_cents >= self.amount_cents:
+            return "paid"
+        return "partial" if self.paid_cents else "unpaid"
+
+
+@dataclass(slots=True, frozen=True)
 class CategoryRule:
     match_text: str
     category_id: int

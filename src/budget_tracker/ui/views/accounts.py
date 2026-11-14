@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import flet as ft
 
-from ...formatting import format_money, parse_signed_money
+from ...formatting import format_money, month_label, parse_signed_money
 from ...models import Account, AccountBalance, AccountKind, TransactionType
 from ...repository import RepositoryError
 from ..components import account_avatar, balance_text, card, confirm_dialog, empty_state, page_header, stat_card
 from ..context import AppContext
 from ..theme import EXPENSE_COLOR, GAP, INCOME_COLOR, PALETTE, SEED_COLOR
+from .minimum_payments import MinimumPaymentDialog, minimum_status_chip
 from .reconcile import BalanceCheckDialog
 from .transactions import TransactionEditor
 
@@ -114,26 +115,51 @@ class AccountsView:
                     weight=ft.FontWeight.W_500,
                 )
             )
-        return card(
-            ft.Column(
+        minimum = self.ctx.service.current_minimum_payment(account.id) if is_card else None
+        children: list[ft.Control] = [
+            ft.Row(
                 [
-                    ft.Row(
-                        [
-                            account_avatar(account, 44),
-                            ft.Column(heading, spacing=2, expand=True),
-                        ],
-                        spacing=GAP,
-                    ),
-                    ft.Column(
-                        [ft.Text(caption, size=12, color=ft.Colors.ON_SURFACE_VARIANT), balance_text(balance, size=26)],
-                        spacing=0,
-                    ),
-                    ft.Row(actions, alignment=ft.MainAxisAlignment.END, spacing=4),
+                    account_avatar(account, 44),
+                    ft.Column(heading, spacing=2, expand=True),
                 ],
-                spacing=12,
+                spacing=GAP,
             ),
-            col={"xs": 12, "md": 6, "xl": 4},
-        )
+            ft.Column(
+                [ft.Text(caption, size=12, color=ft.Colors.ON_SURFACE_VARIANT), balance_text(balance, size=26)],
+                spacing=0,
+            ),
+        ]
+        if is_card:
+            minimum_controls: list[ft.Control] = [
+                ft.Text("Minimum", size=12, color=ft.Colors.ON_SURFACE_VARIANT)
+            ]
+            if minimum:
+                minimum_controls.append(
+                    ft.Text(
+                        f"{format_money(minimum.amount_cents)} · {month_label(minimum.month)}",
+                        size=13,
+                        weight=ft.FontWeight.W_600,
+                    )
+                )
+            minimum_controls.append(minimum_status_chip(minimum))
+            minimum_controls.append(
+                ft.IconButton(
+                    ft.Icons.EDIT_OUTLINED,
+                    tooltip="Record minimum payment",
+                    icon_size=18,
+                    on_click=lambda _: MinimumPaymentDialog(self.ctx, account).open(),
+                )
+            )
+            children.append(
+                ft.Row(
+                    minimum_controls,
+                    spacing=8,
+                    wrap=True,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                )
+            )
+        children.append(ft.Row(actions, alignment=ft.MainAxisAlignment.END, spacing=4))
+        return card(ft.Column(children, spacing=12), col={"xs": 12, "md": 6, "xl": 4})
 
     def _pay_card(self, balance: AccountBalance) -> None:
         candidates = [a for a in self.ctx.repo.list_accounts() if not a.kind.is_liability]

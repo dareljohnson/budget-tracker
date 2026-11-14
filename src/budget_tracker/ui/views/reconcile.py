@@ -6,7 +6,7 @@ from datetime import date
 
 import flet as ft
 
-from ...formatting import format_money, parse_date, parse_signed_money
+from ...formatting import format_money, month_key, parse_date, parse_money, parse_signed_money
 from ...models import Account, Reconciliation
 from ...repository import RepositoryError
 from ..components import date_field
@@ -42,6 +42,13 @@ class BalanceCheckDialog:
             on_submit=self._save,
         )
         self.note = ft.TextField(label="Note (optional)", max_length=140, on_submit=self._save)
+        self.minimum = ft.TextField(
+            label="Statement minimum payment (optional)",
+            prefix_icon=ft.Icons.PAYMENT,
+            keyboard_type=ft.KeyboardType.NUMBER,
+            hint_text="Minimum printed on this statement",
+            visible=self.is_liability,
+        )
 
         self.computed_value = ft.Text(size=15, weight=ft.FontWeight.W_600)
         self.stated_value = ft.Text(size=15, weight=ft.FontWeight.W_600)
@@ -100,6 +107,7 @@ class BalanceCheckDialog:
                         self.status,
                         self.date,
                         self.stated,
+                        self.minimum,
                         self.note,
                         self.result,
                         self.adjust_row,
@@ -247,6 +255,19 @@ class BalanceCheckDialog:
             self.ctx.notify(str(exc), error=True)
             return
         self._show_result(reconciliation)
+        if self.is_liability:
+            raw_minimum = (self.minimum.value or "").strip()
+            if raw_minimum:
+                try:
+                    self.ctx.service.record_minimum_payment(
+                        self.account.id, month_key(as_of), parse_money(raw_minimum)
+                    )
+                except (ValueError, RepositoryError) as exc:
+                    # The balance check itself is already recorded; surface this separately.
+                    self.ctx.notify(
+                        f"Balance checked, but the minimum payment was not recorded: {exc}",
+                        error=True,
+                    )
         self._refresh_status()
         self._render_history()
         self.ctx.data_changed()

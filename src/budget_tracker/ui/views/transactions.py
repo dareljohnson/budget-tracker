@@ -195,6 +195,8 @@ class TransactionsView:
 
     async def _scan_receipt(self, _: ft.Event) -> None:
         """Open the capture dialog; the button is re-enabled when that dialog closes."""
+        if self.receipt_button.disabled:
+            return
         self.receipt_button.disabled = True
         self.receipt_button.update()
         dialog = ReceiptImportDialog(self.ctx, on_close=self._receipt_closed)

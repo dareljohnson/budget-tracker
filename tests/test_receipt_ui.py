@@ -13,6 +13,7 @@ import flet as ft
 
 from budget_tracker.db import connect
 from budget_tracker.models import Transaction, TransactionType
+from budget_tracker.receipts import storage
 from budget_tracker.repository import Repository
 from budget_tracker.services import BudgetService
 
@@ -24,12 +25,17 @@ class _PageStub:
         self.overlay: list = []
 
     def show_dialog(self, control) -> None:
+        if isinstance(control, ft.AlertDialog):
+            control.open = True
         self.overlay.append(control)
 
-    def pop_dialog(self) -> None:
-        dialogs = [c for c in self.overlay if isinstance(c, ft.AlertDialog)]
-        if dialogs:
-            self.overlay.remove(dialogs[-1])
+    def pop_dialog(self):
+        for control in reversed(self.overlay):
+            if isinstance(control, ft.AlertDialog):
+                control.open = False
+                self.overlay.remove(control)
+                return control
+        return None
 
     def update(self, *_) -> None:
         pass
@@ -192,6 +198,7 @@ class ReceiptDialogTestCase(unittest.TestCase):
 class TestReceiptImportDialog(ReceiptDialogTestCase):
     def test_dialog_prefills_and_saves_with_receipt(self):
         dialog = self._dialog()
+        asyncio.run(dialog.open())
         dialog._source_path = self.png
         dialog._install(self._draft())
         self.assertEqual(dialog.merchant.value, "Corner Market")
@@ -206,10 +213,19 @@ class TestReceiptImportDialog(ReceiptDialogTestCase):
         self.assertTrue(tx.receipt_path.startswith("receipts/"))
         self.assertEqual(self.page.open_dialogs, [])
         self.assertEqual(self.page.errors, [])
+        self.assertEqual(len(list(storage.receipts_dir().iterdir())), 1)
+
+    def test_save_is_not_reentrant(self):
+        dialog = self._dialog()
+        asyncio.run(dialog.open())
+        dialog._source_path = self.png
+        dialog._install(self._draft())
+        dialog._save(None)
+        dialog._save(None)
+        self.assertEqual(len(self.repo.list_transactions()), 1)
+        self.assertEqual(len(list(storage.receipts_dir().iterdir())), 1)
 
     def test_save_copies_the_source_file_once_and_keeps_it(self):
-        from budget_tracker.receipts import storage
-
         before = self.png.read_bytes()
         dialog = self._dialog()
         dialog._source_path = self.png
@@ -236,13 +252,50 @@ class TestReceiptImportDialog(ReceiptDialogTestCase):
         self.assertTrue(dialog.save_button.disabled)
         self.assertEqual(dialog.raw_text.title.value, "Recognized text")
 
+    def test_choosing_an_account_after_unmatched_card_enables_save(self):
+        dialog = self._dialog()
+        dialog._source_path = self.png
+        dialog._install(self._draft(card_last4="9999"))
+        self.assertTrue(dialog.save_button.disabled)
+        dialog.account.value = str(self.checking.id)
+        dialog.account.error_text = None
+        dialog._refresh_save()
+        self.assertFalse(dialog.save_button.disabled)
+
+    def test_save_requires_a_source_file(self):
+        dialog = self._dialog()
+        dialog._install(self._draft())
+        self.assertTrue(dialog.save_button.disabled)
+        dialog._source_path = self.png
+        dialog._refresh_save()
+        self.assertFalse(dialog.save_button.disabled)
+
+    def test_no_expense_categories_keeps_dialog_usable(self):
+        for category in self.repo.list_categories(TransactionType.EXPENSE):
+            self.repo.delete_category(category.id)
+        dialog = self._dialog()
+        dialog._source_path = self.png
+        dialog._install(self._draft())
+        self.assertIsNone(dialog.category.value)
+        self.assertTrue(dialog.save_button.disabled)
+        self.assertIn("expense category", dialog.note.value)
+
+    def test_double_scan_click_starts_one_scan(self):
+        dialog = self._dialog()
+        dialog._busy = True
+        with mock.patch("budget_tracker.ui.views.receipts.scan_receipt") as scan:
+            asyncio.run(dialog._scan())
+        scan.assert_not_called()
+
     def test_no_accounts_blocks_capture(self):
+        closed = []
         for account in self.repo.list_accounts():
             self.repo.delete_account(account.id)
-        dialog = self._dialog()
+        dialog = self._dialog(on_close=lambda: closed.append(True))
         asyncio.run(dialog.open())
         self.assertIn("Create an account", self.page.errors[0])
         self.assertEqual(self.page.open_dialogs, [])
+        self.assertEqual(closed, [True])
 
     def test_save_stays_disabled_until_every_field_is_valid(self):
         dialog = self._dialog()
@@ -315,6 +368,8 @@ class TestReceiptImportDialog(ReceiptDialogTestCase):
 
         self.assertIsNone(dialog._source_path)
         self.assertTrue(dialog.save_button.disabled)
+        self.assertIn("could not be read", dialog.note.value)
+        self.assertNotIsInstance(dialog.preview_holder.content, ft.Image)
         self.assertEqual(self.page.errors, ["This file could not be read as a receipt image"])
 
     def test_scan_success_loads_the_scanned_image(self):
@@ -397,6 +452,18 @@ class TestReceiptImportDialog(ReceiptDialogTestCase):
         self.assertIsInstance(pdf_preview.controls[0], ft.Icon)
         self.assertEqual(pdf_preview.controls[1].value, "receipt.pdf")
 
+    def test_preview_skips_base64_for_files_over_eight_megabytes(self):
+        from budget_tracker.ui.views.receipts import preview_for
+
+        large = self.tmp / "large.png"
+        with large.open("wb") as handle:
+            handle.write(b"\x89PNG\r\n\x1a\n")
+            handle.truncate(8 * 1024 * 1024 + 1)
+        preview = preview_for(large)
+        self.assertIsInstance(preview, ft.Row)
+        self.assertIsInstance(preview.controls[0], ft.Icon)
+        self.assertEqual(preview.controls[1].value, "large.png")
+
 
 class TestReceiptHeaderButton(ReceiptDialogTestCase):
     def test_header_has_a_scan_receipt_button(self):
@@ -428,6 +495,17 @@ class TestReceiptHeaderButton(ReceiptDialogTestCase):
             self.assertTrue(view.receipt_button.disabled)
             opened[0]()
             self.assertFalse(view.receipt_button.disabled)
+
+    def test_scan_receipt_ignores_a_second_click_while_disabled(self):
+        from budget_tracker.ui.views.transactions import TransactionsView
+
+        view = TransactionsView(self.ctx)
+        view.receipt_button.disabled = True
+        with mock.patch(
+            "budget_tracker.ui.views.transactions.ReceiptImportDialog"
+        ) as dialog_cls:
+            asyncio.run(view._scan_receipt(None))
+        dialog_cls.assert_not_called()
 
 
 if __name__ == "__main__":

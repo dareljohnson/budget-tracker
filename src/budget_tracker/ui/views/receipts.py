@@ -26,30 +26,45 @@ from ...receipts.scanner import scan_receipt
 from ...repository import RepositoryError
 from ..components import date_field
 from ..context import AppContext
-from ..theme import GAP, fs
+from ..theme import EXPENSE_COLOR, GAP, fs
 
 _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 _JPEG_MAGIC = b"\xff\xd8\xff"
 _PDF_MAGIC = b"%PDF"
+_MAX_PREVIEW_BYTES = 8 * 1024 * 1024
+_EMPTY_PREVIEW = "Scan or choose a receipt to see its preview"
+_UNREADABLE_NOTE = "That file could not be read. Choose another file."
+_MISSING_CATEGORY_NOTE = "Create an expense category first."
+
+
+def _file_row(icon: ft.IconData, path: Path) -> ft.Row:
+    return ft.Row(
+        [ft.Icon(icon), ft.Text(path.name)],
+        spacing=8,
+        alignment=ft.MainAxisAlignment.CENTER,
+    )
 
 
 def preview_for(path: Path) -> ft.Control:
-    """A visual preview for a receipt file: an inline image, or a PDF icon and file name."""
+    """A visual preview for a receipt file: an inline image, or an icon and file name.
+
+    Only files up to 8 MB are base64-encoded, so a large phone photo cannot freeze the dialog.
+    """
     path = Path(path)
+    try:
+        size = path.stat().st_size
+        with path.open("rb") as handle:
+            header = handle.read(8)
+    except OSError:
+        return _file_row(ft.Icons.BROKEN_IMAGE, path)
+    if header.startswith(_PDF_MAGIC):
+        return _file_row(ft.Icons.PICTURE_AS_PDF, path)
+    if size > _MAX_PREVIEW_BYTES:
+        return _file_row(ft.Icons.IMAGE, path)
     try:
         data = path.read_bytes()
     except OSError:
-        return ft.Row(
-            [ft.Icon(ft.Icons.BROKEN_IMAGE), ft.Text(path.name)],
-            spacing=8,
-            alignment=ft.MainAxisAlignment.CENTER,
-        )
-    if data.startswith(_PDF_MAGIC):
-        return ft.Row(
-            [ft.Icon(ft.Icons.PICTURE_AS_PDF), ft.Text(path.name)],
-            spacing=8,
-            alignment=ft.MainAxisAlignment.CENTER,
-        )
+        return _file_row(ft.Icons.BROKEN_IMAGE, path)
     mime = "image/jpeg" if data.startswith(_JPEG_MAGIC) else "image/png"
     encoded = base64.b64encode(data).decode("ascii")
     return ft.Image(src=f"data:{mime};base64,{encoded}", fit=ft.BoxFit.CONTAIN)
@@ -63,6 +78,7 @@ class ReceiptImportDialog:
         self.on_close = on_close
         self._closed_notified = False
         self._busy = False
+        self._saving = False
         self._source_path: Path | None = None
         self._temp_dir: Path | None = None
         self._file_picker = ft.FilePicker()
@@ -87,7 +103,7 @@ class ReceiptImportDialog:
             border_radius=10,
             alignment=ft.Alignment.CENTER,
             content=ft.Text(
-                "Scan or choose a receipt to see its preview",
+                _EMPTY_PREVIEW,
                 size=fs(13),
                 color=ft.Colors.ON_SURFACE_VARIANT,
             ),
@@ -185,6 +201,8 @@ class ReceiptImportDialog:
 
     # ---------- sources ----------
     async def _choose_file(self, _: ft.Event | None = None) -> None:
+        if self._busy:
+            return
         try:
             files = await self._file_picker.pick_files(
                 dialog_title="Choose a receipt",
@@ -200,6 +218,9 @@ class ReceiptImportDialog:
         await self._load(Path(chosen.path))
 
     async def _scan(self, _: ft.Event | None = None) -> None:
+        if self._busy:
+            return
+        self._cleanup_temp()
         self._set_busy(True)
         try:
             self._temp_dir = Path(tempfile.mkdtemp(prefix="budget-tracker-scan-"))
@@ -215,17 +236,20 @@ class ReceiptImportDialog:
             self.ctx.notify(f"Could not scan a receipt: {exc}", error=True)
             self._set_busy(False)
             return
+        self._set_busy(False)
         await self._load(destination)
 
     async def _load(self, path: Path) -> None:
         """Preview the file immediately, then install its OCR draft (or a blank one)."""
+        if self._busy:
+            return
+        self._saving = False
         self._source_path = Path(path)
         self._set_preview(self._source_path)
         self._set_busy(True)
         try:
             draft = await asyncio.to_thread(read_receipt, self._source_path)
         except ReceiptOcrUnavailable:
-            self.note.value = "Text recognition isn't available. Enter the details below."
             self._install(
                 ReceiptDraft(
                     merchant="",
@@ -237,11 +261,18 @@ class ReceiptImportDialog:
                     missing=frozenset({"total", "merchant"}),
                 )
             )
+            if not self.note.value:
+                self.note.value = "Text recognition isn't available. Enter the details below."
+                self.note.color = ft.Colors.ON_SURFACE_VARIANT
         except ReceiptReadError as exc:
+            # An unreadable image produces no transaction; the dialog stays usable for
+            # choosing another file or entering details by hand.
             self._source_path = None
+            self._clear_preview()
+            self.note.value = _UNREADABLE_NOTE
+            self.note.color = EXPENSE_COLOR
             self.ctx.notify(str(exc), error=True)
         else:
-            self.note.value = ""
             self._install(draft)
         finally:
             self._set_busy(False)
@@ -251,13 +282,24 @@ class ReceiptImportDialog:
         self.preview_holder.content = preview_for(path)
         self.preview_holder.alignment = ft.Alignment.CENTER
 
+    def _clear_preview(self) -> None:
+        self.preview_holder.content = ft.Text(
+            _EMPTY_PREVIEW,
+            size=fs(13),
+            color=ft.Colors.ON_SURFACE_VARIANT,
+        )
+        self.preview_holder.alignment = ft.Alignment.CENTER
+
     # ---------- fields ----------
     def _install(self, draft: ReceiptDraft) -> None:
         self.merchant.value = draft.merchant
         self.amount.value = "" if draft.total_cents is None else f"{draft.total_cents / 100:.2f}"
+        self.amount.error = None
         self.date.value = draft.occurred_on.isoformat()
         self.date.error = None
         self.raw_text.controls[0].value = draft.raw_text
+        self.note.value = ""
+        self.note.color = ft.Colors.ON_SURFACE_VARIANT
 
         account = self.ctx.service.receipt_account(draft)
         self.account.error_text = None
@@ -267,7 +309,15 @@ class ReceiptImportDialog:
                 f"No account matches the card ending {draft.card_last4}. Choose one."
             )
         self.category.error_text = None
-        self.category.value = str(self.ctx.service.receipt_category_id(draft))
+        try:
+            category_id = self.ctx.service.receipt_category_id(draft)
+        except RepositoryError:
+            # All expense categories were deleted; let the owner create one instead of crashing.
+            self.category.value = None
+            self.note.value = _MISSING_CATEGORY_NOTE
+            self.note.color = EXPENSE_COLOR
+        else:
+            self.category.value = str(category_id)
         self._refresh_save()
 
     def _account_changed(self, _: ft.Event | None = None) -> None:
@@ -279,7 +329,7 @@ class ReceiptImportDialog:
         self._refresh_save()
 
     def _refresh_save(self) -> None:
-        valid = not self._busy and self._source_path is not None
+        valid = not self._busy and not self._saving and self._source_path is not None
         try:
             amount = parse_money(self.amount.value)
             valid = valid and amount > 0
@@ -301,16 +351,22 @@ class ReceiptImportDialog:
         self.choose_button.disabled = busy
         self._refresh_save()
 
+    def _is_mounted(self) -> bool:
+        control: ft.Control | None = self.dialog
+        while control is not None:
+            if isinstance(control, ft.Page):
+                return True
+            control = control.parent
+        return False
+
     def _refresh_ui(self) -> None:
         """Refresh the dialog when it is mounted; direct tests build it without a page."""
-        try:
+        if self._is_mounted():
             self.dialog.update()
-        except RuntimeError:
-            pass
 
     # ---------- saving ----------
     def _save(self, _: ft.Event | None = None) -> None:
-        if self._busy:
+        if self._saving or self._closed_notified:
             return
         valid = True
         try:
@@ -338,6 +394,9 @@ class ReceiptImportDialog:
             self._refresh_ui()
             return
 
+        self._saving = True
+        self.save_button.disabled = True
+        self._refresh_ui()
         try:
             self.ctx.service.create_receipt_transaction(
                 amount_cents=amount,
@@ -348,7 +407,9 @@ class ReceiptImportDialog:
                 source_path=self._source_path,
             )
         except (RepositoryError, ReceiptError, OSError) as exc:
+            self._saving = False
             self.ctx.notify(str(exc), error=True)
+            self._refresh_save()
             return
 
         self._close()

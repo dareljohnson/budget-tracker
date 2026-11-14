@@ -64,6 +64,18 @@ Data is stored in SQLite at `%LOCALAPPDATA%\BudgetTracker\budget_tracker.db` on 
 
 Statement files (PDFs and images) are never copied into the database. Of the statement file itself, an import keeps only its SHA-256 hash and, if you choose to remember it, the last four account digits; the statement summary and its imported transactions are saved as normal local data.
 
+## Backups and restore
+
+Budget Tracker keeps local snapshots of your data and lets you take and restore one yourself. Snapshots are ordinary ZIP files in the `backups` folder inside your data folder — `%LOCALAPPDATA%\BudgetTracker\backups` on Windows and `~/.local/share/budget_tracker/backups` elsewhere (with `BUDGET_TRACKER_HOME`, it follows that folder).
+
+- **Automatic:** after startup and on a six-hour check, the app takes a snapshot when the newest automatic one is more than 24 hours old. That is at most one automatic backup a day, not a fixed time. The newest **14 automatic** snapshots are kept and older ones are deleted.
+- **Manual:** click the backup icon in the navigation rail (next to the appearance and text-size buttons) and choose **Back up now**. Manual backups are never deleted automatically.
+- **Before changes:** a copy is taken before a database migration and before a restore replaces data. The newest 3 pre-migration copies are kept, along with the pre-restore copy.
+- **Contents:** each ZIP holds a consistent copy of the database, your receipt images, and a `manifest.json` describing the snapshot. Backups are **not encrypted** and are never uploaded — they stay on this PC. Use disk encryption such as BitLocker (Windows) or FileVault (macOS) if the folder needs protection.
+- **Restore:** choose **Restore** on a snapshot, or **Restore from file…** to pick a ZIP. The app checks and stages the backup, then applies it when you close and restart; before replacing anything it copies your current data. The live database is never replaced while the app is open. If the restore cannot be applied, your current data is kept and the reason is shown.
+
+Pre-migration `.db` copies are manual recovery files, not offered in the restore list.
+
 ## Project layout
 
 ```
@@ -187,6 +199,18 @@ On the **Transactions** page, click **Scan receipt** to turn a paper receipt int
 - Only page 1 of a multi-page PDF is read.
 - Rows with a receipt show a receipt icon; click it to open the image. The transaction editor can attach, replace, or remove a receipt later.
 - Deleting a transaction leaves its stored receipt image on disk.
+
+## Duplicate protection
+
+A purchase can reach the app more than once — a receipt, a bill payment, and the bank statement may all describe it. Before writing anything, receipt capture, bill payments, and statement imports look for an existing transaction and offer it as a candidate. Nothing is merged automatically: you always confirm, and matching never edits an existing transaction.
+
+- **Receipt matches.** Once a receipt has a recognised total, the app looks for an existing transaction on the same account with exactly that amount and a date within seven days. Pick one and **Attach & save** stores the image on that transaction and creates nothing; its date, amount, category, account, and description stay as they are. **Create a new transaction** switches to the normal form and records a separate expense. A receipt with no recognised total is not matched, because there is no amount to search with.
+- **Bill matches.** When you click **Mark paid**, payments already recorded for the bill's amount, account, type, and date window appear under **Already recorded**. **Use this transaction** advances the bill to its next due date without adding or changing a transaction. **Record a new payment** records a new payment as usual.
+- **Statement matches.** Each reviewed row is checked for an existing transaction with the same amount, account, and type within seven days. Rows with candidates show **Possible match**; choose **Match…** to mark the row as already recorded, which leaves it out of the import. **Import anyway** discards the match and imports the row as a new transaction.
+
+The filters are exact amount in cents, the same account (for a transfer, either side counts), the same type, and a seven-day window. Description similarity only orders the candidates; it never decides a match. Those are the facts that can be compared reliably, while a receipt's OCR text, a bill's name, and a bank's description often differ even for the same purchase. Nothing is auto-merged because only you can tell whether two similar entries are one event or two.
+
+A matched statement row counts toward the statement's ending balance through its existing transaction, but it is not inserted and is not tagged with the new statement. Undoing the import leaves matched transactions untouched.
 
 ## Reconciling accounts
 

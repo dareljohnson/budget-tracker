@@ -164,7 +164,9 @@ class DebtsView:
                 ft.Text("Not paid off within 50 years at this payment.", size=12, color=EXPENSE_COLOR)
             )
         if self.extra_cents == 0 and all(
-            summary.effective_minimum_cents == 0 for summary in summaries
+            summary.effective_minimum_cents == 0
+            for summary in summaries
+            if summary.balance_cents > 0
         ):
             warnings.append(ft.Text("No payment is being made.", size=12, color=EXPENSE_COLOR))
         if warnings:

@@ -1042,6 +1042,15 @@ class TestEditors(unittest.TestCase):
         view = DebtsView(self.ctx)
         self.assertIn("No payment is being made.", self._texts(view.plan_panel))
 
+    def test_paid_off_debt_minimum_does_not_suppress_the_no_payment_warning(self):
+        from budget_tracker.models import DebtKind
+        from budget_tracker.ui.views.debts import DebtsView
+
+        self.ctx.service.create_debt("Paid loan", DebtKind.PERSONAL, 0, 1200, 2_000)
+        self.ctx.service.create_debt("Active loan", DebtKind.PERSONAL, 100_000, 0, 0)
+        view = DebtsView(self.ctx)
+        self.assertIn("No payment is being made.", self._texts(view.plan_panel))
+
     def test_nav_indices_stay_in_sync_with_debts(self):
         from budget_tracker import main as shell
         self.assertEqual(shell.NAV_ITEMS[5][0], "Debts")

@@ -1199,6 +1199,24 @@ class TestEditors(unittest.TestCase):
         view._show_more(None)
         self.assertEqual(view.schedule_limit, 48)
 
+    def test_plan_panel_lists_every_debt_in_the_schedule(self):
+        from budget_tracker.models import DebtKind
+        from budget_tracker.ui.views.debts import DebtsView
+
+        self.ctx.service.create_debt("Visa", DebtKind.CREDIT_CARD, 50_000, 2400, 2_500)
+        self.ctx.service.create_debt("Car", DebtKind.AUTO, 300_000, 600, 5_000)
+        self.ctx.service.create_debt("Old Loan", DebtKind.PERSONAL, 0, 1200, 2_000)
+        view = DebtsView(self.ctx)
+        view.refresh()
+        texts = self._texts(view.plan_panel)
+        self.assertIn("Included in this plan", texts)
+        self.assertIn("Debt payoff order", texts)
+        self.assertIn("Combined monthly schedule", texts)
+        self.assertIn("Visa", texts)
+        self.assertIn("Car", texts)
+        self.assertNotIn("Old Loan", texts)
+        self.assertIn("Covers 2 debts", texts)
+
     def test_zero_minimum_and_unfinished_plans_warn(self):
         from budget_tracker.models import DebtKind
         from budget_tracker.ui.views.debts import DebtsView

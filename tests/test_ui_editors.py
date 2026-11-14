@@ -1267,6 +1267,28 @@ class TestEditors(unittest.TestCase):
         self.assertNotIn("Old Loan", texts)
         self.assertIn("Covers 2 debts", texts)
 
+    def test_plan_panel_notes_when_strategies_match(self):
+        from budget_tracker.models import DebtKind
+        from budget_tracker.ui.views.debts import DebtsView
+
+        self.ctx.service.create_debt("Visa", DebtKind.CREDIT_CARD, 50_000, 2400, 2_500)
+        self.ctx.service.create_debt("Car", DebtKind.AUTO, 300_000, 600, 5_000)
+        view = DebtsView(self.ctx)
+        view.refresh()
+        texts = " ".join(self._texts(view.plan_panel))
+        self.assertIn("so the plans match", texts)
+
+    def test_plan_panel_omits_match_note_when_strategies_differ(self):
+        from budget_tracker.models import DebtKind
+        from budget_tracker.ui.views.debts import DebtsView
+
+        self.ctx.service.create_debt("High", DebtKind.CREDIT_CARD, 50_000, 2400, 2_500)
+        self.ctx.service.create_debt("Small", DebtKind.AUTO, 40_000, 1200, 2_000)
+        view = DebtsView(self.ctx)
+        view._set_extra(5_000)
+        texts = " ".join(self._texts(view.plan_panel))
+        self.assertNotIn("so the plans match", texts)
+
     def test_zero_minimum_and_unfinished_plans_warn(self):
         from budget_tracker.models import DebtKind
         from budget_tracker.ui.views.debts import DebtsView

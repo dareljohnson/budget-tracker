@@ -36,18 +36,35 @@ class TestScanner(unittest.TestCase):
                  mock.patch.object(scanner, "_powershell", return_value="powershell"), \
                  mock.patch.object(scanner.subprocess, "run", side_effect=fake_run):
                 self.assertEqual(scanner.scan_receipt(target), target)
+                self.assertEqual(list(Path(tmp).glob("*.ps1")), [])
         self.assertIn("-NoProfile", fake_run.args)
         self.assertIn("-NonInteractive", fake_run.args)
         self.assertIn("-ExecutionPolicy", fake_run.args)
+        self.assertIn("Bypass", fake_run.args)
+        self.assertEqual(fake_run.args[-1], str(target))
+        self.assertEqual(fake_run.kwargs.get("timeout"), 60)
+        self.assertTrue(fake_run.kwargs.get("capture_output"))
+        self.assertTrue(fake_run.kwargs.get("text"))
         self.assertNotEqual(fake_run.kwargs.get("creationflags", 0), 0)
 
     def test_scan_without_scanner_raises(self):
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "scan.png"
-            failed = mock.Mock(returncode=1, stdout="", stderr="No scanner is connected.")
+            failed = mock.Mock(returncode=1, stdout="", stderr="  + FullyQualifiedErrorId : No scanner is connected.")
             with mock.patch.object(scanner, "IS_WINDOWS", True), \
                  mock.patch.object(scanner, "_powershell", return_value="powershell"), \
                  mock.patch.object(scanner.subprocess, "run", return_value=failed):
+                with self.assertRaises(ReceiptScanError) as caught:
+                    scanner.scan_receipt(target)
+        self.assertEqual(str(caught.exception), "No scanner is connected.")
+
+    def test_success_without_a_file_raises(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "scan.png"
+            ok = mock.Mock(returncode=0, stdout="", stderr="")
+            with mock.patch.object(scanner, "IS_WINDOWS", True), \
+                 mock.patch.object(scanner, "_powershell", return_value="powershell"), \
+                 mock.patch.object(scanner.subprocess, "run", return_value=ok):
                 with self.assertRaises(ReceiptScanError):
                     scanner.scan_receipt(target)
 

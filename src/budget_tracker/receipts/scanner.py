@@ -47,11 +47,18 @@ $image.SaveFile($Destination)
 
 
 def _last_stderr_line(stderr: str | None) -> str:
-    """Return the last non-blank stderr line, which carries PowerShell's own message."""
+    """Return the last non-blank stderr line with PowerShell's decoration stripped."""
     if stderr:
         lines = [line.strip() for line in stderr.splitlines() if line.strip()]
         if lines:
-            return lines[-1]
+            line = lines[-1]
+            if line.startswith("+ "):
+                line = line[2:].strip()
+            for prefix in ("FullyQualifiedErrorId : ", "CategoryInfo : "):
+                if line.startswith(prefix):
+                    line = line[len(prefix):].strip()
+                    break
+            return line
     return ""
 
 

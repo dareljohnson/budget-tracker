@@ -14,7 +14,7 @@ from datetime import date
 from pathlib import Path
 
 from .config import APP_NAME
-from .models import Bill, BillFrequency, Transaction, TransactionType
+from .models import AccountKind, Bill, BillFrequency, Transaction, TransactionType
 from .repository import Repository
 from .xlsx import Cell, Sheet, Style, write_workbook
 
@@ -106,7 +106,7 @@ def _accounts_sheet(repo: Repository, transactions: list[Transaction]) -> tuple[
                 ),
                 Cell(_money(money_out[acct.id]), Style.CURRENCY, sumifs.format(r=r, kind='"Expense"') + "+" + sumifs.format(r=r, kind='"Transfer"')),
                 Cell(_money(balance.balance_cents), Style.CURRENCY, f'C{r}+D{r}-E{r}+SUMIFS({TX}!$I:$I,{TX}!$D:$D,A{r},{TX}!$C:$C,"Adjustment")'),
-                Cell(_money(balance.owed_cents) if acct.kind.is_liability else 0, Style.CURRENCY, f'IF(B{r}="Credit Card",MAX(0,-F{r}),0)'),
+                Cell(_money(balance.owed_cents) if acct.kind.is_liability else 0, Style.CURRENCY, f'IF(OR($B{r}="Credit Card",$B{r}="Loan"),MAX(0,-F{r}),0)'),
                 Cell(counts[acct.id], Style.INTEGER, f"COUNTIF({TX}!$D:$D,A{r})+COUNTIF({TX}!$G:$G,A{r})"),
             ]
         )
@@ -175,7 +175,9 @@ def _bills_sheet(repo: Repository, today: date) -> tuple[Sheet, int]:
         sheet.append(
             [
                 bill.name,
-                "Card payment" if bill.is_card_payment else "Bill",
+                "Loan payment" if bill.pay_to_account_kind is AccountKind.LOAN
+                else "Card payment" if bill.is_card_payment
+                else "Bill",
                 Cell(_money(bill.amount_cents), Style.CURRENCY) if bill.amount_cents else None,
                 bill.frequency.label,
                 bill.next_due,
@@ -225,7 +227,7 @@ def _summary_sheet(repo: Repository, transactions: list[Transaction], today: dat
     overdue = sum(1 for row in bills.rows[1 : bills_total - 1] if row[6].value == "Overdue")
     bills_monthly = bills.rows[bills_total - 1][10].value
     sheet.append([Cell("Net worth", Style.BOLD), Cell(_money(sum(b.balance_cents for b in balances)), Style.BOLD_CURRENCY, f"Accounts!F{accounts_total}")])
-    sheet.append(["Owed on credit cards", Cell(_money(sum(b.owed_cents for b in balances if b.account.kind.is_liability)), Style.CURRENCY, f"Accounts!G{accounts_total}")])
+    sheet.append(["Owed on credit cards and loans", Cell(_money(sum(b.owed_cents for b in balances if b.account.kind.is_liability)), Style.CURRENCY, f"Accounts!G{accounts_total}")])
     sheet.append(["Monthly cost of bills", Cell(bills_monthly, Style.CURRENCY, f"Bills!K{bills_total}")])
     sheet.append(["Bills overdue", Cell(overdue, Style.INTEGER, 'COUNTIF(Bills!$G:$G,"Overdue")')])
     sheet.append([])

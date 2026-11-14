@@ -151,7 +151,7 @@ class Repository:
     def list_accounts(self) -> list[Account]:
         rows = self.conn.execute(
             "SELECT id, name, kind, opening_balance_cents, color, number_last4 FROM accounts "
-            "ORDER BY kind = 'credit_card', name"
+            "ORDER BY kind IN ('credit_card','loan'), name"
         )
         return [self._row_to_account(r) for r in rows]
 
@@ -196,9 +196,10 @@ class Repository:
         debt = self.conn.execute(
             "SELECT name FROM debts WHERE account_id = ?", (account.id,)
         ).fetchone()
-        if debt is not None and account.kind is not AccountKind.CREDIT_CARD:
+        existing = self.get_account(account.id)
+        if debt is not None and existing is not None and account.kind is not existing.kind:
             raise RepositoryError(
-                f"Account is linked to the debt '{debt['name']}'; keep it a credit-card account"
+                f"Account is linked to the debt '{debt['name']}'; unlink it before changing its type"
             )
         try:
             with self.conn:
@@ -250,7 +251,7 @@ class Repository:
             "+ COALESCE((SELECT SUM(CASE t.type WHEN 'expense' THEN -t.amount_cents WHEN 'transfer' THEN -t.amount_cents "
             "WHEN 'adjustment' THEN t.amount_cents ELSE t.amount_cents END) FROM transactions t WHERE t.account_id = a.id), 0) "
             "+ COALESCE((SELECT SUM(t.amount_cents) FROM transactions t WHERE t.transfer_account_id = a.id), 0) AS balance "
-            "FROM accounts a ORDER BY a.kind = 'credit_card', a.name"
+            "FROM accounts a ORDER BY a.kind IN ('credit_card','loan'), a.name"
         )
         return [AccountBalance(self._row_to_account(r), r["balance"]) for r in rows]
 
@@ -871,7 +872,7 @@ class Repository:
                     ),
                 )
         except sqlite3.IntegrityError as exc:
-            raise RepositoryError("This credit card is already linked to a debt") from exc
+            raise RepositoryError("This account is already linked to a debt") from exc
         debt.id = cur.lastrowid
         return debt
 
@@ -890,7 +891,7 @@ class Repository:
                     ),
                 )
         except sqlite3.IntegrityError as exc:
-            raise RepositoryError("This credit card is already linked to a debt") from exc
+            raise RepositoryError("This account is already linked to a debt") from exc
 
     def delete_debt(self, debt_id: int) -> None:
         with self.conn:
@@ -910,19 +911,19 @@ class Repository:
         if debt.original_balance_cents is not None and debt.original_balance_cents < 0:
             raise RepositoryError("Original balance cannot be negative")
         if debt.account_id is not None:
-            if debt.kind is not DebtKind.CREDIT_CARD:
-                raise RepositoryError("A linked debt must be a credit card")
             account = self.get_account(debt.account_id)
-            if account is None:
-                raise RepositoryError("Select a credit-card account")
-            if account.kind is not AccountKind.CREDIT_CARD:
-                raise RepositoryError("Link a debt only to a credit-card account")
+            if account is None or not account.kind.is_liability:
+                raise RepositoryError("Link a debt only to a credit-card or loan account")
+            if account.kind is AccountKind.CREDIT_CARD and debt.kind is not DebtKind.CREDIT_CARD:
+                raise RepositoryError("A linked card debt must be a credit card")
+            if account.kind is AccountKind.LOAN and debt.kind is DebtKind.CREDIT_CARD:
+                raise RepositoryError("Choose a loan kind for a loan account")
             linked = self.conn.execute(
                 "SELECT id FROM debts WHERE account_id = ? AND id IS NOT ?",
                 (debt.account_id, debt.id),
             ).fetchone()
             if linked is not None:
-                raise RepositoryError("This credit card is already linked to a debt")
+                raise RepositoryError("This account is already linked to a debt")
 
     # ---------- credit card minimum payments ----------
     def list_minimum_payments(self, account_id: int) -> list[MinimumPayment]:
@@ -1186,7 +1187,7 @@ class Repository:
     _BILL_SELECT = (
         "SELECT b.id, b.name, b.amount_cents, b.frequency, b.next_due, b.anchor_day, b.account_id, b.category_id, "
         "b.pay_to_account_id, b.active, a.name AS account_name, c.name AS category_name, c.color AS category_color, "
-        "c.icon AS category_icon, pa.name AS pay_to_account_name "
+        "c.icon AS category_icon, pa.name AS pay_to_account_name, pa.kind AS pay_to_account_kind "
         "FROM bills b JOIN accounts a ON a.id = b.account_id "
         "LEFT JOIN categories c ON c.id = b.category_id "
         "LEFT JOIN accounts pa ON pa.id = b.pay_to_account_id"
@@ -1210,6 +1211,7 @@ class Repository:
             category_color=row["category_color"],
             category_icon=row["category_icon"],
             pay_to_account_name=row["pay_to_account_name"],
+            pay_to_account_kind=AccountKind(row["pay_to_account_kind"]) if row["pay_to_account_kind"] else None,
         )
 
     def list_bills(self, *, include_inactive: bool = True) -> list[Bill]:

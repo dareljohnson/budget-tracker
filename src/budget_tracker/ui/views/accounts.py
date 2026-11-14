@@ -52,8 +52,8 @@ class AccountsView:
         balances = self.ctx.repo.account_balances()
         net_worth = sum(b.balance_cents for b in balances)
         assets = sum(b.balance_cents for b in balances if b.balance_cents > 0)
-        # Only credit cards are debts here; an overdrawn checking or savings account is not a
-        # credit card balance (it still lowers net worth above and shows on its own card).
+        # Only liabilities count as debts here; an overdrawn checking or savings account is not a
+        # debt (it still lowers net worth above and shows on its own card).
         debts = sum(
             -b.balance_cents
             for b in balances
@@ -62,7 +62,7 @@ class AccountsView:
         self.stats.controls = [
             stat_card("Net Worth", format_money(net_worth), ft.Icons.ACCOUNT_BALANCE_WALLET, SEED_COLOR, "Assets minus debts"),
             stat_card("Assets", format_money(assets), ft.Icons.TRENDING_UP, INCOME_COLOR, "Accounts in credit"),
-            stat_card("Debts", format_money(debts), ft.Icons.CREDIT_CARD, EXPENSE_COLOR, "Credit card balances owed"),
+            stat_card("Debts", format_money(debts), ft.Icons.CREDIT_CARD, EXPENSE_COLOR, "Credit card and loan balances owed"),
         ]
         for control in self.stats.controls:
             control.col = {"xs": 12, "sm": 6, "xl": 4}
@@ -80,12 +80,13 @@ class AccountsView:
     def _account_card(self, balance: AccountBalance) -> ft.Container:
         account = balance.account
         usage = self.ctx.repo.account_usage(account.id)
-        is_card = account.kind.is_liability
+        is_liability = account.kind.is_liability
+        is_credit_card = account.kind is AccountKind.CREDIT_CARD
         actions: list[ft.Control] = []
-        if is_card:
+        if is_liability:
             actions.append(
                 ft.FilledTonalButton(
-                    content="Pay card",
+                    content="Pay card" if is_credit_card else "Pay loan",
                     icon=ft.Icons.PAYMENT,
                     on_click=lambda _: self._pay_card(balance),
                     tooltip="Record a payment from another account (a transfer, not an expense)",
@@ -108,7 +109,7 @@ class AccountsView:
                 on_click=lambda _: self._confirm_delete(account),
             ),
         ]
-        caption = "Owed" if is_card and balance.owed_cents else "Balance"
+        caption = "Owed" if is_liability and balance.owed_cents else "Balance"
         details = f"{account.kind.label}  •  {usage} transaction(s)"
         if account.number_last4:
             details += f"  •  •••• {account.number_last4}"
@@ -126,7 +127,7 @@ class AccountsView:
                     weight=ft.FontWeight.W_500,
                 )
             )
-        minimum = self.ctx.service.current_minimum_payment(account.id) if is_card else None
+        minimum = self.ctx.service.current_minimum_payment(account.id) if is_credit_card else None
         children: list[ft.Control] = [
             ft.Row(
                 [
@@ -140,7 +141,7 @@ class AccountsView:
                 spacing=0,
             ),
         ]
-        if is_card:
+        if is_credit_card:
             minimum_controls: list[ft.Control] = [
                 ft.Text("Minimum", size=12, color=ft.Colors.ON_SURFACE_VARIANT)
             ]
@@ -176,7 +177,7 @@ class AccountsView:
         candidates = [a for a in self.ctx.repo.list_accounts() if not a.kind.is_liability]
         source = next((a for a in candidates if a.kind == AccountKind.CHECKING), candidates[0] if candidates else None)
         if source is None:
-            self.ctx.notify("Add a checking or cash account to pay the card from", error=True)
+            self.ctx.notify("Add a checking or cash account to pay from", error=True)
             return
         TransactionEditor(
             self.ctx,
@@ -268,7 +269,7 @@ class AccountEditor:
     def _render(self) -> None:
         if self.kind.is_liability:
             self.opening.label = "Amount currently owed"
-            self.opening.hint_text = "Card balance before your first tracked transaction"
+            self.opening.hint_text = "Balance before your first tracked transaction"
         else:
             self.opening.label = "Opening balance"
             self.opening.hint_text = "Balance before your first tracked transaction"

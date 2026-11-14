@@ -243,7 +243,27 @@ MIGRATIONS: list[str] = [
     INSERT OR IGNORE INTO categories (name, type, color, icon)
     VALUES ('Debt payments', 'expense', '#546E7A', 'PAYMENTS');
     """,
+    # v8: loan accounts. SQLite cannot alter a CHECK constraint in place, so the accounts table is
+    # rebuilt. Foreign keys must be off while accounts is dropped; the runner re-enables them and
+    # runs PRAGMA foreign_key_check afterwards.
+    """
+    CREATE TABLE accounts_new (
+        id                    INTEGER PRIMARY KEY,
+        name                  TEXT NOT NULL UNIQUE COLLATE NOCASE,
+        kind                  TEXT NOT NULL CHECK (kind IN ('checking','savings','credit_card','cash','other','loan')),
+        opening_balance_cents INTEGER NOT NULL DEFAULT 0,
+        color                 TEXT NOT NULL DEFAULT '#3949AB',
+        created_at            TEXT NOT NULL DEFAULT (datetime('now')),
+        number_last4          TEXT
+    );
+    INSERT INTO accounts_new (id, name, kind, opening_balance_cents, color, created_at, number_last4)
+        SELECT id, name, kind, opening_balance_cents, color, created_at, number_last4 FROM accounts;
+    DROP TABLE accounts;
+    ALTER TABLE accounts_new RENAME TO accounts;
+    """,
 ]
+
+FOREIGN_KEYS_OFF_MIGRATIONS = {8}
 
 DEFAULT_EXTRA_ACCOUNTS: list[tuple[str, str, str]] = [
     ("Credit Card", "credit_card", "#8E24AA"),
@@ -269,7 +289,32 @@ def schema_version(conn: sqlite3.Connection) -> int:
 def migrate(conn: sqlite3.Connection) -> None:
     current = schema_version(conn)
     for version, script in enumerate(MIGRATIONS[current:], start=current + 1):
-        conn.executescript(f"BEGIN;\n{script}\nPRAGMA user_version = {version};\nCOMMIT;")
+        fk_off = version in FOREIGN_KEYS_OFF_MIGRATIONS
+        if fk_off:
+            if conn.in_transaction:
+                raise RuntimeError("Cannot migrate inside an open transaction")
+            preexisting = conn.execute("PRAGMA foreign_key_check").fetchall()
+            if preexisting:
+                raise sqlite3.IntegrityError(
+                    f"Pre-existing foreign key violations before migration {version}: {preexisting[:3]}"
+                )
+            conn.execute("PRAGMA foreign_keys = OFF")
+        try:
+            conn.executescript(f"BEGIN;\n{script}\nPRAGMA user_version = {version};\nCOMMIT;")
+        except Exception:
+            if conn.in_transaction:
+                conn.rollback()
+            raise
+        else:
+            if fk_off:
+                violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+                if violations:
+                    raise sqlite3.IntegrityError(
+                        f"Foreign key violations after migration {version}: {violations[:3]}"
+                    )
+        finally:
+            if fk_off:
+                conn.execute("PRAGMA foreign_keys = ON")
     if current == 0:
         _seed(conn)
 

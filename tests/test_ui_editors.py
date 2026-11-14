@@ -800,11 +800,12 @@ class TestEditors(unittest.TestCase):
         self.assertEqual(self.repo.list_category_rules(), [])
         self.assertIsNone(self.repo.suggest_category_id("Card Purchase Kroger #443", TransactionType.EXPENSE))
 
-    def test_accounts_debts_stat_counts_only_credit_cards(self):
+    def test_accounts_debts_stat_counts_negative_liabilities(self):
         from budget_tracker.formatting import format_money
         from budget_tracker.ui.views.accounts import AccountsView
 
         savings = self.repo.add_account(Account("Regions Savings", AccountKind.SAVINGS))
+        self.repo.add_account(Account("Mortgage", AccountKind.LOAN, opening_balance_cents=-100_000))
         category = self.repo.list_categories(TransactionType.EXPENSE)[0]
         self.repo.add_transaction(Transaction(
             26_996, TransactionType.EXPENSE, category.id, date(2026, 11, 14),
@@ -819,7 +820,7 @@ class TestEditors(unittest.TestCase):
             card.content.controls[0].controls[0].value: card.content.controls[0].controls[1].value
             for card in view.stats.controls
         }
-        self.assertEqual(stats["Debts"], "$50.00")
+        self.assertEqual(stats["Debts"], "$1,050.00")
         self.assertEqual(
             stats["Net Worth"],
             format_money(sum(b.balance_cents for b in self.repo.account_balances())),
@@ -914,6 +915,46 @@ class TestEditors(unittest.TestCase):
         texts = self._texts(view.grid.controls[0])
         self.assertIn("Trip", texts)
         self.assertNotIn("No goals yet", texts)
+
+    def test_loan_account_card_has_pay_loan_and_no_minimum(self):
+        from budget_tracker.models import Account, AccountKind
+        from budget_tracker.ui.views.accounts import AccountsView
+
+        def labels(control):
+            found = []
+            content = getattr(control, "content", None)
+            if isinstance(content, str):
+                found.append(content)
+            for child in getattr(control, "controls", None) or []:
+                found.extend(labels(child))
+            if content is not None and not isinstance(content, str):
+                found.extend(labels(content))
+            return found
+
+        self.repo.add_account(Account("Mortgage", AccountKind.LOAN, opening_balance_cents=-100_000))
+        view = AccountsView(self.ctx)
+        loan_card = next(
+            c for c in view.grid.controls
+            if any("Mortgage" in t for t in self._texts(c))
+        )
+        texts = self._texts(loan_card)
+        button_labels = labels(loan_card)
+        self.assertTrue(any("Loan" in t for t in texts))
+        self.assertIn("Pay loan", button_labels)
+        self.assertNotIn("Minimum", texts)
+        self.assertNotIn("Pay card", button_labels)
+
+    def test_account_editor_creates_a_loan_with_owed_opening_balance(self):
+        from budget_tracker.models import AccountKind
+        from budget_tracker.ui.views.accounts import AccountEditor
+
+        editor = AccountEditor(self.ctx, None)
+        editor.name.value = "Mortgage"
+        editor._kind_changed(_event(value=AccountKind.LOAN.value))
+        editor.opening.value = "1000.00"
+        editor._save(None)
+        loan = next(a for a in self.repo.list_accounts() if a.name == "Mortgage")
+        self.assertEqual((loan.kind, loan.opening_balance_cents), (AccountKind.LOAN, -100_000))
 
     @staticmethod
     def _texts(control) -> list[str]:
@@ -1122,6 +1163,15 @@ class TestEditors(unittest.TestCase):
             [("2026-11", 3500)],
         )
 
+    def test_balance_check_statement_minimum_is_only_for_credit_cards(self):
+        from budget_tracker.ui.views.reconcile import BalanceCheckDialog
+
+        card_dialog = BalanceCheckDialog(self.ctx, self.accts["Credit Card"])
+        self.assertTrue(card_dialog.minimum.visible)
+        loan = self.repo.add_account(Account("Mortgage", AccountKind.LOAN, opening_balance_cents=-100_000))
+        loan_dialog = BalanceCheckDialog(self.ctx, loan)
+        self.assertFalse(loan_dialog.minimum.visible)
+
     def test_standalone_payment_dialog_moves_money(self):
         from budget_tracker.models import DebtKind
         from budget_tracker.ui.views.debts import DebtPaymentDialog
@@ -1247,6 +1297,127 @@ class TestEditors(unittest.TestCase):
         self.assertEqual(view.custom_calculate.content, "Calculate")
         view.custom_calculate.on_click(None)
         self.assertEqual(view.extra_cents, 7_500)
+
+    def test_debt_editor_lists_loan_accounts_and_uses_loan_kind(self):
+        from budget_tracker.models import Account, AccountKind, DebtKind
+        from budget_tracker.ui.views.debts import DebtEditor
+
+        loan = self.repo.add_account(Account("Mortgage", AccountKind.LOAN, opening_balance_cents=-100_000))
+        editor = DebtEditor(self.ctx, None)
+        self.assertIn(str(loan.id), [o.key for o in editor.link.options])
+        editor.name.value = "Mortgage"
+        editor.kind.value = DebtKind.MORTGAGE.value
+        editor.apr.value = "3.65"
+        editor.minimum.value = "500.00"
+        editor.link.value = str(loan.id)
+        editor._link_changed()
+        self.assertFalse(editor.minimum.disabled)
+        self.assertFalse(editor.minimum_note.visible)
+        self.assertEqual(editor.kind.value, DebtKind.MORTGAGE.value)
+        editor._save(None)
+        debt = self.repo.list_debts()[0]
+        self.assertEqual((debt.kind, debt.balance_cents), (DebtKind.MORTGAGE, 100_000))
+
+    def test_debt_editor_switches_a_card_kind_when_a_loan_is_linked(self):
+        from budget_tracker.models import Account, AccountKind, DebtKind
+        from budget_tracker.ui.views.debts import DebtEditor
+
+        loan = self.repo.add_account(Account("Mortgage", AccountKind.LOAN, opening_balance_cents=-100_000))
+        editor = DebtEditor(self.ctx, None)
+        editor.kind.value = DebtKind.CREDIT_CARD.value
+        editor.link.value = str(loan.id)
+        editor._link_changed()
+        self.assertEqual(editor.kind.value, DebtKind.PERSONAL.value)
+        self.assertFalse(editor.minimum.disabled)
+        self.assertFalse(editor.minimum_note.visible)
+
+    def test_debt_editor_keeps_a_typed_minimum_when_linking_a_loan(self):
+        from budget_tracker.models import Account, AccountKind, DebtKind
+        from budget_tracker.ui.views.debts import DebtEditor
+
+        loan = self.repo.add_account(Account("Mortgage", AccountKind.LOAN, opening_balance_cents=-100_000))
+        editor = DebtEditor(self.ctx, None)
+        editor.name.value = "Mortgage"
+        editor.kind.value = DebtKind.MORTGAGE.value
+        editor.apr.value = "3.65"
+        editor.minimum.value = "500.00"
+        editor.link.value = str(loan.id)
+        editor._link_changed()
+        self.assertEqual(editor.minimum.value, "500.00")
+        editor._save(None)
+        self.assertEqual(self.repo.list_debts()[0].minimum_cents, 50_000)
+
+    def test_debt_editor_resets_only_a_statement_driven_minimum_when_linking_a_loan(self):
+        from budget_tracker.models import Account, AccountKind
+        from budget_tracker.ui.views.debts import DebtEditor
+
+        loan = self.repo.add_account(Account("Mortgage", AccountKind.LOAN, opening_balance_cents=-100_000))
+        debt = self._statement_driven_debt()
+        editor = DebtEditor(self.ctx, debt)
+        self.assertTrue(editor.minimum.disabled)
+        self.assertEqual(editor.minimum.value, "75.00")
+        editor.link.value = str(loan.id)
+        editor._link_changed()
+        self.assertEqual(editor.minimum.value, "105.00")
+        self.assertFalse(editor.minimum.disabled)
+        self.assertFalse(editor.minimum_note.visible)
+
+    def test_debt_editor_restores_the_stored_minimum_when_unlinking(self):
+        from budget_tracker.ui.views.debts import DebtEditor
+
+        debt = self._statement_driven_debt()
+        editor = DebtEditor(self.ctx, debt)
+        self.assertTrue(editor.minimum.disabled)
+        self.assertEqual(editor.minimum.value, "75.00")
+
+        editor.link.value = "none"
+        editor._link_changed()
+
+        self.assertEqual(editor.minimum.value, "105.00")
+        self.assertFalse(editor.minimum.disabled)
+        self.assertFalse(editor.minimum_note.visible)
+
+    def test_debt_editor_restores_the_stored_minimum_for_a_card_without_a_statement(self):
+        from budget_tracker.ui.views.debts import DebtEditor
+
+        visa = self.repo.add_account(Account("Visa", AccountKind.CREDIT_CARD))
+        debt = self._statement_driven_debt()
+        editor = DebtEditor(self.ctx, debt)
+        self.assertTrue(editor.minimum.disabled)
+        self.assertEqual(editor.minimum.value, "75.00")
+
+        editor.link.value = str(visa.id)
+        editor._link_changed()
+
+        self.assertEqual(editor.minimum.value, "105.00")
+        self.assertFalse(editor.minimum.disabled)
+        self.assertFalse(editor.minimum_note.visible)
+
+    def test_bill_paid_to_a_loan_says_loan_payment(self):
+        from budget_tracker.models import Account, AccountKind, Bill, BillFrequency
+        from budget_tracker.ui.views.bills import BillsView
+
+        loan = self.repo.add_account(Account("Mortgage", AccountKind.LOAN, opening_balance_cents=-100_000))
+        self.repo.add_bill(Bill(
+            "Mortgage", 1_000, BillFrequency.MONTHLY, date(2026, 12, 1),
+            self.accts["Checking"].id, pay_to_account_id=loan.id,
+        ))
+        view = BillsView(self.ctx)
+        texts = self._texts(view.list)
+        self.assertTrue(any("Loan payment" in text for text in texts))
+
+    def test_bill_paid_to_a_card_says_card_payment(self):
+        from budget_tracker.models import Bill, BillFrequency
+        from budget_tracker.ui.views.bills import BillsView
+
+        self.repo.add_bill(Bill(
+            "Visa payment", 1_000, BillFrequency.MONTHLY, date(2026, 12, 1),
+            self.accts["Checking"].id, pay_to_account_id=self.accts["Credit Card"].id,
+        ))
+        view = BillsView(self.ctx)
+        texts = self._texts(view.list)
+        self.assertTrue(any("Card payment" in text for text in texts))
+        self.assertFalse(any("Loan payment" in text for text in texts))
 
 
 def _dialog_rule_texts(dialog) -> list:

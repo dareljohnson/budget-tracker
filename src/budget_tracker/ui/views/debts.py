@@ -539,9 +539,9 @@ class DebtEditor:
             for d in ctx.repo.list_debts()
             if d.account_id is not None and (debt is None or d.id != debt.id)
         }
-        cards = [
+        linkable = [
             a for a in ctx.repo.list_accounts()
-            if a.kind is AccountKind.CREDIT_CARD and a.id not in linked
+            if a.kind in (AccountKind.CREDIT_CARD, AccountKind.LOAN) and a.id not in linked
         ]
         self.name = ft.TextField(label="Name", value=debt.name if debt else "", autofocus=True)
         self.kind = ft.Dropdown(
@@ -560,9 +560,9 @@ class DebtEditor:
                                      value=(f"{debt.original_balance_cents / 100:.2f}"
                                             if debt and debt.original_balance_cents is not None else ""))
         self.link = ft.Dropdown(
-            label="Link to credit-card account",
+            label="Link to credit-card or loan account",
             options=[ft.DropdownOption(key="none", text="None")]
-            + [ft.DropdownOption(key=str(a.id), text=a.name) for a in cards],
+            + [ft.DropdownOption(key=str(a.id), text=a.name) for a in linkable],
             value=str(debt.account_id) if debt and debt.account_id else "none",
         )
         self.link.on_select = lambda _: self._link_changed()
@@ -582,26 +582,48 @@ class DebtEditor:
         )
         self._link_changed()
 
+    def _stored_minimum_value(self) -> str:
+        if self.debt is not None and self.debt.minimum_cents:
+            return f"{self.debt.minimum_cents / 100:.2f}"
+        return ""
+
     def _link_changed(self) -> None:
         account_id = int(self.link.value) if self.link.value not in (None, "", "none") else None
-        self.balance.disabled = account_id is not None
-        self.kind.disabled = account_id is not None
-        if account_id is not None:
+        account = self.ctx.repo.get_account(account_id) if account_id is not None else None
+        is_loan = account is not None and account.kind is AccountKind.LOAN
+        was_statement_driven = self.minimum.disabled
+        self.balance.disabled = account is not None
+        # A card link fixes the kind to credit card; a loan link lets the user choose the loan kind.
+        self.kind.disabled = account is not None and not is_loan
+        if account is not None:
             owed = next(
                 (b.owed_cents for b in self.ctx.repo.account_balances() if b.account.id == account_id), 0
             )
             self.balance.value = f"{owed / 100:.2f}"
-            self.kind.value = DebtKind.CREDIT_CARD.value
-            status = self.ctx.service.current_minimum_payment(account_id)
-            if status is not None:
-                self.minimum.value = f"{status.amount_cents / 100:.2f}"
-                self.minimum.disabled = True
-                self.minimum_note.value = f"Driven by the {month_label(status.month)} statement minimum"
-                self.minimum_note.visible = True
-            else:
+            if is_loan:
+                if self.kind.value == DebtKind.CREDIT_CARD.value:
+                    self.kind.value = DebtKind.PERSONAL.value
+                # Drop a card statement minimum, but keep a value the user typed for this debt.
+                if was_statement_driven:
+                    self.minimum.value = self._stored_minimum_value()
                 self.minimum.disabled = False
                 self.minimum_note.visible = False
+            else:
+                self.kind.value = DebtKind.CREDIT_CARD.value
+                status = self.ctx.service.current_minimum_payment(account_id)
+                if status is not None:
+                    self.minimum.value = f"{status.amount_cents / 100:.2f}"
+                    self.minimum.disabled = True
+                    self.minimum_note.value = f"Driven by the {month_label(status.month)} statement minimum"
+                    self.minimum_note.visible = True
+                else:
+                    if was_statement_driven:
+                        self.minimum.value = self._stored_minimum_value()
+                    self.minimum.disabled = False
+                    self.minimum_note.visible = False
         else:
+            if was_statement_driven:
+                self.minimum.value = self._stored_minimum_value()
             self.minimum.disabled = False
             self.minimum_note.visible = False
 
@@ -659,7 +681,12 @@ class DebtEditor:
             # A statement minimum drives the plan; keep the stored fallback untouched.
             minimum = self.debt.minimum_cents
         link = int(self.link.value) if self.link.value not in (None, "", "none") else None
-        kind = DebtKind.CREDIT_CARD if link is not None else DebtKind(self.kind.value)
+        linked_account = self.ctx.repo.get_account(link) if link is not None else None
+        if linked_account is not None and linked_account.kind is AccountKind.CREDIT_CARD:
+            kind = DebtKind.CREDIT_CARD
+        else:
+            # A loan link keeps the chosen loan kind; the service rejects a credit-card kind.
+            kind = DebtKind(self.kind.value)
         if not valid:
             self._refresh_dialog()
             return

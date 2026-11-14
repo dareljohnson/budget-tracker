@@ -17,7 +17,7 @@ from .formatting import format_money
 from .repository import Repository
 from .services import BudgetService
 from .ui.context import AppContext
-from .ui.theme import EXPENSE_COLOR, SEED_COLOR, WARNING_COLOR, build_theme
+from .ui.theme import EXPENSE_COLOR, SEED_COLOR, WARNING_COLOR, build_theme, set_dark
 from .ui.views.accounts import AccountsView
 from .ui.views.bills import BillsView, bill_avatar, status_chip
 from .ui.views.budgets import BudgetsView
@@ -87,8 +87,9 @@ def main(page: ft.Page) -> None:
 
     page.title = APP_NAME
     page.theme = build_theme()
-    page.dark_theme = build_theme()
+    page.dark_theme = build_theme(dark=True)
     page.theme_mode = ft.ThemeMode.DARK if repo.get_setting(THEME_SETTING) == "dark" else ft.ThemeMode.LIGHT
+    set_dark(page.theme_mode == ft.ThemeMode.DARK)
     page.padding = 0
     page.window.width = 1320
     page.window.height = 860
@@ -125,8 +126,10 @@ def main(page: ft.Page) -> None:
     def toggle_theme(_: ft.Event) -> None:
         dark = page.theme_mode != ft.ThemeMode.DARK
         page.theme_mode = ft.ThemeMode.DARK if dark else ft.ThemeMode.LIGHT
+        set_dark(dark)
         theme_button.icon = ft.Icons.LIGHT_MODE if dark else ft.Icons.DARK_MODE
         repo.set_setting(THEME_SETTING, "dark" if dark else "light")
+        ctx.data_changed()
 
     def quick_add(_: ft.Event) -> None:
         rail.selected_index = TRANSACTIONS_INDEX
@@ -144,10 +147,14 @@ def main(page: ft.Page) -> None:
         label_type=ft.NavigationRailLabelType.ALL,
         min_width=96,
         group_alignment=-0.85,
+        indicator_color=ft.Colors.PRIMARY_CONTAINER,
+        selected_label_text_style=ft.TextStyle(
+            color=ft.Colors.ON_PRIMARY_CONTAINER, weight=ft.FontWeight.BOLD
+        ),
         leading=ft.Column(
             [
                 ft.Container(
-                    content=ft.Icon(ft.Icons.ACCOUNT_BALANCE_WALLET, color=ft.Colors.WHITE, size=26),
+                    content=ft.Icon(ft.Icons.ACCOUNT_BALANCE_WALLET, color=ft.Colors.ON_PRIMARY, size=26),
                     width=48,
                     height=48,
                     border_radius=14,
@@ -166,7 +173,14 @@ def main(page: ft.Page) -> None:
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
             spacing=2,
         ),
-        destinations=[ft.NavigationRailDestination(icon=icon, selected_icon=selected, label=label) for label, icon, selected in NAV_ITEMS],
+        destinations=[
+            ft.NavigationRailDestination(
+                icon=icon,
+                selected_icon=ft.Icon(selected, color=ft.Colors.ON_PRIMARY_CONTAINER),
+                label=label,
+            )
+            for label, icon, selected in NAV_ITEMS
+        ],
         on_change=navigate,
     )
 

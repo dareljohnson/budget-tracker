@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import sys
@@ -11,6 +12,7 @@ from pathlib import Path
 import flet as ft
 
 from . import __version__
+from .backups import apply_pending_restore, create_backup_if_due
 from .config import APP_NAME, db_path
 from .db import connect
 from .formatting import format_money
@@ -28,6 +30,7 @@ from .ui.theme import (
     set_text_scale,
 )
 from .ui.views.accounts import AccountsView
+from .ui.views.backups import BackupsDialog
 from .ui.views.bills import BillsView, bill_avatar, status_chip
 from .ui.views.budgets import BudgetsView
 from .ui.views.categories import CategoriesView
@@ -57,6 +60,24 @@ NAV_ITEMS = [
 TRANSACTIONS_INDEX = 2
 BILLS_INDEX = 6
 ALERT_MAX_ROWS = 6
+AUTO_BACKUP_INTERVAL_SECONDS = 6 * 60 * 60
+
+
+async def auto_backup_task() -> None:
+    """Take a due automatic snapshot on startup, then check again every six hours.
+
+    ``create_backup_if_due`` holds the backup lock and re-checks the 24-hour window, so an
+    overlapping tick or a manual backup never produces a second snapshot. The backup core
+    records failures in ``backups/status.json``; a failure must not stop the timer.
+    """
+    while True:
+        try:
+            await asyncio.to_thread(create_backup_if_due)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 - a failed automatic backup must not stop the timer
+            log.exception("Automatic backup failed")
+        await asyncio.sleep(AUTO_BACKUP_INTERVAL_SECONDS)
 
 
 def _icon_path() -> Path:
@@ -93,6 +114,8 @@ def _pinned_page(control: ft.Control) -> ft.Control:
 
 
 def main(page: ft.Page) -> None:
+    # A staged restore must replace the files before anything opens the database.
+    restore_message = apply_pending_restore()
     repo = Repository(connect(db_path()))
     ctx = AppContext(page=page, repo=repo, service=BudgetService(repo))
 
@@ -206,6 +229,9 @@ def main(page: ft.Page) -> None:
         content.content = _pinned_page(views[TRANSACTIONS_INDEX].control)
         views[TRANSACTIONS_INDEX].open_editor()
 
+    def choose_backups(_: ft.Event) -> None:
+        BackupsDialog(ctx).open()
+
     theme_button = ft.IconButton(
         icon=ft.Icons.LIGHT_MODE if page.theme_mode == ft.ThemeMode.DARK else ft.Icons.DARK_MODE,
         tooltip="Appearance",
@@ -215,6 +241,11 @@ def main(page: ft.Page) -> None:
         icon=ft.Icons.FORMAT_SIZE,
         tooltip="Text size",
         on_click=lambda event: choose_text_size(event),
+    )
+    backup_button = ft.IconButton(
+        icon=ft.Icons.BACKUP,
+        tooltip="Backups",
+        on_click=choose_backups,
     )
 
     rail = ft.NavigationRail(
@@ -246,7 +277,7 @@ def main(page: ft.Page) -> None:
         trailing=ft.Column(
             [
                 ft.Row(
-                    [theme_button, text_button],
+                    [theme_button, text_button, backup_button],
                     alignment=ft.MainAxisAlignment.CENTER,
                     spacing=0,
                 ),
@@ -311,10 +342,17 @@ def main(page: ft.Page) -> None:
         )
 
     def on_disconnect(_: ft.Event) -> None:
+        auto_backup.cancel()
         repo.close()
 
     page.on_disconnect = on_disconnect
     page.add(ft.Row([rail, ft.VerticalDivider(width=1), content], expand=True, spacing=0))
+    auto_backup = page.run_task(auto_backup_task)
+    if restore_message:
+        ctx.notify(
+            restore_message,
+            error=not restore_message.startswith("Restore applied"),
+        )
     show_due_bills_alert(ctx, lambda: show_view(BILLS_INDEX))
 
 

@@ -217,7 +217,7 @@ To use it:
 2. **Actions → Build installers → Run workflow** builds the installers and attaches them as artifacts.
 3. Or tag a release to also publish a **GitHub Release** with all installers attached:
    ```bash
-   git tag v1.5.0 && git push origin v1.5.0
+   git tag v1.6.0 && git push origin v1.6.0
    ```
 
 Signing secrets aren't wired in by default. Add them as repository secrets and export `MACOS_SIGN_IDENTITY` /
@@ -241,6 +241,16 @@ The Store exception exists because the Store Python ships as an MSIX package: Wi
 process's writes to `%LOCALAPPDATA%` into the package's private `LocalCache`. The app works normally, but the
 file is not where the other modes look. (The `Python.3.13` part of the path follows your Store Python
 version; find the folder with `Get-ChildItem "$env:LOCALAPPDATA\Packages" -Filter 'PythonSoftwareFoundation.Python.*'`.)
+
+Backups live in a `backups` folder inside that same data folder — `%LOCALAPPDATA%\BudgetTracker\backups` on
+Windows, `~/.local/share/budget_tracker/backups` on macOS and Linux, or under `BUDGET_TRACKER_HOME` when it is
+set. The folder holds automatic, manual, and pre-restore ZIP snapshots (the database and receipt images),
+plus pre-migration `.db` copies. Backups are not encrypted and never leave the PC; see
+[Backups and restore](README.md#backups-and-restore).
+
+**Run only one copy of the app at a time.** Backup and restore are serialized within a running app but not
+between processes: a second instance could apply a pending restore while the first still has the database
+open. Close the app before starting another copy, and before restarting to apply a staged restore.
 
 Installed builds and source runs with regular Python share the same path, so switching between those two
 keeps your data. To switch from a Store-Python source run to the installed build, move the database to the

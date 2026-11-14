@@ -5,15 +5,17 @@ from __future__ import annotations
 import csv
 import hashlib
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from .debt_planner import DebtInput, DebtPlan, DebtStrategy, monthly_interest_cents, plan_payoff
 from .formatting import month_key, shift_month
+from .matching import MatchCandidate, match_candidates as _match_candidates
 from .models import (
     Account,
     AccountBalance,
     AccountKind,
+    Bill,
     BudgetProgress,
     CategoryTotal,
     Debt,
@@ -412,7 +414,8 @@ class BudgetService:
                     direction=item.direction,
                 )
             )
-        return ImportPreview(statement=statement, account_id=account_id, rows=rows, source=parsed.source)
+        preview = ImportPreview(statement=statement, account_id=account_id, rows=rows, source=parsed.source)
+        return self.match_import_preview(preview)
 
     def commit_import(
         self, preview: ImportPreview, rows: list[ImportRow], *, set_opening_balance: bool = False
@@ -434,7 +437,7 @@ class BudgetService:
                 )
 
         for row in rows:
-            if not row.include:
+            if row.matched is not None or not row.include:
                 continue
             tx = row.transaction
             if tx.type in (TransactionType.INCOME, TransactionType.EXPENSE, TransactionType.REFUND):
@@ -455,12 +458,120 @@ class BudgetService:
             difference_cents=0,
             note="Statement import",
         )
+        # A matched row already exists in the ledger; insert nothing for it even if its
+        # checkbox was forced on. The existing transaction keeps its own statement tag.
+        to_insert = [row for row in rows if row.matched is None]
         return self.repo.import_statement(
             preview.statement,
-            rows,
+            to_insert,
             opening_balance_cents=preview.statement.beginning_cents if set_opening else None,
             reconciliation=reconciliation,
         )
+
+    # ---------- duplicate matching ----------
+    def match_candidates(
+        self,
+        transactions: list[Transaction],
+        *,
+        account_id: int,
+        amount_cents: int,
+        occurred_on: date,
+        type_: TransactionType,
+        description: str,
+        transfer_account_id: int | None = None,
+        window_days: int = 7,
+    ) -> list[MatchCandidate]:
+        """Rank existing transactions for an incoming receipt, bill payment or statement row."""
+        return _match_candidates(
+            transactions,
+            account_id=account_id,
+            amount_cents=amount_cents,
+            occurred_on=occurred_on,
+            type_=type_,
+            description=description,
+            transfer_account_id=transfer_account_id,
+            window_days=window_days,
+        )
+
+    def receipt_match_candidates(
+        self, draft: ReceiptDraft, account_id: int | None
+    ) -> list[MatchCandidate]:
+        """Receipts without a total never search; otherwise look for receiptless expenses."""
+        if draft.total_cents is None or account_id is None:
+            return []
+        window = timedelta(days=7)
+        rows = self.repo.transaction_candidates(
+            account_id,
+            draft.total_cents,
+            draft.occurred_on - window,
+            draft.occurred_on + window,
+            TransactionType.EXPENSE,
+            receiptless_only=True,
+        )
+        return self.match_candidates(
+            rows,
+            account_id=account_id,
+            amount_cents=draft.total_cents,
+            occurred_on=draft.occurred_on,
+            type_=TransactionType.EXPENSE,
+            description=draft.merchant,
+        )
+
+    def bill_match_candidates(
+        self, bill: Bill, amount_cents: int, paid_on: date, account_id: int | None = None
+    ) -> list[MatchCandidate]:
+        """Existing payments that could stand in for this bill; card bills need the destination."""
+        if amount_cents <= 0:
+            return []
+        source_account = account_id or bill.account_id
+        type_ = TransactionType.TRANSFER if bill.is_card_payment else TransactionType.EXPENSE
+        window = timedelta(days=7)
+        rows = self.repo.transaction_candidates(
+            source_account,
+            amount_cents,
+            paid_on - window,
+            paid_on + window,
+            type_,
+            transfer_account_id=bill.pay_to_account_id if bill.is_card_payment else None,
+        )
+        return self.match_candidates(
+            rows,
+            account_id=source_account,
+            amount_cents=amount_cents,
+            occurred_on=paid_on,
+            type_=type_,
+            transfer_account_id=bill.pay_to_account_id if bill.is_card_payment else None,
+            description=bill.name,
+        )
+
+    def import_row_candidates(self, preview: ImportPreview, row: ImportRow) -> list[MatchCandidate]:
+        """Existing rows inside the statement period that could be this row, ranked by description."""
+        tx = row.transaction
+        if tx.amount_cents <= 0:
+            return []
+        rows = self.repo.transaction_candidates(
+            preview.account_id,
+            tx.amount_cents,
+            preview.statement.period_start,
+            preview.statement.period_end,
+            tx.type,
+        )
+        return self.match_candidates(
+            rows,
+            account_id=preview.account_id,
+            amount_cents=tx.amount_cents,
+            occurred_on=tx.occurred_on,
+            type_=tx.type,
+            description=tx.description,
+        )
+
+    def match_import_preview(self, preview: ImportPreview) -> ImportPreview:
+        """Fill every row's sorted candidates. Selecting one is the owner's job, so ``matched`` stays."""
+        for row in preview.rows:
+            row.match_candidates = [
+                candidate.transaction for candidate in self.import_row_candidates(preview, row)
+            ]
+        return preview
 
     def match_account(self, account_last4: str | None) -> Account | None:
         """The single account whose saved suffix matches the statement's suffix (either direction)."""
@@ -546,6 +657,7 @@ class BudgetService:
                     description=description,
                     account_id=account_id,
                     receipt_path=stored,
+                    source="receipt",
                 )
             )
         except BaseException:

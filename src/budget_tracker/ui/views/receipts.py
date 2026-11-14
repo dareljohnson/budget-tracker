@@ -12,7 +12,8 @@ from pathlib import Path
 
 import flet as ft
 
-from ...formatting import parse_date, parse_money
+from ...formatting import format_money, parse_date, parse_money
+from ...matching import STRONG_SCORE, MatchCandidate, source_label
 from ...models import Transaction, TransactionType
 from ...receipts import (
     ReceiptDraft,
@@ -40,6 +41,21 @@ _ATTACHED_STATUS = "A receipt is attached."
 _NO_RECEIPT_STATUS = "No receipt attached."
 _NO_PREVIEW = "No receipt attached"
 _BROKEN_PREVIEW = "The saved receipt file could not be found."
+_MATCH_TITLE = "Possible match"
+_MATCH_NOTE = "The existing transaction keeps its own date, amount, category, and description."
+_ATTACH_LABEL = "Attach & save"
+_SAVE_LABEL = "Save"
+_USE_EXISTING_LABEL = "Use this transaction"
+_CREATE_NEW_LABEL = "Create a new transaction"
+
+
+def _candidate_label(candidate: MatchCandidate) -> str:
+    """Date, description, amount and provenance, in the order the owner scans them."""
+    tx = candidate.transaction
+    return (
+        f"{tx.occurred_on.isoformat()} · {tx.description} · "
+        f"{format_money(tx.amount_cents)} · {source_label(tx.source)}"
+    )
 
 
 def _file_row(icon: ft.IconData, path: Path) -> ft.Row:
@@ -86,6 +102,11 @@ class ReceiptImportDialog:
         self._saving = False
         self._source_path: Path | None = None
         self._temp_dir: Path | None = None
+        self._match_mode = False
+        self._create_requested = False
+        self._selected_match: MatchCandidate | None = None
+        self._candidates: list[MatchCandidate] = []
+        self._candidate_by_id: dict[str, MatchCandidate] = {}
         self._file_picker = ft.FilePicker()
         accounts = ctx.repo.list_accounts()
         categories = ctx.repo.list_categories(TransactionType.EXPENSE)
@@ -114,16 +135,50 @@ class ReceiptImportDialog:
             ),
         )
 
+        self.match_group = ft.RadioGroup(
+            content=ft.Column([], spacing=4),
+            on_change=self._candidate_selected,
+        )
+        self.match_note = ft.Text("", size=fs(12), color=ft.Colors.ON_SURFACE_VARIANT)
+        self.match_title = ft.Text(_MATCH_TITLE, size=fs(14), weight=ft.FontWeight.W_600)
+        self.use_existing_button = ft.OutlinedButton(
+            content=_USE_EXISTING_LABEL,
+            on_click=self._use_existing,
+        )
+        self.create_new_button = ft.OutlinedButton(
+            content=_CREATE_NEW_LABEL,
+            on_click=self._create_new,
+        )
+        self.match_panel = ft.Container(
+            visible=False,
+            padding=10,
+            border=ft.Border.all(1, ft.Colors.OUTLINE_VARIANT),
+            border_radius=10,
+            content=ft.Column(
+                [
+                    self.match_title,
+                    self.match_group,
+                    self.match_note,
+                    ft.Row(
+                        [self.use_existing_button, self.create_new_button],
+                        spacing=8,
+                        wrap=True,
+                    ),
+                ],
+                spacing=6,
+            ),
+        )
+
         self.merchant = ft.TextField(label="Merchant", max_length=120, on_change=lambda _: self._refresh_save())
         self.amount = ft.TextField(
             label="Amount",
             prefix_icon=ft.Icons.ATTACH_MONEY,
             keyboard_type=ft.KeyboardType.NUMBER,
-            on_change=lambda _: self._refresh_save(),
+            on_change=self._value_changed,
             on_submit=self._save,
         )
         self.date = date_field(
-            ctx.page, "Date", date.today(), on_change=lambda _: self._refresh_save()
+            ctx.page, "Date", date.today(), on_change=self._value_changed
         )
         self.account = ft.Dropdown(
             label="Account",
@@ -158,6 +213,7 @@ class ReceiptImportDialog:
                             vertical_alignment=ft.CrossAxisAlignment.CENTER,
                         ),
                         self.preview_holder,
+                        self.match_panel,
                         self.merchant,
                         ft.Row([self.amount, self.date], spacing=12),
                         ft.Row([self.account, self.category], spacing=12),
@@ -332,6 +388,7 @@ class ReceiptImportDialog:
 
     # ---------- fields ----------
     def _install(self, draft: ReceiptDraft) -> None:
+        self._create_requested = False
         self.merchant.value = draft.merchant
         self.amount.value = "" if draft.total_cents is None else f"{draft.total_cents / 100:.2f}"
         self.amount.error = None
@@ -358,11 +415,121 @@ class ReceiptImportDialog:
             self.note.color = EXPENSE_COLOR
         else:
             self.category.value = str(category_id)
+        self._refresh_candidates(draft, auto_select=True)
         self._refresh_save()
+
+    # ---------- match panel ----------
+    def _draft_from_fields(self) -> ReceiptDraft | None:
+        """The search draft the current fields describe, or ``None`` when they cannot be parsed."""
+        try:
+            amount = parse_money(self.amount.value)
+            occurred = parse_date(self.date.value)
+        except ValueError:
+            return None
+        return ReceiptDraft(
+            merchant=(self.merchant.value or "").strip(),
+            occurred_on=occurred,
+            total_cents=amount,
+            card_last4=None,
+            paid_cash=False,
+            raw_text="",
+            missing=frozenset(),
+        )
+
+    def _refresh_candidates(
+        self, draft: ReceiptDraft | None, *, auto_select: bool = False
+    ) -> None:
+        """Recompute every eligible candidate; preselect only a lone strong one.
+
+        No total or no account means there is nothing to search by, so the panel disappears.
+        Candidates are never hidden by their score. ``auto_select`` is reserved for a fresh
+        draft or an account change out of attach mode: a refresh triggered while the owner is
+        in create mode only updates the list and never pulls them back out of it.
+        """
+        self._candidates = []
+        self._candidate_by_id = {}
+        self._selected_match = None
+        self.match_group.content.controls = []
+        self.match_group.value = None
+        self.match_panel.visible = False
+
+        account_id = int(self.account.value) if self.account.value else None
+        if draft is None or draft.total_cents is None or account_id is None:
+            self._set_match_mode(False)
+            return
+
+        candidates = self.ctx.service.receipt_match_candidates(draft, account_id)
+        if not candidates:
+            self._set_match_mode(False)
+            return
+
+        self._candidates = candidates
+        self._candidate_by_id = {str(c.transaction.id): c for c in candidates}
+        self.match_group.content.controls = [
+            ft.Radio(
+                value=str(candidate.transaction.id),
+                label=_candidate_label(candidate),
+                label_style=ft.TextStyle(size=fs(13)),
+            )
+            for candidate in candidates
+        ]
+        self.match_panel.visible = True
+        strong = (
+            auto_select
+            and len(candidates) == 1
+            and candidates[0].score >= STRONG_SCORE
+        )
+        if strong:
+            self._selected_match = candidates[0]
+            self.match_group.value = str(candidates[0].transaction.id)
+        # Multiple or weak candidates show the list but stay in create mode: the owner
+        # keeps editable fields and can still choose one to switch to attach mode.
+        self._set_match_mode(strong)
+
+    def _candidate_selected(self, _: ft.Event | None = None) -> None:
+        self._selected_match = self._candidate_by_id.get(self.match_group.value)
+        if self._selected_match is not None:
+            # Choosing a row is the owner switching back to attach mode.
+            self._set_match_mode(True)
+        else:
+            self._refresh_save()
+
+    def _use_existing(self, _: ft.Event | None = None) -> None:
+        """Make the chosen candidate the footer action again after browsing create-new."""
+        if self._candidates:
+            # The owner explicitly chose attach, so a later account change may re-select.
+            self._create_requested = False
+            self._set_match_mode(True)
+
+    def _create_new(self, _: ft.Event | None = None) -> None:
+        self._create_requested = True
+        self._set_match_mode(False)
+
+    def _set_match_mode(self, enabled: bool) -> None:
+        """Toggle between attaching to the selected row and creating an explicit duplicate."""
+        self._match_mode = bool(enabled)
+        for field in (self.merchant, self.amount, self.date, self.account, self.category):
+            field.disabled = bool(enabled)
+        self.save_button.content = _ATTACH_LABEL if enabled else _SAVE_LABEL
+        self.match_note.value = _MATCH_NOTE if enabled else ""
+        self.match_note.visible = bool(enabled)
+        self._refresh_save()
+
+    def _value_changed(self, _: ft.Event | None = None) -> None:
+        """Amount or date edits change what can match; recompute from the fields as typed.
+
+        An edit made while creating a new transaction keeps create mode: pulling the owner
+        into attach mode mid-keystroke would disable the field they are typing in.
+        """
+        if not self._match_mode:
+            self._create_requested = True
+        self._refresh_candidates(self._draft_from_fields(), auto_select=False)
 
     def _account_changed(self, _: ft.Event | None = None) -> None:
         self.account.error_text = None
-        self._refresh_save()
+        # Re-select only when the owner is already attaching; otherwise create mode is sticky.
+        auto_select = self._match_mode and not self._create_requested
+        self._refresh_candidates(self._draft_from_fields(), auto_select=auto_select)
 
     def _category_changed(self, _: ft.Event | None = None) -> None:
         self.category.error_text = None
@@ -371,17 +538,21 @@ class ReceiptImportDialog:
     def _refresh_save(self) -> None:
         source_exists = self._source_path is not None and Path(self._source_path).is_file()
         valid = not self._busy and not self._saving and source_exists
-        try:
-            amount = parse_money(self.amount.value)
-            valid = valid and amount > 0
-        except ValueError:
-            valid = False
-        try:
-            parse_date(self.date.value)
-        except ValueError:
-            valid = False
-        if not self.account.value or not self.category.value:
-            valid = False
+        if self._match_mode:
+            # Attaching only needs the image and a chosen row; the row keeps its own fields.
+            valid = valid and self._selected_match is not None
+        else:
+            try:
+                amount = parse_money(self.amount.value)
+                valid = valid and amount > 0
+            except ValueError:
+                valid = False
+            try:
+                parse_date(self.date.value)
+            except ValueError:
+                valid = False
+            if not self.account.value or not self.category.value:
+                valid = False
         self.save_button.disabled = not valid
         self._refresh_ui()
 
@@ -406,8 +577,36 @@ class ReceiptImportDialog:
             self.dialog.update()
 
     # ---------- saving ----------
+    def _attach_to_selected(self) -> None:
+        """Store the receipt against the chosen transaction; no transaction is created."""
+        candidate = self._selected_match
+        if candidate is None or candidate.transaction.id is None:
+            return
+        source_exists = self._source_path is not None and Path(self._source_path).is_file()
+        if not source_exists:
+            self.ctx.notify("Choose or scan a receipt first", error=True)
+            return
+
+        self._saving = True
+        self.save_button.disabled = True
+        self._refresh_ui()
+        try:
+            self.ctx.service.attach_receipt(candidate.transaction.id, self._source_path)
+        except (RepositoryError, ReceiptError, OSError) as exc:
+            self._saving = False
+            self.ctx.notify(str(exc), error=True)
+            self._refresh_save()
+            return
+
+        self._close()
+        self.ctx.notify("Receipt attached to existing transaction")
+        self.ctx.data_changed()
+
     def _save(self, _: ft.Event | None = None) -> None:
         if self._busy or self._saving or self._closed_notified:
+            return
+        if self._match_mode:
+            self._attach_to_selected()
             return
         valid = True
         try:

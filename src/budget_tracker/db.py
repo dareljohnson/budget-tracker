@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
+import os
 import sqlite3
+from datetime import datetime
 from pathlib import Path
 
 DEFAULT_CATEGORIES: list[tuple[str, str, str, str]] = [
@@ -266,6 +269,17 @@ MIGRATIONS: list[str] = [
     """
     ALTER TABLE transactions ADD COLUMN receipt_path TEXT;
     """,
+    # v10: provenance. How each row entered the ledger. Import wins when a row was later given
+    # a receipt: an existing import stays 'import'. Index supports duplicate-match lookups.
+    """
+    ALTER TABLE transactions ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'
+        CHECK (source IN ('manual', 'import', 'receipt', 'bill'));
+    UPDATE transactions SET source = 'import' WHERE statement_id IS NOT NULL;
+    UPDATE transactions SET source = 'receipt'
+        WHERE receipt_path IS NOT NULL AND statement_id IS NULL;
+    CREATE INDEX idx_transactions_match
+        ON transactions (account_id, occurred_on, amount_cents);
+    """,
 ]
 
 FOREIGN_KEYS_OFF_MIGRATIONS = {8}
@@ -283,8 +297,102 @@ def connect(path: str | Path = ":memory:") -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys = ON")
     if str(path) != ":memory:":
         conn.execute("PRAGMA journal_mode = WAL")
+        _pre_migration_copy(conn)
     migrate(conn)
     return conn
+
+
+def _pre_migration_copy(conn: sqlite3.Connection) -> None:
+    """Save a copy of a file database before any pending migration runs.
+
+    The copy goes through SQLite's backup API, not a file copy, so committed WAL content
+    is included. It is best effort: a failure is recorded in ``backups/status.json`` and
+    never blocks the migration.
+    """
+    target: Path | None = None
+    partial: Path | None = None
+    try:
+        version = schema_version(conn)
+        if version <= 0 or version >= len(MIGRATIONS):
+            return
+        database = _main_database_file(conn)
+        if database is None:
+            return
+
+        from budget_tracker.config import data_dir
+
+        folder = data_dir() / "backups"
+        folder.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        target = folder / f"pre-migration-v{version}-{stamp}.db"
+        if target.exists():
+            target = _unique_path(target)
+        partial = target.with_name(target.name + ".tmp")
+        destination = sqlite3.connect(str(partial))
+        try:
+            conn.backup(destination)
+        finally:
+            destination.close()
+        os.replace(partial, target)
+    except Exception as exc:  # noqa: BLE001 - never block a migration on the copy
+        if partial is not None:
+            try:
+                partial.unlink(missing_ok=True)
+            except OSError:
+                pass
+        _write_local_status(
+            "pre-migration", False, f"Could not save a pre-migration copy: {exc}"
+        )
+        return
+    _write_local_status(
+        "pre-migration", True, f"Saved {target.name} before migrating"
+    )
+
+
+def _main_database_file(conn: sqlite3.Connection) -> Path | None:
+    try:
+        rows = conn.execute("PRAGMA database_list").fetchall()
+    except sqlite3.Error:
+        return None
+    for row in rows:
+        try:
+            name, filename = row[1], row[2]
+        except (IndexError, TypeError):
+            continue
+        if name == "main" and filename:
+            return Path(filename)
+    return None
+
+
+def _write_local_status(kind: str, ok: bool, message: str = "") -> None:
+    """Write ``backups/status.json`` without importing :mod:`budget_tracker.backups`."""
+    try:
+        from budget_tracker.config import data_dir
+
+        folder = data_dir() / "backups"
+        folder.mkdir(parents=True, exist_ok=True)
+        target = folder / "status.json"
+        tmp = target.with_name(target.name + ".tmp")
+        payload = {
+            "kind": kind,
+            "ok": bool(ok),
+            "at": datetime.now().isoformat(timespec="seconds"),
+            "message": message,
+        }
+        tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        os.replace(tmp, target)
+    except Exception:  # noqa: BLE001 - status reporting must never raise
+        pass
+
+
+def _unique_path(path: Path) -> Path:
+    if not path.exists():
+        return path
+    for index in range(1, 1000):
+        candidate = path.with_name(f"{path.stem}-{index}{path.suffix}")
+        if not candidate.exists():
+            return candidate
+    return path
 
 
 def schema_version(conn: sqlite3.Connection) -> int:

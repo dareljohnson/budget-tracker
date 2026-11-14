@@ -263,7 +263,15 @@ def date_field(page: ft.Page, label: str, value: date, **kwargs) -> ft.TextField
             chosen = e.control.value
             field.value = (chosen.date() if isinstance(chosen, datetime) else chosen).isoformat()
             field.error = None
-            field.update()
+            try:
+                field.update()
+            except RuntimeError:
+                # Direct tests build fields without a page; the value change still matters.
+                pass
+            # Picking a date is a value change too; run the same validation the owner's
+            # typing would, so dependent state (such as receipt candidates) refreshes.
+            if field.on_change is not None:
+                field.on_change(field)
 
     def open_picker(_: ft.Event) -> None:
         try:

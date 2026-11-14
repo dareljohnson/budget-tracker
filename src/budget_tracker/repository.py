@@ -794,6 +794,28 @@ class Repository:
         by_month = {r["m"]: (r["income"], r["expense"]) for r in rows}
         return [MonthTotal(m, *by_month.get(m, (0, 0))) for m in months]
 
+    def budget_totals(self, months: Sequence[str]) -> dict[str, tuple[int, int]]:
+        """Overall limit and number of budgets per month, for the requested months."""
+        if not months:
+            return {}
+        placeholders = ",".join("?" for _ in months)
+        rows = self.conn.execute(
+            f"SELECT month, SUM(limit_cents), COUNT(*) FROM budgets "
+            f"WHERE month IN ({placeholders}) GROUP BY month",
+            tuple(months),
+        )
+        return {row[0]: (row[1], row[2]) for row in rows}
+
+    def data_years(self) -> list[int]:
+        """Years that contain transactions or budgets, plus the current year."""
+        years: set[int] = set()
+        for table, column in (("transactions", "occurred_on"), ("budgets", "month")):
+            for row in self.conn.execute(f"SELECT DISTINCT substr({column}, 1, 4) FROM {table}"):
+                if row[0] and row[0].isdigit():
+                    years.add(int(row[0]))
+        years.add(date.today().year)
+        return sorted(years)
+
     # ---------- budgets ----------
     def set_budget(self, budget: Budget) -> Budget:
         if budget.limit_cents <= 0:

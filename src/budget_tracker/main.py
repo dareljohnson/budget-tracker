@@ -24,6 +24,7 @@ from .ui.views.budgets import BudgetsView
 from .ui.views.categories import CategoriesView
 from .ui.views.dashboard import DashboardView
 from .ui.views.transactions import TransactionsView
+from .ui.views.year import YearView
 
 log = logging.getLogger(__name__)
 
@@ -31,14 +32,15 @@ THEME_SETTING = "theme_mode"
 
 NAV_ITEMS = [
     ("Dashboard", ft.Icons.DASHBOARD_OUTLINED, ft.Icons.DASHBOARD),
+    ("Year", ft.Icons.CALENDAR_MONTH_OUTLINED, ft.Icons.CALENDAR_MONTH),
     ("Transactions", ft.Icons.RECEIPT_LONG_OUTLINED, ft.Icons.RECEIPT_LONG),
     ("Accounts", ft.Icons.ACCOUNT_BALANCE_OUTLINED, ft.Icons.ACCOUNT_BALANCE),
     ("Bills", ft.Icons.EVENT_NOTE_OUTLINED, ft.Icons.EVENT_NOTE),
     ("Budgets", ft.Icons.TRACK_CHANGES_OUTLINED, ft.Icons.TRACK_CHANGES),
     ("Categories", ft.Icons.CATEGORY_OUTLINED, ft.Icons.CATEGORY),
 ]
-TRANSACTIONS_INDEX = 1
-BILLS_INDEX = 3
+TRANSACTIONS_INDEX = 2
+BILLS_INDEX = 4
 ALERT_MAX_ROWS = 6
 
 
@@ -98,6 +100,7 @@ def main(page: ft.Page) -> None:
 
     views = [
         DashboardView(ctx, on_view_bills=lambda: show_view(BILLS_INDEX)),
+        YearView(ctx),
         TransactionsView(ctx),
         AccountsView(ctx),
         BillsView(ctx),

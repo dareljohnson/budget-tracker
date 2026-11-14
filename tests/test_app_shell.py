@@ -20,3 +20,11 @@ def test_pinned_page_pins_the_header_and_scrolls_the_body():
 def test_pinned_page_leaves_a_non_column_control_alone():
     control = ft.Text("Plain")
     assert _pinned_page(control) is control
+
+
+def test_nav_indices_stay_in_sync_with_the_labels():
+    from budget_tracker import main as shell
+
+    assert shell.NAV_ITEMS[1][0] == "Year"
+    assert shell.NAV_ITEMS[shell.TRANSACTIONS_INDEX][0] == "Transactions"
+    assert shell.NAV_ITEMS[shell.BILLS_INDEX][0] == "Bills"

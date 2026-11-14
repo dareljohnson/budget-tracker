@@ -6,6 +6,7 @@ A personal budget tracker desktop app built with **Python 3.13**, **[Flet](https
 
 - **Dashboard**: net worth across all accounts, monthly income and spending, savings rate, spending by category, a six-month income vs. spending trend, account balances, budget health, and recent activity.
 - **Accounts**: checking, savings, credit card, cash, and other accounts, each with a live balance. Credit cards show the amount owed, and **Pay card** records a payment from your checking account.
+- **Year**: monthly budget versus actual spending, year-to-date totals with the same period last year, a run-rate year-end projection, and cash flow across the year.
 - **Balance checks and adjustments**: check any account against the balance your bank shows and see the difference. If they disagree, record a signed correction that changes the account balance only — adjustments are excluded from income, spending, and budgets. Earlier checks are kept in a history.
 - **Bills and reminders**: recurring bills (one-time, weekly, monthly, yearly) and credit card payments, each with a due date. Overdue and soon-due bills show on the Bills page, on the Dashboard, and in a pop-up when the app starts. **Mark paid** records the payment and moves the bill to its next due date. Windows notifications can also remind you when the app is closed (see below).
 - **Transactions**: five types, each tied to an account:

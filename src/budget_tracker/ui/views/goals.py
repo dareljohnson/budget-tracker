@@ -129,7 +129,7 @@ class GoalsView:
                             ft.Column(
                                 [
                                     ft.Text(goal.name, size=16, weight=ft.FontWeight.W_600),
-                                    ft.Text(f"Into {progress.account_name}", size=12, color=ft.Colors.ON_SURFACE_VARIANT),
+                                    ft.Text(f"Savings · {progress.account_name}", size=12, color=ft.Colors.ON_SURFACE_VARIANT),
                                 ],
                                 spacing=2,
                                 expand=True,
@@ -185,7 +185,8 @@ class GoalsView:
                             color=ft.Colors.ON_SURFACE_VARIANT,
                         ),
                         ft.Text(
-                            f"This month {format_money(progress.contributed_this_month_cents)}",
+                            f"This month: {format_money(progress.contributed_this_month_cents)} of "
+                            f"{format_money(progress.required_monthly_cents)}",
                             size=12,
                             color=ft.Colors.ON_SURFACE_VARIANT,
                         ),

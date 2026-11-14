@@ -97,13 +97,13 @@ Existing databases are upgraded automatically: transactions recorded before acco
 
 Use the **Goals** page to set money aside for a target, such as a trip, a deposit, or an emergency fund.
 
-1. Click **Add goal** and enter a name, a **Target amount**, and a **Target date**.
+1. Click **Add goal** and enter a name, a **Target amount**, and a **Target date**. If you have already saved part of the target, enter it in **Already saved** (optional); that amount changes the monthly plan.
 2. Choose the **Destination account** — the savings account the money will live in. If you have no savings account yet, add one on the **Accounts** page first.
-3. The card shows how much you have saved so far, how much remains, the fixed monthly amount required to reach the target on time, and how much you have contributed this month.
+3. The card shows how much you have saved so far, how much remains, the fixed monthly amount planned for the goal, and how much you have contributed this month.
 4. Click **Contribute** to move money into the goal. The contribution is recorded as a transfer from the account you choose into the goal's destination account.
 5. Click **Schedule & history** to see the month-by-month plan and every contribution recorded for the goal.
 
-The monthly amount is fixed when the goal is created: it spreads the amount to save across the months from the start month through the target month, rounding up and making the final month smaller so the plan lands exactly on the target. Recording a contribution does not change it. Editing the target amount or target date recalculates the plan.
+The monthly amount is fixed when the goal is created: it spreads the amount still to save (the target minus any amount already saved) across the months from the start month through the target month, rounding up and making the final month smaller so the plan lands exactly on the target. Recording a contribution does not change it. Editing the target amount or target date recalculates the plan.
 
 Limits:
 

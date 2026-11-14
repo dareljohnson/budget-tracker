@@ -475,6 +475,15 @@ class Repository:
     def update_savings_goal(self, goal: SavingsGoal) -> None:
         if goal.id is None:
             raise ValueError("Savings goal id is required")
+        existing = self.get_savings_goal(goal.id)
+        if (
+            existing is not None
+            and existing.account_id != goal.account_id
+            and self.goal_contribution_count(goal.id) > 0
+        ):
+            raise RepositoryError(
+                "This goal already has contributions; remove them or create a new goal for that account"
+            )
         with self.conn:
             self.conn.execute(
                 "UPDATE savings_goals SET name = ?, target_cents = ?, target_date = ?, start_date = ?, "
@@ -500,8 +509,12 @@ class Repository:
         ).fetchone()[0]
 
     def goal_contributed_cents(self, goal_id: int, *, through: date | None = None) -> int:
-        sql = "SELECT COALESCE(SUM(amount_cents), 0) FROM transactions WHERE goal_id = ? AND type = 'transfer'"
-        params: list = [goal_id]
+        sql = (
+            "SELECT COALESCE(SUM(amount_cents), 0) FROM transactions "
+            "WHERE goal_id = ? AND type = 'transfer' "
+            "AND transfer_account_id = (SELECT account_id FROM savings_goals WHERE id = ?)"
+        )
+        params: list = [goal_id, goal_id]
         if through is not None:
             sql += " AND occurred_on <= ?"
             params.append(through.isoformat())
@@ -511,9 +524,10 @@ class Repository:
         start, end = _month_bounds(month)
         sql = (
             "SELECT COALESCE(SUM(amount_cents), 0) FROM transactions "
-            "WHERE goal_id = ? AND type = 'transfer' AND occurred_on >= ? AND occurred_on < ?"
+            "WHERE goal_id = ? AND type = 'transfer' AND occurred_on >= ? AND occurred_on < ? "
+            "AND transfer_account_id = (SELECT account_id FROM savings_goals WHERE id = ?)"
         )
-        params: list = [goal_id, start, end]
+        params: list = [goal_id, start, end, goal_id]
         if through is not None:
             sql += " AND occurred_on <= ?"
             params.append(through.isoformat())

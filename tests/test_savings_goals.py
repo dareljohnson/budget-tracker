@@ -171,6 +171,33 @@ class TestGoalQueries(Base):
         self.assertEqual(loaded.id, tx.id)
         self.assertIsNone(loaded.goal_id)
 
+    def test_tagged_transfers_into_another_account_do_not_count(self):
+        goal = self.goal()
+        other = self.repo.add_account(Account("Other savings", AccountKind.SAVINGS))
+        # Simulate a stale tag (the repository clears these on write) to prove the
+        # contribution sums also filter on the goal's destination account.
+        with self.repo.conn:
+            self.repo.conn.execute(
+                "INSERT INTO transactions (amount_cents, type, account_id, category_id, "
+                "transfer_account_id, goal_id, occurred_on, description) "
+                "VALUES (?, 'transfer', ?, NULL, ?, ?, ?, 'Stale')",
+                (9_000, self.accounts["Checking"].id, other.id, goal.id, "2026-11-15"),
+            )
+        self.assertEqual(self.repo.goal_contributed_cents(goal.id), 0)
+        self.assertEqual(self.repo.goal_contributed_in_month(goal.id, "2026-11"), 0)
+
+    def test_repository_refuses_a_destination_change_with_contributions(self):
+        goal = self.goal()
+        other = self.repo.add_account(Account("Other savings", AccountKind.SAVINGS))
+        self.service.contribute_to_goal(
+            goal.id, self.accounts["Checking"].id, 5_000, date(2026, 11, 10)
+        )
+        loaded = self.repo.get_savings_goal(goal.id)
+        loaded.account_id = other.id
+        with self.assertRaises(RepositoryError):
+            self.repo.update_savings_goal(loaded)
+        self.assertEqual(self.repo.get_savings_goal(goal.id).account_id, self.savings.id)
+
 
 class TestGoalPlan(Base):
     def test_fixed_monthly_plan_and_schedule(self):
@@ -188,6 +215,42 @@ class TestGoalPlan(Base):
         self.assertEqual(progress.required_monthly_cents, 33_334)
         self.assertEqual(progress.plan[-1].required_cents, 33_332)
         self.assertEqual(progress.plan[-1].cumulative_cents, 100_000)
+
+    def test_plan_with_an_initial_amount(self):
+        goal = self.goal(
+            target_cents=100_000,
+            initial_cents=40_000,
+            start_date=date(2026, 11, 1),
+            target_date=date(2027, 1, 31),
+        )
+        progress = self.service.goal_progress(goal.id, today=date(2026, 11, 15))
+        self.assertEqual(progress.required_monthly_cents, 20_000)
+        self.assertEqual(
+            [(row.month, row.required_cents, row.cumulative_cents) for row in progress.plan],
+            [
+                ("2026-11", 20_000, 60_000),
+                ("2026-12", 20_000, 80_000),
+                ("2027-01", 20_000, 100_000),
+            ],
+        )
+
+    def test_target_in_the_current_month(self):
+        goal = self.goal(
+            target_cents=30_000,
+            start_date=date(2026, 11, 1),
+            target_date=date(2026, 11, 30),
+        )
+        progress = self.service.goal_progress(goal.id, today=date(2026, 11, 15))
+        self.assertEqual(progress.months_left, 1)
+        self.assertEqual(
+            [(row.month, row.required_cents, row.cumulative_cents) for row in progress.plan],
+            [("2026-11", 30_000, 30_000)],
+        )
+
+    def test_reached_at_creation(self):
+        goal = self.goal(target_cents=30_000, initial_cents=30_000)
+        progress = self.service.goal_progress(goal.id, today=date(2026, 11, 15))
+        self.assertEqual((progress.state, progress.required_monthly_cents, progress.plan), ("reached", 0, []))
 
     def test_a_contribution_does_not_change_the_monthly_amount(self):
         goal = self.goal(target_cents=90_000, start_date=date(2026, 11, 1), target_date=date(2027, 1, 31))

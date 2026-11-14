@@ -1,6 +1,10 @@
+import os
 import sqlite3
+import tempfile
 import unittest
 from datetime import date
+from pathlib import Path
+from unittest import mock
 
 from budget_tracker.db import MIGRATIONS, connect, migrate, schema_version
 from budget_tracker.models import (
@@ -182,6 +186,44 @@ class TestProvenance(Base):
         )
         self.repo.import_statement(statement, [ImportRow(transaction=tx)])
         self.assertEqual(self.repo.get_transaction(tx.id).source, "import")
+
+
+class TestReceiptProvenance(Base):
+    def setUp(self) -> None:
+        super().setUp()
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmpdir.cleanup)
+        self.tmp = self._tmpdir.name
+        env = mock.patch.dict(os.environ, {"BUDGET_TRACKER_HOME": self.tmp})
+        env.start()
+        self.addCleanup(env.stop)
+        self.png = Path(self.tmp) / "photo.png"
+        self.png.write_bytes(b"\x89PNG\r\n\x1a\n" + b"data")
+
+    def test_create_receipt_transaction_inserts_source_receipt(self):
+        tx = self.service.create_receipt_transaction(
+            amount_cents=3485,
+            occurred_on=date(2026, 9, 19),
+            description="FEL LINIS PIZZA",
+            account_id=self.accts["Checking"].id,
+            category_id=self.cats["Groceries"].id,
+            source_path=self.png,
+        )
+        self.assertEqual(tx.source, "receipt")
+        self.assertEqual(self.repo.get_transaction(tx.id).source, "receipt")
+
+    def test_attaching_a_receipt_does_not_change_an_existing_source(self):
+        imported = self.add(1000, "Groceries", date(2026, 9, 19), "ROW", source="import")
+        self.service.attach_receipt(imported.id, self.png)
+        self.assertEqual(self.repo.get_transaction(imported.id).source, "import")
+
+        bill = self.add(2000, "Housing", date(2026, 9, 20), "BILL", source="bill")
+        self.repo.set_transaction_receipt(bill.id, "receipts/fake.png")
+        self.assertEqual(self.repo.get_transaction(bill.id).source, "bill")
+
+    def test_invalid_source_raises_integrity_error(self):
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.add(1000, "Groceries", date(2026, 9, 19), "BAD SOURCE", source="other")
 
 
 class TestTransactionCandidates(Base):

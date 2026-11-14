@@ -40,6 +40,7 @@ class TestMatchCandidates(unittest.TestCase):
             amount_cents=3485,
             occurred_on=TARGET,
             type_=TransactionType.EXPENSE,
+            description="FEL LINIS PIZZA",
         )
         self.assertGreaterEqual(candidate.score, 85)
         self.assertEqual(candidate.date_delta, 0)
@@ -53,6 +54,7 @@ class TestMatchCandidates(unittest.TestCase):
             amount_cents=3485,
             occurred_on=TARGET,
             type_=TransactionType.EXPENSE,
+            description="FEL LINIS PIZZA",
         )
         self.assertEqual(len(candidates), 2)
         self.assertGreater(candidates[0].score, candidates[1].score)
@@ -70,6 +72,30 @@ class TestMatchCandidates(unittest.TestCase):
         self.assertGreater(candidates[0].score, candidates[1].score)
         self.assertIn("similar merchant", candidates[0].reasons)
 
+    def test_equal_scores_break_by_date_delta_then_id(self):
+        closer = tx(3485, 0, "FEL LIN", tx_id=1)
+        farther = tx(3485, 1, "FEL LINIS PIZZA", tx_id=2)
+        candidates = match_candidates(
+            [farther, closer],
+            account_id=ACCOUNT,
+            amount_cents=3485,
+            occurred_on=TARGET,
+            type_=TransactionType.EXPENSE,
+            description="FEL LINIS PIZZA",
+        )
+        self.assertEqual(candidates[0].score, candidates[1].score)
+        self.assertEqual([candidate.transaction for candidate in candidates], [closer, farther])
+
+        tied_ids = match_candidates(
+            [tx(3485, 0, "FEL LINIS PIZZA", tx_id=2), tx(3485, 0, "FEL LINIS PIZZA", tx_id=1)],
+            account_id=ACCOUNT,
+            amount_cents=3485,
+            occurred_on=TARGET,
+            type_=TransactionType.EXPENSE,
+            description="FEL LINIS PIZZA",
+        )
+        self.assertEqual([candidate.transaction.id for candidate in tied_ids], [1, 2])
+
     def test_amount_account_type_and_window_are_hard_filters(self):
         rows = [
             tx(3484, 0, "ONE CENT OFF"),
@@ -84,6 +110,7 @@ class TestMatchCandidates(unittest.TestCase):
                 amount_cents=3485,
                 occurred_on=TARGET,
                 type_=TransactionType.EXPENSE,
+                description="FEL LINIS PIZZA",
             ),
             [],
         )
@@ -99,6 +126,7 @@ class TestMatchCandidates(unittest.TestCase):
                     amount_cents=5000,
                     occurred_on=TARGET,
                     type_=TransactionType.TRANSFER,
+                    description="PAY CARD",
                 )
             ),
             2,
@@ -109,6 +137,7 @@ class TestMatchCandidates(unittest.TestCase):
             amount_cents=5000,
             occurred_on=TARGET,
             type_=TransactionType.TRANSFER,
+            description="PAY CARD",
             transfer_account_id=2,
         )
         self.assertEqual([candidate.transaction for candidate in card], [outgoing])
@@ -121,6 +150,7 @@ class TestMatchCandidates(unittest.TestCase):
             amount_cents=3485,
             occurred_on=TARGET,
             type_=TransactionType.EXPENSE,
+            description="MERCHANT",
         )
         self.assertEqual(len(candidates), 5)
 

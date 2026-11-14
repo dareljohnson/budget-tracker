@@ -477,9 +477,9 @@ class BudgetService:
         amount_cents: int,
         occurred_on: date,
         type_: TransactionType,
+        description: str,
         transfer_account_id: int | None = None,
         window_days: int = 7,
-        description: str | None = None,
     ) -> list[MatchCandidate]:
         """Rank existing transactions for an incoming receipt, bill payment or statement row."""
         return _match_candidates(
@@ -488,9 +488,9 @@ class BudgetService:
             amount_cents=amount_cents,
             occurred_on=occurred_on,
             type_=type_,
+            description=description,
             transfer_account_id=transfer_account_id,
             window_days=window_days,
-            description=description,
         )
 
     def receipt_match_candidates(

@@ -100,20 +100,17 @@ def match_candidates(
     amount_cents: int,
     occurred_on: date,
     type_: TransactionType,
+    description: str,
     transfer_account_id: int | None = None,
     window_days: int = WINDOW_DAYS,
-    description: str | None = None,
 ) -> list[MatchCandidate]:
     """Rank the transactions that pass the hard filters, strongest first.
 
-    ``description`` is the incoming text (receipt merchant, bill name or statement description).
-    When it is omitted the first supplied transaction's description is used as the reference, so
-    callers that only have a list of rows still get a deterministic ranking.
+    ``description`` is the incoming text (receipt merchant, bill name or statement description);
+    it orders the candidates but never hides one that passes the hard filters.
     """
-    rows = list(transactions)
-    reference = description if description is not None else (rows[0].description if rows else "")
     ranked: list[MatchCandidate] = []
-    for tx in rows:
+    for tx in transactions:
         if not _eligible(
             tx,
             account_id=account_id,
@@ -125,7 +122,7 @@ def match_candidates(
         delta = abs((tx.occurred_on - occurred_on).days)
         if delta > window_days:
             continue
-        similarity = description_similarity(reference, tx.description)
+        similarity = description_similarity(description, tx.description)
         date_points = 20 if delta == 0 else 15 - 2 * delta
         score = 60 + date_points + round(20 * similarity)
         reasons = ["same amount", "same date" if delta == 0 else f"{delta} day{'s' if delta != 1 else ''} apart"]

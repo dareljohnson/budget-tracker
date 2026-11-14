@@ -127,6 +127,7 @@ class Transaction:
     goal_id: int | None = None  # savings goal this transfer contributes to
     debt_id: int | None = None  # debt this payment is applied to
     receipt_path: str | None = None  # stored receipt image, relative to the app data folder
+    source: str = "manual"  # how the row entered the ledger: manual, import, receipt or bill
 
     @property
     def flow_sign(self) -> int:

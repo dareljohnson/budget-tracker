@@ -266,6 +266,17 @@ MIGRATIONS: list[str] = [
     """
     ALTER TABLE transactions ADD COLUMN receipt_path TEXT;
     """,
+    # v10: provenance. How each row entered the ledger. Import wins when a row was later given
+    # a receipt: an existing import stays 'import'. Index supports duplicate-match lookups.
+    """
+    ALTER TABLE transactions ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'
+        CHECK (source IN ('manual', 'import', 'receipt', 'bill'));
+    UPDATE transactions SET source = 'import' WHERE statement_id IS NOT NULL;
+    UPDATE transactions SET source = 'receipt'
+        WHERE receipt_path IS NOT NULL AND statement_id IS NULL;
+    CREATE INDEX idx_transactions_match
+        ON transactions (account_id, occurred_on, amount_cents);
+    """,
 ]
 
 FOREIGN_KEYS_OFF_MIGRATIONS = {8}

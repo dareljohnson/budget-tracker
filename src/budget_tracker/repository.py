@@ -259,8 +259,8 @@ class Repository:
     _TX_SELECT = (
         "SELECT t.id, t.amount_cents, t.type, t.category_id, t.account_id, t.transfer_account_id, "
         "t.goal_id, t.debt_id, t.receipt_path, t.occurred_on, t.description, t.statement_id, t.import_ref, "
-        "c.name AS category_name, c.color AS category_color, c.icon AS category_icon, a.name AS account_name, "
-        "ta.name AS transfer_account_name"
+        "t.source, c.name AS category_name, c.color AS category_color, c.icon AS category_icon, "
+        "a.name AS account_name, ta.name AS transfer_account_name"
     )
     _TX_FROM = (
         " FROM transactions t "
@@ -290,6 +290,7 @@ class Repository:
             goal_id=row["goal_id"],
             debt_id=row["debt_id"],
             receipt_path=row["receipt_path"],
+            source=row["source"],
         )
 
     def _validate_transaction(self, tx: Transaction) -> None:
@@ -377,9 +378,9 @@ class Repository:
         with self.conn:
             cur = self.conn.execute(
                 "INSERT INTO transactions (amount_cents, type, account_id, category_id, transfer_account_id, "
-                "goal_id, debt_id, occurred_on, description, statement_id, import_ref, receipt_path) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (*self._tx_params(tx), tx.statement_id, tx.import_ref, tx.receipt_path),
+                "goal_id, debt_id, occurred_on, description, statement_id, import_ref, receipt_path, source) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (*self._tx_params(tx), tx.statement_id, tx.import_ref, tx.receipt_path, tx.source),
             )
             if (debt := self._payment_debt(tx)) is not None:
                 cur_debt = self.conn.execute(
@@ -526,6 +527,56 @@ class Repository:
             (account_id, account_id, before.isoformat()),
         ).fetchone()
         return row is not None
+
+    def transaction_candidates(
+        self,
+        account_id: int,
+        amount_cents: int,
+        start_on: date,
+        end_on: date,
+        type_: TransactionType,
+        *,
+        transfer_account_id: int | None = None,
+        receiptless_only: bool = False,
+        exclude_ids: Sequence[int] = (),
+    ) -> list[Transaction]:
+        """Existing rows that pass the hard match filters for one incoming receipt, bill or row.
+
+        A transfer is eligible when the account is on either side; every other type must be on
+        ``account_id``. ``transfer_account_id`` restricts a card-payment search to transfers into
+        that destination. Ordering here is by date and id; callers rank the rows by description.
+        """
+        clauses = [
+            "t.amount_cents = ?",
+            "t.occurred_on BETWEEN ? AND ?",
+            "t.type = ?",
+            "(t.account_id = ? OR (t.type = 'transfer' AND t.transfer_account_id = ?))",
+        ]
+        params: list = [
+            amount_cents,
+            start_on.isoformat(),
+            end_on.isoformat(),
+            type_.value,
+            account_id,
+            account_id,
+        ]
+        if transfer_account_id is not None:
+            clauses.append("t.transfer_account_id = ?")
+            params.append(transfer_account_id)
+        if receiptless_only:
+            clauses.append("t.receipt_path IS NULL")
+        excluded = list(exclude_ids)
+        if excluded:
+            clauses.append(f"t.id NOT IN ({','.join('?' for _ in excluded)})")
+            params.extend(excluded)
+        sql = (
+            self._TX_SELECT
+            + self._TX_FROM
+            + " WHERE "
+            + " AND ".join(clauses)
+            + " ORDER BY t.occurred_on, t.id"
+        )
+        return [self._row_to_transaction(row) for row in self.conn.execute(sql, params)]
 
     # ---------- savings goals ----------
     _SAVINGS_GOAL_SELECT = (
@@ -750,9 +801,10 @@ class Repository:
                     tx.import_ref = f"{statement.file_sha256}:{index}"
                     tx_cur = self.conn.execute(
                         "INSERT INTO transactions (amount_cents, type, account_id, category_id, "
-                        "transfer_account_id, goal_id, debt_id, occurred_on, description, statement_id, import_ref) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        (*self._tx_params(tx), tx.statement_id, tx.import_ref),
+                        "transfer_account_id, goal_id, debt_id, occurred_on, description, statement_id, "
+                        "import_ref, source) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (*self._tx_params(tx), tx.statement_id, tx.import_ref, "import"),
                     )
                     tx.id = tx_cur.lastrowid
                 if opening_balance_cents is not None:
@@ -1313,27 +1365,55 @@ class Repository:
         bills = [self._row_to_bill(r) for r in rows]
         return [DueBill(b, (b.next_due - today).days, self.amount_due(b)) for b in bills]
 
-    def mark_bill_paid(self, bill_id: int, *, paid_on: date, amount_cents: int, account_id: int | None = None) -> Transaction:
-        """Record the payment (expense or transfer) and roll the bill to its next due date, atomically."""
+    def mark_bill_paid(
+        self,
+        bill_id: int,
+        *,
+        paid_on: date,
+        amount_cents: int,
+        account_id: int | None = None,
+        existing_transaction_id: int | None = None,
+    ) -> Transaction:
+        """Record the payment (expense or transfer) and roll the bill to its next due date, atomically.
+
+        When ``existing_transaction_id`` is supplied the named transaction is reused instead of
+        inserting a new one. It must still satisfy the bill (type, source account, exact amount,
+        destination for a card payment, and a date within seven days); the row itself is never
+        modified. Only the bill's due date changes.
+        """
         bill = self.get_bill(bill_id)
         if bill is None or not bill.active:
             raise RepositoryError("This bill is no longer active")
+        paid_account = account_id or bill.account_id
+        following = next_due_date(bill.next_due, bill.frequency, bill.anchor_day or bill.next_due.day)
+        if existing_transaction_id is not None:
+            existing = self.get_transaction(existing_transaction_id)
+            if existing is None or not self._bill_matches(bill, existing, paid_account, paid_on, amount_cents):
+                raise RepositoryError("That transaction does not match this bill")
+            with self.conn:
+                if following is None:
+                    self.conn.execute("UPDATE bills SET active = 0 WHERE id = ?", (bill_id,))
+                else:
+                    self.conn.execute(
+                        "UPDATE bills SET next_due = ? WHERE id = ?", (following.isoformat(), bill_id)
+                    )
+            return existing
         tx = Transaction(
             amount_cents=amount_cents,
             type=TransactionType.TRANSFER if bill.is_card_payment else TransactionType.EXPENSE,
             category_id=bill.category_id,
             occurred_on=paid_on,
             description=bill.name,
-            account_id=account_id or bill.account_id,
+            account_id=paid_account,
             transfer_account_id=bill.pay_to_account_id,
+            source="bill",
         )
         self._validate_transaction(tx)
-        following = next_due_date(bill.next_due, bill.frequency, bill.anchor_day or bill.next_due.day)
         with self.conn:
             cur = self.conn.execute(
                 "INSERT INTO transactions (amount_cents, type, account_id, category_id, transfer_account_id, "
-                "goal_id, debt_id, occurred_on, description) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                self._tx_params(tx),
+                "goal_id, debt_id, occurred_on, description, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (*self._tx_params(tx), tx.source),
             )
             if following is None:
                 self.conn.execute("UPDATE bills SET active = 0 WHERE id = ?", (bill_id,))
@@ -1341,6 +1421,19 @@ class Repository:
                 self.conn.execute("UPDATE bills SET next_due = ? WHERE id = ?", (following.isoformat(), bill_id))
         tx.id = cur.lastrowid
         return tx
+
+    @staticmethod
+    def _bill_matches(
+        bill: Bill, tx: Transaction, paid_account: int, paid_on: date, amount_cents: int
+    ) -> bool:
+        """Whether an existing transaction can stand in for this bill's payment."""
+        if tx.account_id != paid_account or tx.amount_cents != amount_cents:
+            return False
+        if abs((tx.occurred_on - paid_on).days) > 7:
+            return False
+        if bill.is_card_payment:
+            return tx.type == TransactionType.TRANSFER and tx.transfer_account_id == bill.pay_to_account_id
+        return tx.type == TransactionType.EXPENSE
 
     def skip_bill(self, bill_id: int) -> None:
         """Move a bill to its next due date without recording a payment."""

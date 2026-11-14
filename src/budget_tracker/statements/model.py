@@ -1,6 +1,6 @@
 """Pure data model for parsed bank statements."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 
 from budget_tracker.models import Statement, Transaction
@@ -44,6 +44,8 @@ class ImportRow:
     duplicate: bool = False
     include: bool = True
     direction: str | None = None  # parsed direction, kept even after the row is retyped
+    match_candidates: list[Transaction] = field(default_factory=list)
+    matched: Transaction | None = None
 
 
 @dataclass(slots=True)

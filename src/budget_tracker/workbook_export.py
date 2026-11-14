@@ -14,7 +14,7 @@ from datetime import date
 from pathlib import Path
 
 from .config import APP_NAME
-from .models import Bill, BillFrequency, Transaction, TransactionType
+from .models import AccountKind, Bill, BillFrequency, Transaction, TransactionType
 from .repository import Repository
 from .xlsx import Cell, Sheet, Style, write_workbook
 
@@ -175,7 +175,9 @@ def _bills_sheet(repo: Repository, today: date) -> tuple[Sheet, int]:
         sheet.append(
             [
                 bill.name,
-                "Card payment" if bill.is_card_payment else "Bill",
+                "Loan payment" if bill.pay_to_account_kind is AccountKind.LOAN
+                else "Card payment" if bill.is_card_payment
+                else "Bill",
                 Cell(_money(bill.amount_cents), Style.CURRENCY) if bill.amount_cents else None,
                 bill.frequency.label,
                 bill.next_due,

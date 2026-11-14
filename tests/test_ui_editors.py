@@ -1366,6 +1366,19 @@ class TestEditors(unittest.TestCase):
         texts = self._texts(view.list)
         self.assertTrue(any("Loan payment" in text for text in texts))
 
+    def test_bill_paid_to_a_card_says_card_payment(self):
+        from budget_tracker.models import Bill, BillFrequency
+        from budget_tracker.ui.views.bills import BillsView
+
+        self.repo.add_bill(Bill(
+            "Visa payment", 1_000, BillFrequency.MONTHLY, date(2026, 12, 1),
+            self.accts["Checking"].id, pay_to_account_id=self.accts["Credit Card"].id,
+        ))
+        view = BillsView(self.ctx)
+        texts = self._texts(view.list)
+        self.assertTrue(any("Card payment" in text for text in texts))
+        self.assertFalse(any("Loan payment" in text for text in texts))
+
 
 def _dialog_rule_texts(dialog) -> list:
     return [row.content.controls[1] for row in dialog.content.content.controls]

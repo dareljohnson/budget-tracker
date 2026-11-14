@@ -1089,6 +1089,58 @@ class TestEditors(unittest.TestCase):
         texts = self._texts(dialog.dialog.content)
         self.assertLess(texts.index("$200.00"), texts.index("$100.00"))
 
+    def test_comparison_amounts(self):
+        from budget_tracker.ui.views.debts import comparison_amounts
+        self.assertEqual(comparison_amounts(""), [0, 5_000, 10_000, 20_000])
+        self.assertEqual(comparison_amounts("50"), [0, 5_000, 10_000, 20_000])
+        self.assertEqual(comparison_amounts("75"), [0, 5_000, 10_000, 20_000, 7_500])
+        self.assertEqual(comparison_amounts("nope"), [0, 5_000, 10_000, 20_000])
+
+    def test_savings_label_requires_both_plans_to_finish(self):
+        from budget_tracker.debt_planner import DebtStrategy, DebtPlan
+        from budget_tracker.ui.views.debts import savings_cents
+
+        def plan(finished, interest):
+            return DebtPlan(DebtStrategy.AVALANCHE, 0, 1, "2026-12", interest, interest, finished, [], [], None)
+
+        self.assertEqual(savings_cents(plan(True, 1_000), plan(True, 1_400)), 400)
+        self.assertIsNone(savings_cents(plan(True, 1_000), plan(True, 1_000)))
+        self.assertIsNone(savings_cents(plan(False, 1_000), plan(True, 1_400)))
+
+    def test_plan_panel_shows_both_strategies_and_chunks_the_schedule(self):
+        from budget_tracker.models import DebtKind
+        from budget_tracker.ui.views.debts import DebtsView
+
+        self.ctx.service.create_debt("Loan", DebtKind.PERSONAL, 100_000, 1200, 10_000)
+        view = DebtsView(self.ctx)
+        view.refresh()
+        texts = self._texts(view.plan_panel)
+        self.assertIn("Avalanche", texts)
+        self.assertIn("Snowball", texts)
+        self.assertEqual(view.schedule_limit, 24)
+        view._show_more(None)
+        self.assertEqual(view.schedule_limit, 48)
+
+    def test_zero_minimum_and_unfinished_plans_warn(self):
+        from budget_tracker.models import DebtKind
+        from budget_tracker.ui.views.debts import DebtsView
+
+        self.ctx.service.create_debt("Loan", DebtKind.PERSONAL, 100_000, 3600, 0)
+        view = DebtsView(self.ctx)
+        view.refresh()
+        texts = " ".join(self._texts(view.plan_panel)).lower()
+        self.assertIn("does not cover", texts)
+        self.assertIn("not paid off within 50 years", texts)
+
+    def test_custom_extra_updates_the_plan(self):
+        from budget_tracker.models import DebtKind
+        from budget_tracker.ui.views.debts import DebtsView
+
+        self.ctx.service.create_debt("Loan", DebtKind.PERSONAL, 100_000, 0, 10_000)
+        view = DebtsView(self.ctx)
+        view._set_custom_extra("200")
+        self.assertEqual(view.extra_cents, 20_000)
+
 
 def _dialog_rule_texts(dialog) -> list:
     return [row.content.controls[1] for row in dialog.content.content.controls]

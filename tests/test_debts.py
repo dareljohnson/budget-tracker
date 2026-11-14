@@ -1,5 +1,6 @@
 import sqlite3
 import unittest
+from datetime import date
 
 from budget_tracker.db import MIGRATIONS, _seed, connect, migrate, schema_version
 from budget_tracker.models import (
@@ -132,3 +133,87 @@ class TestDebtStorage(DebtCase):
         self.repo.update_account(self.card)
         self.repo.delete_debt(debt.id)
         self.repo.delete_account(self.card.id)
+
+
+class TestDebtPayments(DebtCase):
+    def expense(self, debt, cents=20_000, day=date(2026, 11, 10), account=None, category=None):
+        return self.repo.add_transaction(Transaction(
+            cents,
+            TransactionType.EXPENSE,
+            category.id if category else self.category.id,
+            day,
+            "Payment",
+            account_id=(account or self.checking).id,
+            debt_id=debt.id,
+        ))
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.category = next(c for c in self.repo.list_categories() if c.name == "Debt payments")
+
+    def test_tagged_expense_lowers_the_standalone_balance(self):
+        debt = self.debt()
+        tx = self.expense(debt)
+        self.assertEqual(self.repo.get_debt(debt.id).balance_cents, 400_000)
+        self.assertEqual(self.repo.list_debt_payments(debt.id)[0].id, tx.id)
+
+    def test_overpay_is_rejected_without_a_transaction(self):
+        debt = self.debt()
+        with self.assertRaises(RepositoryError):
+            self.expense(debt, 500_000)
+        self.assertEqual(self.repo.get_debt(debt.id).balance_cents, 420_000)
+        self.assertEqual(self.repo.list_transactions(), [])
+
+    def test_editing_a_payment_adjusts_the_balance(self):
+        debt = self.debt()
+        tx = self.expense(debt)
+        tx.amount_cents = 30_000
+        self.repo.update_transaction(tx)
+        self.assertEqual(self.repo.get_debt(debt.id).balance_cents, 390_000)
+
+    def test_editing_a_payment_into_a_transfer_restores_the_balance(self):
+        debt = self.debt()
+        tx = self.expense(debt)
+        tx.type = TransactionType.TRANSFER
+        tx.category_id = None
+        tx.transfer_account_id = self.savings.id
+        self.repo.update_transaction(tx)
+        self.assertIsNone(self.repo.list_transactions()[0].debt_id)
+        self.assertEqual(self.repo.get_debt(debt.id).balance_cents, 420_000)
+
+    def test_editing_a_payment_above_the_balance_is_rejected(self):
+        debt = self.debt()
+        tx = self.expense(debt)
+        tx.amount_cents = 500_000
+        with self.assertRaises(RepositoryError):
+            self.repo.update_transaction(tx)
+        self.assertEqual(self.repo.get_debt(debt.id).balance_cents, 400_000)
+        self.assertEqual(self.repo.list_transactions()[0].amount_cents, 20_000)
+
+    def test_deleting_a_payment_restores_the_balance(self):
+        debt = self.debt()
+        tx = self.expense(debt)
+        self.repo.delete_transaction(tx.id)
+        self.assertEqual(self.repo.get_debt(debt.id).balance_cents, 420_000)
+
+    def test_a_liability_funding_account_clears_the_tag(self):
+        debt = self.debt()
+        tx = self.expense(debt, account=self.card)
+        self.assertIsNone(self.repo.list_transactions()[0].debt_id)
+        self.assertEqual(self.repo.get_debt(debt.id).balance_cents, 420_000)
+
+    def test_linked_payment_is_a_tagged_transfer_without_a_balance_change(self):
+        debt = self.debt(account_id=self.card.id)
+        tx = self.repo.add_transaction(Transaction(
+            10_000, TransactionType.TRANSFER, None, date(2026, 11, 10), "",
+            account_id=self.checking.id, transfer_account_id=self.card.id, debt_id=debt.id,
+        ))
+        self.assertEqual(tx.debt_id, debt.id)
+        self.assertEqual(self.repo.get_debt(debt.id).balance_cents, 420_000)
+
+    def test_deleting_the_debt_keeps_the_payment(self):
+        debt = self.debt()
+        self.expense(debt)
+        self.repo.delete_debt(debt.id)
+        [tx] = self.repo.list_transactions()
+        self.assertIsNone(tx.debt_id)

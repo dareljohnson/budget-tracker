@@ -99,9 +99,13 @@ def open_receipt(stored: str) -> None:
     path = resolve_receipt(stored)
     if not path.is_file():
         raise FileNotFoundError(stored)
-    if IS_WINDOWS:
-        os.startfile(str(path))  # type: ignore[attr-defined]  # Windows-only attribute
-    elif sys.platform == "darwin":
-        subprocess.Popen(["open", str(path)])
-    else:
-        subprocess.Popen(["xdg-open", str(path)])
+    try:
+        if IS_WINDOWS:
+            os.startfile(str(path))  # type: ignore[attr-defined]  # Windows-only attribute
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", str(path)])
+        else:
+            subprocess.Popen(["xdg-open", str(path)])
+    except FileNotFoundError as exc:
+        # The receipt exists; the launcher (open/xdg-open) is what could not be started.
+        raise ReceiptReadError("Could not start the default application") from exc

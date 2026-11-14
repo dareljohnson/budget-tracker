@@ -225,7 +225,9 @@ class ReceiptImportDialog:
     async def _scan(self, _: ft.Event | None = None) -> None:
         if self._busy:
             return
+        previous_temp = self._temp_dir
         self._cleanup_temp()
+        self._drop_source_in(previous_temp)
         self._set_busy(True)
         try:
             self._temp_dir = Path(tempfile.mkdtemp(prefix="budget-tracker-scan-"))
@@ -233,16 +235,40 @@ class ReceiptImportDialog:
             await asyncio.to_thread(scan_receipt, destination)
         except ReceiptScanError as exc:
             self._cleanup_temp()
-            self.ctx.notify(str(exc), error=True)
+            if not self._closed_notified:
+                self.ctx.notify(str(exc), error=True)
             self._set_busy(False)
             return
         except OSError as exc:
             self._cleanup_temp()
-            self.ctx.notify(f"Could not scan a receipt: {exc}", error=True)
+            if not self._closed_notified:
+                self.ctx.notify(f"Could not scan a receipt: {exc}", error=True)
             self._set_busy(False)
+            return
+        if self._closed_notified:
+            self._cleanup_temp()
             return
         self._set_busy(False)
         await self._load(destination)
+
+    def _drop_source_in(self, temp_dir: Path | None) -> None:
+        """Forget a source that lived in a temporary folder we just deleted.
+
+        The draft that came from that file would otherwise stay on screen and Save would
+        stay enabled against a file that no longer exists.
+        """
+        if temp_dir is None or self._source_path is None:
+            return
+        try:
+            inside = Path(self._source_path).is_relative_to(temp_dir)
+        except (OSError, ValueError):
+            inside = False
+        if not inside:
+            return
+        self._source_path = None
+        self._clear_preview()
+        self.note.value = ""
+        self.note.color = ft.Colors.ON_SURFACE_VARIANT
 
     async def _load(self, path: Path) -> None:
         """Preview the file immediately, then install its OCR draft (or a blank one)."""
@@ -255,6 +281,8 @@ class ReceiptImportDialog:
         try:
             draft = await asyncio.to_thread(read_receipt, self._source_path)
         except ReceiptOcrUnavailable:
+            if self._closed_notified:
+                return
             self._install(
                 ReceiptDraft(
                     merchant="",
@@ -272,12 +300,16 @@ class ReceiptImportDialog:
         except ReceiptReadError as exc:
             # An unreadable image produces no transaction; the dialog stays usable for
             # choosing another file or entering details by hand.
+            if self._closed_notified:
+                return
             self._source_path = None
             self._clear_preview()
             self.note.value = _UNREADABLE_NOTE
             self.note.color = EXPENSE_COLOR
             self.ctx.notify(str(exc), error=True)
         else:
+            if self._closed_notified:
+                return
             self._install(draft)
         finally:
             self._set_busy(False)
@@ -334,7 +366,8 @@ class ReceiptImportDialog:
         self._refresh_save()
 
     def _refresh_save(self) -> None:
-        valid = not self._busy and not self._saving and self._source_path is not None
+        source_exists = self._source_path is not None and Path(self._source_path).is_file()
+        valid = not self._busy and not self._saving and source_exists
         try:
             amount = parse_money(self.amount.value)
             valid = valid and amount > 0
@@ -392,7 +425,8 @@ class ReceiptImportDialog:
         if not self.category.value:
             self.category.error_text = "Select a category (create one on the Categories page)"
             valid = False
-        if self._source_path is None:
+        source_exists = self._source_path is not None and Path(self._source_path).is_file()
+        if not source_exists:
             self.ctx.notify("Choose or scan a receipt first", error=True)
             valid = False
         if not valid:
@@ -551,7 +585,8 @@ class ReceiptAttachmentDialog:
                 allowed_extensions=["pdf", "png", "jpg", "jpeg"],
             )
         except Exception as exc:  # noqa: BLE001 - native picker can be unavailable
-            self.ctx.notify(f"Could not open the file picker: {exc}", error=True)
+            if not self._closed_notified:
+                self.ctx.notify(f"Could not open the file picker: {exc}", error=True)
             return
         finally:
             self._set_busy(False)
@@ -573,18 +608,21 @@ class ReceiptAttachmentDialog:
             await asyncio.to_thread(scan_receipt, destination)
         except ReceiptScanError as exc:
             self._cleanup_temp()
-            self.ctx.notify(str(exc), error=True)
+            if not self._closed_notified:
+                self.ctx.notify(str(exc), error=True)
             return
         except OSError as exc:
             self._cleanup_temp()
-            self.ctx.notify(f"Could not scan a receipt: {exc}", error=True)
+            if not self._closed_notified:
+                self.ctx.notify(f"Could not scan a receipt: {exc}", error=True)
             return
         finally:
             self._set_busy(False)
         try:
-            if not self._closed_notified:
-                # The service copies the scan synchronously, so the temp folder can go now.
-                self._attach(destination)
+            if self._closed_notified:
+                return
+            # The service copies the scan synchronously, so the temp folder can go now.
+            self._attach(destination)
         finally:
             self._cleanup_temp()
 

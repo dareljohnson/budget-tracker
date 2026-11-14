@@ -329,6 +329,91 @@ class TestReceiptImportDialog(ReceiptDialogTestCase):
             asyncio.run(dialog._scan())
         self.assertFalse(first.exists())
 
+    def test_failed_rescan_clears_a_source_from_the_cleaned_temp_dir(self):
+        from budget_tracker.receipts.errors import ReceiptScanError
+
+        dialog = self._dialog()
+        first = Path(tempfile.mkdtemp(prefix="budget-tracker-scan-test-"))
+        second = Path(tempfile.mkdtemp(prefix="budget-tracker-scan-test-"))
+        self.addCleanup(lambda: first.exists() and first.rmdir())
+        self.addCleanup(lambda: second.exists() and second.rmdir())
+        old_source = first / "scan.png"
+        old_source.write_bytes(b"\x89PNG\r\n\x1a\n" + b"old")
+        dialog._temp_dir = first
+        dialog._source_path = old_source
+        dialog._install(self._draft())
+        self.assertFalse(dialog.save_button.disabled)
+
+        with mock.patch(
+            "budget_tracker.ui.views.receipts.tempfile.mkdtemp", return_value=str(second)
+        ), mock.patch(
+            "budget_tracker.ui.views.receipts.scan_receipt",
+            side_effect=ReceiptScanError("No scanner is connected."),
+        ):
+            asyncio.run(dialog._scan())
+
+        self.assertFalse(first.exists())
+        self.assertIsNone(dialog._source_path)
+        self.assertTrue(dialog.save_button.disabled)
+        self.assertNotIsInstance(dialog.preview_holder.content, ft.Image)
+        self.assertEqual(dialog.note.value, "")
+
+    def test_vanish_source_blocks_save(self):
+        dialog = self._dialog()
+        dialog._source_path = self.png
+        dialog._install(self._draft())
+        self.assertFalse(dialog.save_button.disabled)
+
+        self.png.unlink()
+        dialog._refresh_save()
+        self.assertTrue(dialog.save_button.disabled)
+
+        dialog._save(None)
+        self.assertEqual(self.repo.list_transactions(), [])
+        self.assertEqual(self.page.errors, ["Choose or scan a receipt first"])
+
+    def test_close_during_a_failing_scan_does_not_notify(self):
+        from budget_tracker.receipts.errors import ReceiptScanError
+
+        dialog = self._dialog()
+        scan_dir = self.tmp / "scan-close-failed"
+        scan_dir.mkdir()
+        self.addCleanup(lambda: scan_dir.exists() and scan_dir.rmdir())
+
+        def close_then_fail(destination):
+            dialog._close()
+            raise ReceiptScanError("No scanner is connected.")
+
+        with mock.patch(
+            "budget_tracker.ui.views.receipts.tempfile.mkdtemp", return_value=str(scan_dir)
+        ), mock.patch(
+            "budget_tracker.ui.views.receipts.scan_receipt", side_effect=close_then_fail
+        ):
+            asyncio.run(dialog._scan())
+
+        self.assertTrue(dialog._closed_notified)
+        self.assertEqual(self.page.errors, [])
+
+    def test_close_during_a_successful_scan_does_not_load(self):
+        dialog = self._dialog()
+        scan_dir = self.tmp / "scan-close-ok"
+        scan_dir.mkdir()
+        self.addCleanup(lambda: scan_dir.exists() and scan_dir.rmdir())
+
+        def close_then_succeed(destination):
+            dialog._close()
+            return Path(destination)
+
+        with mock.patch(
+            "budget_tracker.ui.views.receipts.tempfile.mkdtemp", return_value=str(scan_dir)
+        ), mock.patch(
+            "budget_tracker.ui.views.receipts.scan_receipt", side_effect=close_then_succeed
+        ), mock.patch.object(dialog, "_load", new=mock.AsyncMock()) as loader:
+            asyncio.run(dialog._scan())
+
+        loader.assert_not_called()
+        self.assertEqual(self.page.errors, [])
+
     def test_no_accounts_blocks_capture(self):
         closed = []
         for account in self.repo.list_accounts():
@@ -658,6 +743,48 @@ class TestReceiptAttachmentDialog(ReceiptDialogTestCase):
         self.assertNotEqual(second, first)
         self.assertEqual(seen, [first, second])
         self.assertTrue((self.tmp / second).exists())
+
+    def test_attachment_scan_closed_before_failure_does_not_notify(self):
+        from budget_tracker.receipts.errors import ReceiptScanError
+        from budget_tracker.ui.views.receipts import ReceiptAttachmentDialog
+
+        saved = self._saved_transaction()
+        seen: list[str | None] = []
+        dialog = ReceiptAttachmentDialog(self.ctx, saved, on_changed=seen.append)
+        scan_dir = self.tmp / "attach-scan-close"
+        scan_dir.mkdir()
+        self.addCleanup(lambda: scan_dir.exists() and scan_dir.rmdir())
+
+        def close_then_fail(destination):
+            dialog._close()
+            raise ReceiptScanError("No scanner is connected.")
+
+        with mock.patch(
+            "budget_tracker.ui.views.receipts.tempfile.mkdtemp", return_value=str(scan_dir)
+        ), mock.patch(
+            "budget_tracker.ui.views.receipts.scan_receipt", side_effect=close_then_fail
+        ):
+            asyncio.run(dialog._scan())
+
+        self.assertEqual(self.page.errors, [])
+        self.assertIsNone(self.repo.get_transaction(saved.id).receipt_path)
+        self.assertEqual(seen, [])
+
+    def test_attachment_picker_failure_after_close_does_not_notify(self):
+        from budget_tracker.ui.views.receipts import ReceiptAttachmentDialog
+
+        saved = self._saved_transaction()
+        dialog = ReceiptAttachmentDialog(self.ctx, saved)
+        dialog._closed_notified = True
+        with mock.patch.object(
+            dialog._file_picker,
+            "pick_files",
+            new=mock.AsyncMock(side_effect=RuntimeError("no picker")),
+        ):
+            asyncio.run(dialog._choose_file(None))
+
+        self.assertEqual(self.page.errors, [])
+        self.assertEqual(self.repo.list_transactions()[0].receipt_path, saved.receipt_path)
 
 
 class TestReceiptHeaderButton(ReceiptDialogTestCase):

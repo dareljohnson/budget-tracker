@@ -96,3 +96,14 @@ class TestReceiptStorage(unittest.TestCase):
     def test_open_receipt_rejects_missing_file(self):
         with self.assertRaises(FileNotFoundError):
             storage.open_receipt("receipts/missing.png")
+
+    def test_open_receipt_reports_a_missing_launcher(self):
+        stored = storage.store_receipt(self.png)
+        with mock.patch.object(storage, "IS_WINDOWS", False), \
+             mock.patch.object(storage.sys, "platform", "linux"), \
+             mock.patch.object(
+                 storage.subprocess, "Popen", side_effect=FileNotFoundError("xdg-open")
+             ):
+            with self.assertRaises(ReceiptReadError) as caught:
+                storage.open_receipt(stored)
+        self.assertEqual(str(caught.exception), "Could not start the default application")

@@ -185,7 +185,7 @@ class TestLoanDebtLink(unittest.TestCase):
         self.assertFalse(summary.minimum_from_statement)
 
     def test_a_card_kind_is_rejected_for_a_loan_link(self):
-        with self.assertRaises(RepositoryError):
+        with self.assertRaisesRegex(RepositoryError, "Choose a loan kind"):
             self.service.create_debt("Mortgage", DebtKind.CREDIT_CARD, 0, 365, 1_000, account_id=self.loan.id)
 
     def test_linked_loan_payment_is_a_tagged_transfer(self):

@@ -872,7 +872,7 @@ class Repository:
                     ),
                 )
         except sqlite3.IntegrityError as exc:
-            raise RepositoryError("This credit card is already linked to a debt") from exc
+            raise RepositoryError("This account is already linked to a debt") from exc
         debt.id = cur.lastrowid
         return debt
 
@@ -891,7 +891,7 @@ class Repository:
                     ),
                 )
         except sqlite3.IntegrityError as exc:
-            raise RepositoryError("This credit card is already linked to a debt") from exc
+            raise RepositoryError("This account is already linked to a debt") from exc
 
     def delete_debt(self, debt_id: int) -> None:
         with self.conn:
@@ -923,7 +923,7 @@ class Repository:
                 (debt.account_id, debt.id),
             ).fetchone()
             if linked is not None:
-                raise RepositoryError("This credit card is already linked to a debt")
+                raise RepositoryError("This account is already linked to a debt")
 
     # ---------- credit card minimum payments ----------
     def list_minimum_payments(self, account_id: int) -> list[MinimumPayment]:

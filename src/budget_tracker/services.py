@@ -507,7 +507,7 @@ class BudgetService:
                 raise RepositoryError("Choose a loan kind for a loan account")
             linked = [d for d in self.repo.list_debts() if d.account_id == account_id and d.id != debt_id]
             if linked:
-                raise RepositoryError("This credit card is already linked to a debt")
+                raise RepositoryError("This account is already linked to a debt")
 
     def _card_owed(self, account_id: int) -> int:
         for balance in self.repo.account_balances():

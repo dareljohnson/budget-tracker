@@ -1301,9 +1301,26 @@ class TestEditors(unittest.TestCase):
         editor.apr.value = "3.65"
         editor.minimum.value = "500.00"
         editor.link.value = str(loan.id)
+        editor._link_changed()
+        self.assertFalse(editor.minimum.disabled)
+        self.assertFalse(editor.minimum_note.visible)
+        self.assertEqual(editor.kind.value, DebtKind.MORTGAGE.value)
         editor._save(None)
         debt = self.repo.list_debts()[0]
         self.assertEqual((debt.kind, debt.balance_cents), (DebtKind.MORTGAGE, 100_000))
+
+    def test_debt_editor_switches_a_card_kind_when_a_loan_is_linked(self):
+        from budget_tracker.models import Account, AccountKind, DebtKind
+        from budget_tracker.ui.views.debts import DebtEditor
+
+        loan = self.repo.add_account(Account("Mortgage", AccountKind.LOAN, opening_balance_cents=-100_000))
+        editor = DebtEditor(self.ctx, None)
+        editor.kind.value = DebtKind.CREDIT_CARD.value
+        editor.link.value = str(loan.id)
+        editor._link_changed()
+        self.assertEqual(editor.kind.value, DebtKind.PERSONAL.value)
+        self.assertFalse(editor.minimum.disabled)
+        self.assertFalse(editor.minimum_note.visible)
 
 
 def _dialog_rule_texts(dialog) -> list:

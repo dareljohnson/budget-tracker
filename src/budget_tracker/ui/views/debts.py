@@ -582,6 +582,11 @@ class DebtEditor:
         )
         self._link_changed()
 
+    def _stored_minimum_value(self) -> str:
+        if self.debt is not None and self.debt.minimum_cents:
+            return f"{self.debt.minimum_cents / 100:.2f}"
+        return ""
+
     def _link_changed(self) -> None:
         account_id = int(self.link.value) if self.link.value not in (None, "", "none") else None
         account = self.ctx.repo.get_account(account_id) if account_id is not None else None
@@ -597,7 +602,8 @@ class DebtEditor:
             if is_loan:
                 if self.kind.value == DebtKind.CREDIT_CARD.value:
                     self.kind.value = DebtKind.PERSONAL.value
-                # A loan link uses the stored minimum; there is no statement minimum to drive it.
+                # A loan link uses the stored minimum; drop any card statement minimum in the field.
+                self.minimum.value = self._stored_minimum_value()
                 self.minimum.disabled = False
                 self.minimum_note.visible = False
             else:
@@ -612,6 +618,7 @@ class DebtEditor:
                     self.minimum.disabled = False
                     self.minimum_note.visible = False
         else:
+            self.minimum.value = self._stored_minimum_value()
             self.minimum.disabled = False
             self.minimum_note.visible = False
 

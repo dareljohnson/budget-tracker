@@ -29,10 +29,20 @@ from .models import (
     Transaction,
     TransactionType,
 )
+from .receipts.parser import ReceiptDraft
+from .receipts.storage import delete_receipt_file, store_receipt
 from .repository import Repository, RepositoryError
 from .statements import load_statement
 from .statements.model import ImportPreview, ImportRow
 from .workbook_export import export_workbook
+
+
+RECEIPT_CATEGORY_KEYWORDS: list[tuple[tuple[str, ...], str]] = [
+    (("fuel", "gas", "station", "shell", "chevron", "exxon"), "Transportation"),
+    (("grocery", "groceries", "market", "supermarket", "kroger", "publix"), "Groceries"),
+    (("restaurant", "cafe", "coffee", "diner", "pizza", "grill"), "Dining Out"),
+    (("pharmacy", "drugstore", "cvs", "walgreens"), "Health"),
+]
 
 
 def _csv_safe(value: str) -> str:
@@ -463,6 +473,103 @@ class BudgetService:
             and (account.number_last4.endswith(statement_last4) or statement_last4.endswith(account.number_last4))
         ]
         return matches[0] if len(matches) == 1 else None
+
+    # ---------- receipt capture ----------
+    def _default_payment_account(self) -> Account | None:
+        """The account a receipt with no printed method is most likely paid from."""
+        accounts = self.repo.list_accounts()
+        for account in accounts:
+            if account.kind is AccountKind.CHECKING:
+                return account
+        for account in accounts:
+            if not account.kind.is_liability:
+                return account
+        return None
+
+    def receipt_account(self, draft: ReceiptDraft) -> Account | None:
+        """The account a receipt was paid from, or ``None`` when its card is unknown.
+
+        A printed card number only ever matches a saved account: falling back to checking
+        would silently record the wrong account, so the review dialog can leave it blank.
+        """
+        if draft.card_last4:
+            return self.match_account(draft.card_last4)
+        if draft.paid_cash:
+            for account in self.repo.list_accounts():
+                if account.kind is AccountKind.CASH:
+                    return account
+        return self._default_payment_account()
+
+    def receipt_category_id(self, draft: ReceiptDraft) -> int:
+        """A saved category rule, then a merchant keyword, then the expense default."""
+        suggested = self.repo.suggest_category_id(draft.merchant, TransactionType.EXPENSE)
+        if suggested is not None:
+            return suggested
+        merchant = draft.merchant.casefold()
+        categories = self.repo.list_categories(TransactionType.EXPENSE)
+        for keywords, category_name in RECEIPT_CATEGORY_KEYWORDS:
+            if not any(keyword in merchant for keyword in keywords):
+                continue
+            wanted = category_name.casefold()
+            for category in categories:
+                if category.name.casefold() == wanted:
+                    return category.id
+        return self._default_category_id(TransactionType.EXPENSE)
+
+    def create_receipt_transaction(
+        self,
+        *,
+        amount_cents: int,
+        occurred_on: date,
+        description: str,
+        account_id: int,
+        category_id: int,
+        source_path: Path,
+    ) -> Transaction:
+        """Store the receipt image and save the reviewed expense it belongs to."""
+        if amount_cents <= 0:
+            raise RepositoryError("Amount must be greater than zero")
+        stored: str | None = None
+        try:
+            stored = store_receipt(source_path)
+            return self.repo.add_transaction(
+                Transaction(
+                    amount_cents=amount_cents,
+                    type=TransactionType.EXPENSE,
+                    category_id=category_id,
+                    occurred_on=occurred_on,
+                    description=description,
+                    account_id=account_id,
+                    receipt_path=stored,
+                )
+            )
+        except BaseException:
+            if stored is not None:
+                delete_receipt_file(stored)
+            raise
+
+    def attach_receipt(self, tx_id: int, source: Path) -> str:
+        """Store a receipt for an existing transaction, replacing any saved copy."""
+        tx = self.repo.get_transaction(tx_id)
+        if tx is None:
+            raise RepositoryError("Transaction not found")
+        stored = store_receipt(source)
+        try:
+            self.repo.set_transaction_receipt(tx_id, stored)
+        except BaseException:
+            delete_receipt_file(stored)
+            raise
+        if tx.receipt_path and tx.receipt_path != stored:
+            delete_receipt_file(tx.receipt_path)
+        return stored
+
+    def remove_receipt(self, tx_id: int) -> None:
+        """Unlink a transaction's receipt and delete the stored copy."""
+        tx = self.repo.get_transaction(tx_id)
+        if tx is None:
+            raise RepositoryError("Transaction not found")
+        self.repo.set_transaction_receipt(tx_id, None)
+        delete_receipt_file(tx.receipt_path)
 
     def export_xlsx(self, path: Path, today: date | None = None) -> Path:
         """Write the full workbook (summary, transactions, accounts, budgets, bills) with live formulas."""

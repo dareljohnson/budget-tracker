@@ -443,9 +443,6 @@ class BillMatchTestCase(MatchPanelTestCase):
             )
         )
 
-    def _radio_values(self, dialog) -> list[str]:
-        return [radio.value for radio in dialog.match_group.content.controls]
-
 
 class TestBillStrongCandidate(BillMatchTestCase):
     def test_a_single_strong_candidate_is_preselected_and_the_footer_uses_it(self):
@@ -495,6 +492,8 @@ class TestBillStrongCandidate(BillMatchTestCase):
         dialog.record_new_button.on_click(None)
 
         self.assertFalse(dialog._use_existing)
+        self.assertIsNone(dialog._selected_match)
+        self.assertIsNone(dialog.match_group.value)
 
         dialog._save(None)
 
@@ -505,6 +504,42 @@ class TestBillStrongCandidate(BillMatchTestCase):
         self.assertEqual(created.type, TransactionType.EXPENSE)
         self.assertEqual(created.account_id, self.checking.id)
         self.assertEqual(created.occurred_on, date(2026, 11, 1))
+        self.assertEqual(self.page.open_dialogs, [])
+
+    def test_double_click_advances_the_due_date_once_when_reusing_a_transaction(self):
+        bill = self._bill()
+        self._add_expense(description="Rent", amount_cents=1500, occurred_on=date(2026, 11, 1))
+        dialog = self._bill_dialog(bill)
+        dialog.open()
+        self.assertTrue(dialog._use_existing)
+
+        with mock.patch.object(
+            self.repo, "mark_bill_paid", wraps=self.repo.mark_bill_paid
+        ) as mark_paid:
+            dialog._save(None)
+            dialog._save(None)
+
+        mark_paid.assert_called_once()
+        self.assertEqual(self.repo.get_bill(bill.id).next_due, date(2026, 12, 1))
+        self.assertEqual(len(self.repo.list_transactions()), 1)
+        self.assertEqual(self.page.open_dialogs, [])
+
+    def test_double_click_inserts_at_most_one_new_payment(self):
+        bill = self._bill()
+        self._add_expense(description="Rent", amount_cents=1500, occurred_on=date(2026, 11, 1))
+        dialog = self._bill_dialog(bill)
+        dialog.open()
+        dialog.record_new_button.on_click(None)
+
+        with mock.patch.object(
+            self.repo, "mark_bill_paid", wraps=self.repo.mark_bill_paid
+        ) as mark_paid:
+            dialog._save(None)
+            dialog._save(None)
+
+        mark_paid.assert_called_once()
+        self.assertEqual(len(self.repo.list_transactions()), 2)
+        self.assertEqual(self.repo.get_bill(bill.id).next_due, date(2026, 12, 1))
         self.assertEqual(self.page.open_dialogs, [])
 
 
@@ -566,6 +601,46 @@ class TestBillCandidateSearch(BillMatchTestCase):
         self.assertFalse(dialog._use_existing)
         self.assertFalse(dialog.match_panel.visible)
 
+    def test_multiple_candidates_show_radios_without_a_preselection(self):
+        bill = self._bill()
+        first = self._add_expense(
+            description="Rent", amount_cents=1500, occurred_on=date(2026, 11, 1)
+        )
+        second = self._add_expense(
+            description="Landlord", amount_cents=1500, occurred_on=date(2026, 11, 1)
+        )
+
+        dialog = self._bill_dialog(bill)
+
+        self.assertTrue(dialog.match_panel.visible)
+        self.assertEqual(
+            set(self._radio_values(dialog)), {str(first.id), str(second.id)}
+        )
+        self.assertIsNone(dialog.match_group.value)
+        self.assertIsNone(dialog._selected_match)
+        self.assertFalse(dialog._use_existing)
+
+        dialog.match_group.value = str(second.id)
+        dialog.match_group.on_change(None)
+
+        self.assertEqual(dialog._selected_match.transaction.id, second.id)
+        self.assertTrue(dialog._use_existing)
+
+    def test_use_this_transaction_without_a_selection_asks_for_one(self):
+        bill = self._bill()
+        self._add_expense(description="Rent", amount_cents=1500, occurred_on=date(2026, 11, 1))
+        dialog = self._bill_dialog(bill)
+        dialog.record_new_button.on_click(None)
+        self.assertIsNone(dialog.match_group.value)
+
+        dialog.use_existing_button.on_click(None)
+
+        self.assertFalse(dialog._use_existing)
+        self.assertTrue(dialog.match_note.visible)
+        self.assertEqual(
+            dialog.match_note.value, "Select a transaction above to reuse it."
+        )
+
     def test_a_card_bill_only_offers_transfers_to_its_destination_account(self):
         card = next(a for a in self.repo.list_accounts() if a.name == "Credit Card")
         bill = self._bill(
@@ -609,6 +684,19 @@ class TestBillMismatch(BillMatchTestCase):
         self.assertEqual(self.page.errors, ["That transaction does not match this bill"])
         self.assertEqual(len(self.repo.list_transactions()), 1)
         self.assertEqual(self.repo.get_bill(bill.id).next_due, date(2026, 11, 1))
+        self.assertFalse(dialog.save_button.disabled)
+        self.assertFalse(dialog._saving)
+
+        # The dialog is still usable once the stale row matches again.
+        self.repo.conn.execute(
+            "UPDATE transactions SET amount_cents = 1500 WHERE id = ?", (candidate.id,)
+        )
+        self.repo.conn.commit()
+        dialog._save(None)
+
+        self.assertEqual(self.page.open_dialogs, [])
+        self.assertEqual(self.repo.get_bill(bill.id).next_due, date(2026, 12, 1))
+        self.assertEqual(len(self.repo.list_transactions()), 1)
 
 
 if __name__ == "__main__":

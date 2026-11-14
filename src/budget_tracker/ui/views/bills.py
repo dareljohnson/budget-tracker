@@ -20,6 +20,7 @@ BILL_KIND, CARD_KIND = "bill", "card"
 
 _MATCH_TITLE = "Already recorded"
 _MATCH_NOTE = "The existing transaction keeps its own date, amount, category, account, and description."
+_NO_SELECTION_NOTE = "Select a transaction above to reuse it."
 _USE_EXISTING_LABEL = "Use this transaction"
 _RECORD_NEW_LABEL = "Record a new payment"
 
@@ -208,6 +209,8 @@ class MarkPaidDialog:
         self._selected_match: MatchCandidate | None = None
         self._candidates: list[MatchCandidate] = []
         self._candidate_by_id: dict[str, MatchCandidate] = {}
+        self._saving = False
+        self._closed = False
         sources = [a for a in ctx.repo.list_accounts() if a.id != bill.pay_to_account_id]
         amount = ctx.repo.amount_due(bill)
         self.amount = ft.TextField(
@@ -262,6 +265,9 @@ class MarkPaidDialog:
             ),
         )
         target = f"to {bill.pay_to_account_name} (transfer)" if bill.is_card_payment else f"as {bill.category_name} expense"
+        self.save_button = ft.FilledButton(
+            content="Mark paid", icon=ft.Icons.CHECK, on_click=self._save
+        )
         self.dialog = ft.AlertDialog(
             modal=True,
             title=ft.Text(f"Pay {bill.name}"),
@@ -282,8 +288,8 @@ class MarkPaidDialog:
                 ),
             ),
             actions=[
-                ft.TextButton(content="Cancel", on_click=lambda _: ctx.page.pop_dialog()),
-                ft.FilledButton(content="Mark paid", icon=ft.Icons.CHECK, on_click=self._save),
+                ft.TextButton(content="Cancel", on_click=lambda _: self._close()),
+                self.save_button,
             ],
             actions_alignment=ft.MainAxisAlignment.END,
         )
@@ -364,10 +370,21 @@ class MarkPaidDialog:
 
     def _use_this_transaction(self, _: ft.Event | None = None) -> None:
         """Make the chosen candidate the footer action again after recording a new payment."""
-        self._selected_match = self._candidate_by_id.get(self.match_group.value)
-        self._set_use_existing(self._selected_match is not None)
+        chosen = self._candidate_by_id.get(self.match_group.value)
+        if chosen is None:
+            # Never leave the owner unsure which payment the footer will record.
+            self._use_existing = False
+            self.match_note.value = _NO_SELECTION_NOTE
+            self.match_note.visible = True
+            self._refresh_ui()
+            return
+        self._selected_match = chosen
+        self._set_use_existing(True)
 
     def _record_new(self, _: ft.Event | None = None) -> None:
+        """Explicitly create a payment; no checked row may imply reuse."""
+        self._selected_match = None
+        self.match_group.value = None
         self._set_use_existing(False)
 
     def _set_use_existing(self, enabled: bool) -> None:
@@ -376,6 +393,13 @@ class MarkPaidDialog:
         self.match_note.value = _MATCH_NOTE if self._use_existing else ""
         self.match_note.visible = self._use_existing
         self._refresh_ui()
+
+    def _close(self) -> None:
+        """Close the dialog once; later save attempts (double-click, stale event) are no-ops."""
+        if self._closed:
+            return
+        self._closed = True
+        self.ctx.page.pop_dialog()
 
     def _value_changed(self, _: ft.Event | None = None) -> None:
         """Amount or date edits change what can match; recompute from the fields as typed."""
@@ -400,6 +424,8 @@ class MarkPaidDialog:
             self.dialog.update()
 
     def _save(self, _: ft.Event) -> None:
+        if self._saving or self._closed:
+            return
         valid = True
         try:
             amount = parse_money(self.amount.value)
@@ -418,6 +444,9 @@ class MarkPaidDialog:
         if not valid:
             self.dialog.update()
             return
+        self._saving = True
+        self.save_button.disabled = True
+        self._refresh_ui()
         existing_id = (
             self._selected_match.transaction.id
             if self._use_existing and self._selected_match is not None
@@ -440,9 +469,12 @@ class MarkPaidDialog:
                     account_id=int(self.account.value),
                 )
         except RepositoryError as exc:
+            self._saving = False
+            self.save_button.disabled = False
+            self._refresh_ui()
             self.ctx.notify(str(exc), error=True)
             return
-        self.ctx.page.pop_dialog()
+        self._close()
         self.ctx.notify(f"'{self.bill.name}' marked as paid")
         self.ctx.data_changed()
 

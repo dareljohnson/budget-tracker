@@ -95,6 +95,39 @@ class TestOpenReceipt(unittest.TestCase):
             self._view()._open_receipt(self.tx)
         notify.assert_called_once_with("Could not open the receipt: no viewer", error=True)
 
+    def test_open_receipt_notifies_on_an_invalid_stored_path(self):
+        from budget_tracker.receipts.errors import ReceiptReadError
+
+        with mock.patch(
+            "budget_tracker.ui.views.transactions.open_receipt",
+            side_effect=ReceiptReadError("Invalid receipt location"),
+        ), mock.patch.object(self.ctx, "notify") as notify:
+            self._view()._open_receipt(self.tx)
+        notify.assert_called_once_with("Could not open the receipt: Invalid receipt location", error=True)
+
+    def test_open_receipt_does_nothing_without_a_path(self):
+        tx = Transaction(500, TransactionType.EXPENSE, 1, date(2026, 11, 14), "Shop")
+        with mock.patch("budget_tracker.ui.views.transactions.open_receipt") as opener:
+            self._view()._open_receipt(tx)
+        opener.assert_not_called()
+
+    def test_refresh_wires_a_receipt_row_to_the_view_opener(self):
+        category = self.repo.list_categories(TransactionType.EXPENSE)[0]
+        account = self.repo.list_accounts()[0]
+        self.repo.add_transaction(Transaction(
+            500, TransactionType.EXPENSE, category.id, date(2026, 11, 14), "Shop",
+            account_id=account.id, receipt_path="receipts/x.png",
+        ))
+        view = self._view()
+        [row] = view.list_column.controls
+        receipt = next(
+            c for c in row.content.controls
+            if isinstance(c, ft.IconButton) and c.tooltip == "Open receipt"
+        )
+        with mock.patch("budget_tracker.ui.views.transactions.open_receipt") as opener:
+            receipt.on_click(None)
+        opener.assert_called_once_with("receipts/x.png")
+
 
 if __name__ == "__main__":
     unittest.main()

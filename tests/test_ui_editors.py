@@ -1219,6 +1219,17 @@ class TestEditors(unittest.TestCase):
         view._set_custom_extra("200")
         self.assertEqual(view.extra_cents, 20_000)
 
+    def test_calculate_button_applies_the_custom_extra(self):
+        from budget_tracker.models import DebtKind
+        from budget_tracker.ui.views.debts import DebtsView
+
+        self.ctx.service.create_debt("Loan", DebtKind.PERSONAL, 100_000, 0, 10_000)
+        view = DebtsView(self.ctx)
+        view.custom_extra.value = "75"
+        self.assertEqual(view.custom_calculate.content, "Calculate")
+        view.custom_calculate.on_click(None)
+        self.assertEqual(view.extra_cents, 7_500)
+
 
 def _dialog_rule_texts(dialog) -> list:
     return [row.content.controls[1] for row in dialog.content.content.controls]

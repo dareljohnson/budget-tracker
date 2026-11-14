@@ -63,6 +63,12 @@ class DebtsView:
         self._start_month = ctx.service.current_month()
         self.last_start_month = self._start_month
         self.custom_extra = ft.TextField(label="Custom extra", width=160)
+        self.custom_calculate = ft.FilledButton(
+            content="Calculate",
+            icon=ft.Icons.CALCULATE,
+            visible=False,
+            on_click=lambda _: self._set_custom_extra(self.custom_extra.value),
+        )
         self.control = ft.Column(
             [
                 page_header(
@@ -121,6 +127,7 @@ class DebtsView:
         value = event.control.value
         if value == "custom":
             self.custom_extra.visible = True
+            self.custom_calculate.visible = True
             self.ctx.page.update()
             return
         self._set_extra(int(value))
@@ -181,6 +188,7 @@ class DebtsView:
             [
                 self._extra_selector(),
                 self.custom_extra,
+                self.custom_calculate,
             ],
             spacing=GAP,
             wrap=True,
@@ -203,6 +211,7 @@ class DebtsView:
         self.custom_extra.value = self.custom_text
         self.custom_extra.visible = value == "custom"
         self.custom_extra.on_submit = lambda _: self._set_custom_extra(self.custom_extra.value)
+        self.custom_calculate.visible = value == "custom"
         return ft.Dropdown(
             label="Extra per month (on top of minimums)",
             width=280,

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, fields
+
 import flet as ft
 
 # Theme roles resolve against the active light/dark scheme, so accents, income,
@@ -27,6 +29,7 @@ def set_text_scale(scale: float) -> None:
 def fs(size: int) -> int:
     """Scale an explicit font/icon size with the user's text-size setting."""
     return max(1, round(size * _text_scale))
+
 
 PALETTE = [
     "#E53935", "#D81B60", "#8E24AA", "#5E35B1", "#3949AB", "#1E88E5",
@@ -117,9 +120,165 @@ DARK_SCHEME = ft.ColorScheme(
 )
 
 
-def build_theme(dark: bool = False) -> ft.Theme:
+@dataclass(frozen=True)
+class ThemePreset:
+    label: str
+    light: dict[str, str]
+    dark: dict[str, str]
+
+
+PRESETS: dict[str, ThemePreset] = {
+    "indigo": ThemePreset("Indigo", {}, {}),
+    "ocean": ThemePreset(
+        "Ocean",
+        {
+            "primary": "#1565C0",
+            "on_primary": "#FFFFFF",
+            "primary_container": "#D6E4FF",
+            "on_primary_container": "#001B3D",
+            "tertiary": "#00695C",
+            "on_tertiary": "#FFFFFF",
+            "tertiary_container": "#B2DFDB",
+            "on_tertiary_container": "#00251F",
+        },
+        {
+            "primary": "#90CAF9",
+            "on_primary": "#003258",
+            "primary_container": "#0D47A1",
+            "on_primary_container": "#D6E4FF",
+            "tertiary": "#80CBC4",
+            "on_tertiary": "#003731",
+            "tertiary_container": "#005048",
+            "on_tertiary_container": "#B2DFDB",
+        },
+    ),
+    "forest": ThemePreset(
+        "Forest",
+        {
+            "primary": "#2E7D32",
+            "on_primary": "#FFFFFF",
+            "primary_container": "#C8E6C9",
+            "on_primary_container": "#0B3D0F",
+            "tertiary": "#00695C",
+            "on_tertiary": "#FFFFFF",
+            "tertiary_container": "#B2DFDB",
+            "on_tertiary_container": "#00251F",
+        },
+        {
+            "primary": "#A5D6A7",
+            "on_primary": "#0B3D0F",
+            "primary_container": "#1B5E20",
+            "on_primary_container": "#C8E6C9",
+            "tertiary": "#80CBC4",
+            "on_tertiary": "#003731",
+            "tertiary_container": "#005048",
+            "on_tertiary_container": "#B2DFDB",
+        },
+    ),
+    "slate": ThemePreset(
+        "Slate",
+        {
+            "primary": "#455A64",
+            "on_primary": "#FFFFFF",
+            "primary_container": "#CFD8DC",
+            "on_primary_container": "#1C313A",
+        },
+        {
+            "primary": "#B0BEC5",
+            "on_primary": "#1C313A",
+            "primary_container": "#37474F",
+            "on_primary_container": "#CFD8DC",
+        },
+    ),
+    "high_contrast": ThemePreset(
+        "High contrast",
+        {
+            "primary": "#0D47A1",
+            "on_primary": "#FFFFFF",
+            "primary_container": "#D6E4FF",
+            "on_primary_container": "#000000",
+            "secondary": "#7A3E00",
+            "on_secondary": "#FFFFFF",
+            "secondary_container": "#FFE0B2",
+            "on_secondary_container": "#000000",
+            "tertiary": "#1B5E20",
+            "on_tertiary": "#FFFFFF",
+            "tertiary_container": "#C8E6C9",
+            "on_tertiary_container": "#000000",
+            "error": "#B71C1C",
+            "on_error": "#FFFFFF",
+            "error_container": "#FFDAD6",
+            "on_error_container": "#000000",
+            "surface": "#FFFFFF",
+            "on_surface": "#000000",
+            "on_surface_variant": "#1A1A1A",
+            "outline": "#000000",
+            "outline_variant": "#000000",
+            "surface_container_lowest": "#FFFFFF",
+            "surface_container_low": "#FFFFFF",
+            "surface_container": "#FFFFFF",
+            "surface_container_high": "#F2F2F2",
+            "surface_container_highest": "#E6E6E6",
+            "surface_dim": "#FFFFFF",
+            "surface_bright": "#FFFFFF",
+            "inverse_surface": "#000000",
+            "on_inverse_surface": "#FFFFFF",
+            "inverse_primary": "#90CAF9",
+            "shadow": "#000000",
+            "scrim": "#000000",
+            "surface_tint": "#0D47A1",
+        },
+        {
+            "primary": "#FFFFFF",
+            "on_primary": "#000000",
+            "primary_container": "#333333",
+            "on_primary_container": "#FFFFFF",
+            "secondary": "#FFD180",
+            "on_secondary": "#000000",
+            "secondary_container": "#4A2C00",
+            "on_secondary_container": "#FFFFFF",
+            "tertiary": "#69F0AE",
+            "on_tertiary": "#000000",
+            "tertiary_container": "#00391F",
+            "on_tertiary_container": "#FFFFFF",
+            "error": "#FF8A80",
+            "on_error": "#000000",
+            "error_container": "#5C0000",
+            "on_error_container": "#FFFFFF",
+            "surface": "#000000",
+            "on_surface": "#FFFFFF",
+            "on_surface_variant": "#F5F5F5",
+            "outline": "#FFFFFF",
+            "outline_variant": "#FFFFFF",
+            "surface_container_lowest": "#000000",
+            "surface_container_low": "#0A0A0A",
+            "surface_container": "#111111",
+            "surface_container_high": "#1A1A1A",
+            "surface_container_highest": "#222222",
+            "surface_dim": "#000000",
+            "surface_bright": "#2A2A2A",
+            "inverse_surface": "#FFFFFF",
+            "on_inverse_surface": "#000000",
+            "inverse_primary": "#0D47A1",
+            "shadow": "#000000",
+            "scrim": "#000000",
+            "surface_tint": "#FFFFFF",
+        },
+    ),
+}
+
+
+def _scheme(base: ft.ColorScheme, overrides: dict[str, str]) -> ft.ColorScheme:
+    values = {field.name: getattr(base, field.name) for field in fields(base)}
+    values.update(overrides)
+    return ft.ColorScheme(**values)
+
+
+def build_theme(dark: bool = False, preset: str = "indigo") -> ft.Theme:
+    chosen = PRESETS.get(preset, PRESETS["indigo"])
+    base = DARK_SCHEME if dark else LIGHT_SCHEME
     return ft.Theme(
-        color_scheme=DARK_SCHEME if dark else LIGHT_SCHEME,
+        color_scheme=_scheme(base, chosen.dark if dark else chosen.light),
         font_family=FONT_FAMILY,
         use_material3=True,
     )

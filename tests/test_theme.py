@@ -17,6 +17,21 @@ def test_light_and_dark_schemes_have_readable_semantic_colors():
     assert theme.build_theme(dark=True).color_scheme.tertiary == "#81C784"
 
 
+def test_theme_presets_change_the_accent_and_contrast_roles():
+    assert theme.build_theme(preset="ocean").color_scheme.primary == "#1565C0"
+    assert theme.build_theme(dark=True, preset="ocean").color_scheme.primary == "#90CAF9"
+    high = theme.build_theme(dark=True, preset="high_contrast")
+    assert high.color_scheme.surface == "#000000"
+    assert high.color_scheme.on_surface == "#FFFFFF"
+    assert high.color_scheme.outline == "#FFFFFF"
+    assert theme.build_theme(preset="unknown").color_scheme.primary == "#3F51B5"
+
+
+def test_theme_preset_labels():
+    assert list(theme.PRESETS) == ["indigo", "ocean", "forest", "slate", "high_contrast"]
+    assert theme.PRESETS["high_contrast"].label == "High contrast"
+
+
 def test_text_scale_multiplies_explicit_sizes():
     theme.set_text_scale(1.0)
     assert theme.fs(12) == 12

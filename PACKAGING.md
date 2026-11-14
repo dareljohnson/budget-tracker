@@ -135,13 +135,13 @@ app keeps only its SHA-256 hash and, at most, the last four account digits. See
 ```
 
 **Output** (`build\installer\`):
-- `BudgetTracker-1.0.0-windows-x64-setup.exe`: the installer.
+- `BudgetTracker-<version>-windows-x64-setup.exe`: the installer.
   - Installs per-user by default, so no admin prompt.
   - Adds a Start menu entry, and a desktop icon if the user picks that option.
   - Registers an uninstaller under *Settings → Apps*.
   - Upgrades an existing install in place.
   - Can run silently: `/VERYSILENT /SUPPRESSMSGBOXES /CURRENTUSER`.
-- `BudgetTracker-1.0.0-windows-x64.zip`: a portable version. Unzip it and run `BudgetTracker.exe`. Keep the
+- `BudgetTracker-<version>-windows-x64.zip`: a portable version. Unzip it and run `BudgetTracker.exe`. Keep the
   folder together, because the `.exe` needs the DLLs next to it.
 
 **Code signing.** Unsigned apps trigger SmartScreen ("Windows protected your PC" → *More info* → *Run anyway*).
@@ -158,7 +158,7 @@ CocoaPods (`brew install cocoapods`).
 bash packaging/macos/build.sh
 ```
 
-**Output:** `build/installer/BudgetTracker-1.0.0-macos.dmg`. The user opens it and drags *Budget Tracker* to
+**Output:** `build/installer/BudgetTracker-<version>-macos.dmg`. The user opens it and drags *Budget Tracker* to
 *Applications*.
 
 **Signing and notarization.** Without them, Gatekeeper blocks the first launch and the user must right-click and
@@ -187,15 +187,22 @@ bash packaging/linux/build.sh
 ```
 
 **Output** (`build/installer/`):
-- `BudgetTracker-1.0.0-linux-x64.tar.gz`: extract it anywhere and run `./install.sh` to add the app to the
+- `BudgetTracker-<version>-linux-x64.tar.gz`: extract it anywhere and run `./install.sh` to add the app to the
   application menu (`./install.sh --uninstall` removes it).
-- `BudgetTracker-1.0.0-x86_64.AppImage` (if appimagetool is available): a single file. Make it executable and
+- `BudgetTracker-<version>-x86_64.AppImage` (if appimagetool is available): a single file. Make it executable and
   run it.
 
 For `.deb`, `.rpm` or Flatpak packages, point those tools at `build/linux/`. The bundle already ships
 `share/applications/*.desktop` and the icons.
 
 ---
+
+## Versioning
+
+`src/budget_tracker/__init__.py` (`__version__`) and `pyproject.toml` (`project.version`) are the two places the
+version lives. They must match, and `tests/test_app_shell.py` fails if they drift. Bump both together for a
+release — minor for feature releases, patch for fixes. The build scripts and installer read the packaged
+executable and `pyproject.toml`, so no other file carries the number. The app's nav rail shows the value.
 
 ## 3. Build all three with GitHub Actions
 
@@ -209,7 +216,7 @@ To use it:
 2. **Actions → Build installers → Run workflow** builds the installers and attaches them as artifacts.
 3. Or tag a release to also publish a **GitHub Release** with all installers attached:
    ```bash
-   git tag v1.0.0 && git push origin v1.0.0
+   git tag v1.1.0 && git push origin v1.1.0
    ```
 
 Signing secrets aren't wired in by default. Add them as repository secrets and export `MACOS_SIGN_IDENTITY` /

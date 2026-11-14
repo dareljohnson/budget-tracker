@@ -786,8 +786,19 @@ class TestEditors(unittest.TestCase):
         self.repo.add_category_rule("PAYROLL", income.id)
 
         view = CategoriesView(self.ctx)
-        actions = view.control.controls[0].controls[1].controls
-        rules_button = next(button for button in actions if getattr(button, "content", None) == "Rules")
+
+        def buttons(control):
+            found = []
+            if getattr(control, "content", None) == "Rules":
+                found.append(control)
+            for child in getattr(control, "controls", None) or []:
+                found.extend(buttons(child))
+            content = getattr(control, "content", None)
+            if content is not None and not isinstance(content, str):
+                found.extend(buttons(content))
+            return found
+
+        rules_button = buttons(view.control.controls[0])[0]
         rules_button.on_click(None)
         [opened] = self.page.open_dialogs
         self.assertIn("Kroger", " ".join(text.value for text in _dialog_rule_texts(opened)))
@@ -805,6 +816,20 @@ class TestEditors(unittest.TestCase):
         self.assertEqual(dialog.list_column.controls[0].value, "No rules yet — save one from the import preview.")
         self.assertEqual(self.repo.list_category_rules(), [])
         self.assertIsNone(self.repo.suggest_category_id("Card Purchase Kroger #443", TransactionType.EXPENSE))
+
+    def test_context_reset_listeners_drops_view_callbacks(self):
+        calls: list[int] = []
+        self.ctx.on_data_changed(lambda: calls.append(1))
+        self.ctx.reset_listeners()
+        self.ctx.data_changed()
+        self.assertEqual(calls, [])
+
+    def test_context_reset_listeners_drops_view_callbacks(self):
+        calls: list[int] = []
+        self.ctx.on_data_changed(lambda: calls.append(1))
+        self.ctx.reset_listeners()
+        self.ctx.data_changed()
+        self.assertEqual(calls, [])
 
     def test_accounts_debts_stat_counts_negative_liabilities(self):
         from budget_tracker.formatting import format_money

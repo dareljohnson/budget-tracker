@@ -9,7 +9,7 @@ from ...models import Account, AccountBalance, AccountKind, TransactionType
 from ...repository import RepositoryError
 from ..components import account_avatar, balance_text, card, confirm_dialog, empty_state, page_header, stat_card
 from ..context import AppContext
-from ..theme import EXPENSE_COLOR, GAP, INCOME_COLOR, PALETTE, SEED_COLOR
+from ..theme import EXPENSE_COLOR, GAP, INCOME_COLOR, PALETTE, SEED_COLOR, fs
 from .minimum_payments import MinimumPaymentDialog, minimum_status_chip
 from .reconcile import BalanceCheckDialog
 from .transactions import TransactionEditor
@@ -114,15 +114,15 @@ class AccountsView:
         if account.number_last4:
             details += f"  •  •••• {account.number_last4}"
         heading: list[ft.Control] = [
-            ft.Text(account.name, size=16, weight=ft.FontWeight.W_600),
-            ft.Text(details, size=12, color=ft.Colors.ON_SURFACE_VARIANT),
+            ft.Text(account.name, size=fs(16), weight=ft.FontWeight.W_600),
+            ft.Text(details, size=fs(13), color=ft.Colors.ON_SURFACE_VARIANT),
         ]
         latest = self.ctx.service.last_reconciliation(account.id)
         if latest is not None and latest.difference_cents == 0:
             heading.append(
                 ft.Text(
                     f"Reconciled through {latest.as_of:%Y-%m-%d}",
-                    size=11,
+                    size=fs(12),
                     color=INCOME_COLOR,
                     weight=ft.FontWeight.W_500,
                 )
@@ -137,19 +137,19 @@ class AccountsView:
                 spacing=GAP,
             ),
             ft.Column(
-                [ft.Text(caption, size=12, color=ft.Colors.ON_SURFACE_VARIANT), balance_text(balance, size=26)],
+                [ft.Text(caption, size=fs(13), color=ft.Colors.ON_SURFACE_VARIANT), balance_text(balance, size=fs(26))],
                 spacing=0,
             ),
         ]
         if is_credit_card:
             minimum_controls: list[ft.Control] = [
-                ft.Text("Minimum", size=12, color=ft.Colors.ON_SURFACE_VARIANT)
+                ft.Text("Minimum", size=fs(13), color=ft.Colors.ON_SURFACE_VARIANT)
             ]
             if minimum:
                 minimum_controls.append(
                     ft.Text(
                         f"{format_money(minimum.amount_cents)} · {month_label(minimum.month)}",
-                        size=13,
+                        size=fs(13),
                         weight=ft.FontWeight.W_600,
                     )
                 )
@@ -233,7 +233,7 @@ class AccountEditor:
             keyboard_type=ft.KeyboardType.NUMBER,
             on_submit=self._save,
         )
-        self.preview = account_avatar(Account(name="", kind=self.kind, color=self.color), size=56)
+        self.preview = account_avatar(Account(name="", kind=self.kind, color=self.color), size=fs(56))
         self.color_grid = ft.Row(wrap=True, spacing=8, run_spacing=8)
         self._render()
 
@@ -285,7 +285,7 @@ class AccountEditor:
             )
             for c in PALETTE
         ]
-        avatar = account_avatar(Account(name="", kind=self.kind, color=self.color), size=56)
+        avatar = account_avatar(Account(name="", kind=self.kind, color=self.color), size=fs(56))
         self.preview.content = avatar.content
         self.preview.bgcolor = avatar.bgcolor
 

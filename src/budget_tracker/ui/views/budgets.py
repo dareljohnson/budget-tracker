@@ -9,7 +9,7 @@ from ...models import Budget, BudgetProgress, TransactionType
 from ...repository import RepositoryError
 from ..components import MonthSelector, card, category_avatar, confirm_dialog, empty_state, page_header, section_title
 from ..context import AppContext
-from ..theme import EXPENSE_COLOR, GAP, INCOME_COLOR, WARNING_COLOR
+from ..theme import EXPENSE_COLOR, GAP, INCOME_COLOR, WARNING_COLOR, fs
 
 STATUS_COLORS = {"ok": INCOME_COLOR, "warning": WARNING_COLOR, "over": EXPENSE_COLOR}
 STATUS_LABELS = {"ok": "On track", "warning": "Near limit", "over": "Over budget"}
@@ -69,7 +69,7 @@ class BudgetsView:
                     ),
                     ft.Text(
                         f"{format_money(total_limit - total_spent)} remaining" if total_limit >= total_spent else f"{format_money(total_spent - total_limit)} over budget",
-                        size=13,
+                        size=fs(13),
                         color=STATUS_COLORS[status],
                     ),
                 ],
@@ -105,7 +105,7 @@ class BudgetsView:
                                 [
                                     ft.Text(b.category_name, weight=ft.FontWeight.W_600),
                                     ft.Container(
-                                        content=ft.Text(STATUS_LABELS[b.status], size=11, color=color, weight=ft.FontWeight.W_600),
+                                        content=ft.Text(STATUS_LABELS[b.status], size=fs(12), color=color, weight=ft.FontWeight.W_600),
                                         bgcolor=ft.Colors.with_opacity(0.12, color),
                                         padding=ft.Padding.symmetric(horizontal=8, vertical=2),
                                         border_radius=8,
@@ -122,13 +122,13 @@ class BudgetsView:
                     ft.ProgressBar(value=min(b.ratio, 1.0), color=color, bgcolor=ft.Colors.with_opacity(0.15, color), bar_height=10, border_radius=5),
                     ft.Row(
                         [
-                            ft.Text(f"{format_money(b.spent_cents)} spent", size=13, expand=True),
-                            ft.Text(f"{b.ratio:.0%} of {format_money(b.limit_cents)}", size=13, color=ft.Colors.ON_SURFACE_VARIANT),
+                            ft.Text(f"{format_money(b.spent_cents)} spent", size=fs(13), expand=True),
+                            ft.Text(f"{b.ratio:.0%} of {format_money(b.limit_cents)}", size=fs(13), color=ft.Colors.ON_SURFACE_VARIANT),
                         ]
                     ),
                     ft.Text(
                         f"{format_money(b.remaining_cents)} left" if b.remaining_cents >= 0 else f"{format_money(-b.remaining_cents)} over",
-                        size=13,
+                        size=fs(13),
                         weight=ft.FontWeight.W_600,
                         color=color,
                     ),

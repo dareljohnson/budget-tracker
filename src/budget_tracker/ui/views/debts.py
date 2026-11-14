@@ -22,7 +22,7 @@ from ...repository import RepositoryError
 from ...services import DebtSummary
 from ..components import card, confirm_dialog, date_field, empty_state, page_header, section_title
 from ..context import AppContext
-from ..theme import EXPENSE_COLOR, GAP, INCOME_COLOR, RADIUS, SEED_COLOR
+from ..theme import EXPENSE_COLOR, GAP, INCOME_COLOR, RADIUS, SEED_COLOR, fs
 
 EXTRA_PRESETS = [0, 5_000, 10_000, 20_000]
 
@@ -174,7 +174,7 @@ class DebtsView:
         warnings = [
             ft.Text(
                 f"{summary.debt.name}: the minimum does not cover monthly interest",
-                size=12,
+                size=fs(13),
                 color=EXPENSE_COLOR,
             )
             for summary in summaries
@@ -182,14 +182,14 @@ class DebtsView:
         ]
         if not all(plan.finished for plan in plans.values()):
             warnings.append(
-                ft.Text("Not paid off within 50 years at this payment.", size=12, color=EXPENSE_COLOR)
+                ft.Text("Not paid off within 50 years at this payment.", size=fs(13), color=EXPENSE_COLOR)
             )
         if self.extra_cents == 0 and all(
             summary.effective_minimum_cents == 0
             for summary in summaries
             if summary.balance_cents > 0
         ):
-            warnings.append(ft.Text("No payment is being made.", size=12, color=EXPENSE_COLOR))
+            warnings.append(ft.Text("No payment is being made.", size=fs(13), color=EXPENSE_COLOR))
         if warnings:
             controls.append(ft.Container(
                 content=ft.Column(warnings, spacing=4),
@@ -212,7 +212,7 @@ class DebtsView:
         if plans_coincide(plans[DebtStrategy.AVALANCHE], plans[DebtStrategy.SNOWBALL]):
             controls.append(ft.Text(
                 "Avalanche and snowball target the same debt here, so the plans match.",
-                size=12,
+                size=fs(13),
                 color=ft.Colors.ON_SURFACE_VARIANT,
             ))
         controls.append(section_title("What extra buys"))
@@ -222,7 +222,7 @@ class DebtsView:
         controls.append(section_title("Combined monthly schedule"))
         controls.append(ft.Text(
             "Payments and balances below are the total across every debt listed above.",
-            size=12,
+            size=fs(13),
             color=ft.Colors.ON_SURFACE_VARIANT,
         ))
         controls.append(self._yearly_table(current))
@@ -273,31 +273,31 @@ class DebtsView:
             month_label(plan.debt_free_month) if plan.debt_free_month else "Not within 50 years"
         )
         lines: list[ft.Control] = [
-            ft.Text(plan.strategy.label, size=15, weight=ft.FontWeight.W_600),
+            ft.Text(plan.strategy.label, size=fs(15), weight=ft.FontWeight.W_600),
             ft.Text(
                 debt_free,
-                size=18,
+                size=fs(18),
                 weight=ft.FontWeight.W_700,
                 color=SEED_COLOR if plan.finished else EXPENSE_COLOR,
             ),
-            ft.Text(f"{plan.months} months", size=12, color=ft.Colors.ON_SURFACE_VARIANT),
+            ft.Text(f"{plan.months} months", size=fs(13), color=ft.Colors.ON_SURFACE_VARIANT),
             ft.Text(
                 f"Covers {debt_count} debt{'s' if debt_count != 1 else ''}",
-                size=12,
+                size=fs(13),
                 color=ft.Colors.ON_SURFACE_VARIANT,
             ),
-            ft.Text(f"Interest {format_money(plan.total_interest_cents)}", size=12),
-            ft.Text(f"Paid {format_money(plan.total_paid_cents)}", size=12),
+            ft.Text(f"Interest {format_money(plan.total_interest_cents)}", size=fs(13)),
+            ft.Text(f"Paid {format_money(plan.total_paid_cents)}", size=fs(13)),
             ft.Text(
                 f"First target: {plan.first_target.name if plan.first_target else '—'}",
-                size=12,
+                size=fs(13),
                 color=ft.Colors.ON_SURFACE_VARIANT,
             ),
         ]
         if savings:
             lines.append(ft.Text(
                 f"Saves {format_money(savings)} in interest",
-                size=12,
+                size=fs(13),
                 weight=ft.FontWeight.W_600,
                 color=INCOME_COLOR,
             ))
@@ -351,7 +351,7 @@ class DebtsView:
         texts = [
             ft.Text(
                 cell,
-                size=12,
+                size=fs(13),
                 width=width,
                 weight=ft.FontWeight.W_600 if header else None,
                 color=ft.Colors.ON_SURFACE_VARIANT if header else None,
@@ -361,7 +361,7 @@ class DebtsView:
         ]
         return ft.Container(
             content=ft.Row(texts, spacing=GAP),
-            padding=ft.Padding.symmetric(horizontal=8, vertical=4),
+            padding=ft.Padding.symmetric(horizontal=8, vertical=6),
             border_radius=8,
             bgcolor=ft.Colors.with_opacity(0.08, SEED_COLOR) if highlight else None,
         )
@@ -449,7 +449,7 @@ class DebtsView:
                 section_title("Included in this plan"),
                 ft.Text(
                     "The payoff order and combined schedule below cover every debt in this table.",
-                    size=12,
+                    size=fs(13),
                     color=ft.Colors.ON_SURFACE_VARIANT,
                 ),
                 *rows,
@@ -477,7 +477,7 @@ class DebtsView:
         if len(self._payoff_months) < len(summaries):
             rows.append(ft.Text(
                 "— means the plan does not pay this debt off within 50 years.",
-                size=11,
+                size=fs(12),
                 color=ft.Colors.ON_SURFACE_VARIANT,
             ))
         return ft.Column([section_title("Debt payoff order"), *rows], spacing=4)
@@ -485,22 +485,22 @@ class DebtsView:
     def _debt_card(self, summary: DebtSummary, payoff_month: int | None = None) -> ft.Container:
         debt = summary.debt
         details = [
-            ft.Text(f"{format_money(summary.balance_cents)} owed", size=20, weight=ft.FontWeight.W_700),
-            ft.Text(f"APR {format_percent(debt.apr_bps)}", size=12, color=ft.Colors.ON_SURFACE_VARIANT),
+            ft.Text(f"{format_money(summary.balance_cents)} owed", size=fs(20), weight=ft.FontWeight.W_700),
+            ft.Text(f"APR {format_percent(debt.apr_bps)}", size=fs(13), color=ft.Colors.ON_SURFACE_VARIANT),
             ft.Text(
                 f"Minimum {format_money(summary.effective_minimum_cents)}"
                 + (f" · {month_label(summary.statement_month)} statement"
                    if summary.minimum_from_statement else " · set manually"),
-                size=12,
+                size=fs(13),
                 color=ft.Colors.ON_SURFACE_VARIANT,
             ),
         ]
         if summary.account_name:
-            details.append(ft.Text(f"Linked to {summary.account_name}", size=12, color=SEED_COLOR))
+            details.append(ft.Text(f"Linked to {summary.account_name}", size=fs(13), color=SEED_COLOR))
         if payoff_month is not None:
             details.append(ft.Text(
                 f"Payoff: {month_label(shift_month(self._start_month, payoff_month))} at this plan",
-                size=12,
+                size=fs(13),
                 color=SEED_COLOR,
             ))
         if debt.original_balance_cents:
@@ -508,10 +508,10 @@ class DebtsView:
             details.append(ft.ProgressBar(value=paid, bar_height=8, border_radius=4))
             details.append(ft.Text(
                 f"{round(paid * 100)}% paid down from {format_money(debt.original_balance_cents)}",
-                size=11, color=ft.Colors.ON_SURFACE_VARIANT,
+                size=fs(12), color=ft.Colors.ON_SURFACE_VARIANT,
             ))
         if summary.minimum_below_interest:
-            details.append(ft.Text("The minimum does not cover monthly interest", size=12, color=EXPENSE_COLOR))
+            details.append(ft.Text("The minimum does not cover monthly interest", size=fs(13), color=EXPENSE_COLOR))
         actions = [
             ft.FilledTonalButton(content="Log payment", icon=ft.Icons.PAYMENT,
                                  on_click=lambda _: DebtPaymentDialog(self.ctx, summary).open()),
@@ -523,8 +523,8 @@ class DebtsView:
                           on_click=lambda _: self._confirm_delete(debt)),
         ]
         return card(
-            ft.Column([ft.Text(debt.name, size=16, weight=ft.FontWeight.W_600),
-                       ft.Text(debt.kind.label, size=12, color=ft.Colors.ON_SURFACE_VARIANT),
+            ft.Column([ft.Text(debt.name, size=fs(16), weight=ft.FontWeight.W_600),
+                       ft.Text(debt.kind.label, size=fs(13), color=ft.Colors.ON_SURFACE_VARIANT),
                        *details,
                        ft.Row(actions, alignment=ft.MainAxisAlignment.END, spacing=4, wrap=True)],
                       spacing=8),
@@ -573,7 +573,7 @@ class DebtEditor:
         self.apr = ft.TextField(label="APR (%)", value=format_percent(debt.apr_bps).rstrip("%") if debt else "")
         self.minimum = ft.TextField(label="Minimum / month", prefix_icon=ft.Icons.ATTACH_MONEY,
                                     value=f"{debt.minimum_cents / 100:.2f}" if debt and debt.minimum_cents else "")
-        self.minimum_note = ft.Text("", size=11, color=ft.Colors.ON_SURFACE_VARIANT, visible=False)
+        self.minimum_note = ft.Text("", size=fs(12), color=ft.Colors.ON_SURFACE_VARIANT, visible=False)
         self.original = ft.TextField(label="Original balance", hint_text="Optional",
                                      prefix_icon=ft.Icons.ATTACH_MONEY,
                                      value=(f"{debt.original_balance_cents / 100:.2f}"
@@ -585,7 +585,7 @@ class DebtEditor:
             value=str(debt.account_id) if debt and debt.account_id else "none",
         )
         self.link.on_select = lambda _: self._link_changed()
-        self.error = ft.Text("", size=12, color=EXPENSE_COLOR, visible=False)
+        self.error = ft.Text("", size=fs(13), color=EXPENSE_COLOR, visible=False)
         self.dialog = ft.AlertDialog(
             modal=True,
             title=ft.Text("Edit Debt" if debt else "New Debt"),
@@ -770,7 +770,7 @@ class DebtPaymentDialog:
             value=str(preferred.id) if preferred else None,
             visible=debt.account_id is None,
         )
-        self.error = ft.Text("", size=12, color=EXPENSE_COLOR, visible=False)
+        self.error = ft.Text("", size=fs(13), color=EXPENSE_COLOR, visible=False)
 
         self.dialog = ft.AlertDialog(
             modal=True,
@@ -779,7 +779,7 @@ class DebtPaymentDialog:
                 [
                     ft.Text(
                         f"{format_money(summary.balance_cents)} owed.",
-                        size=12,
+                        size=fs(13),
                         color=ft.Colors.ON_SURFACE_VARIANT,
                     ),
                     self.amount,
@@ -869,23 +869,23 @@ class DebtHistoryDialog:
                 source = "Transfer"
             rows.append(ft.Row(
                 [
-                    ft.Text(f"{tx.occurred_on:%b %d, %Y}", size=12, width=110),
-                    ft.Text(format_money(tx.amount_cents), size=12, width=90,
+                    ft.Text(f"{tx.occurred_on:%b %d, %Y}", size=fs(13), width=110),
+                    ft.Text(format_money(tx.amount_cents), size=fs(13), width=90,
                             text_align=ft.TextAlign.RIGHT),
-                    ft.Text(tx.account_name or "", size=12, width=120),
-                    ft.Text(source, size=12, expand=True),
+                    ft.Text(tx.account_name or "", size=fs(13), width=120),
+                    ft.Text(source, size=fs(13), expand=True),
                 ],
                 spacing=GAP,
             ))
         body: list[ft.Control] = [
             ft.Column(rows, spacing=6, tight=True)
             if payments
-            else ft.Text("No payments recorded yet.", size=12, color=ft.Colors.ON_SURFACE_VARIANT)
+            else ft.Text("No payments recorded yet.", size=fs(13), color=ft.Colors.ON_SURFACE_VARIANT)
         ]
         if debt.account_id is not None:
             body.append(ft.Text(
                 "Payments made outside the Log payment dialog still change the balance but are not listed here.",
-                size=11,
+                size=fs(12),
                 color=ft.Colors.ON_SURFACE_VARIANT,
             ))
         self.dialog = ft.AlertDialog(

@@ -13,7 +13,7 @@ from ...repository import RepositoryError
 from ...services import GoalScheduleMonth, SavingsGoalProgress
 from ..components import card, confirm_dialog, date_field, empty_state, page_header, section_title
 from ..context import AppContext
-from ..theme import EXPENSE_COLOR, GAP, INCOME_COLOR, SEED_COLOR
+from ..theme import EXPENSE_COLOR, GAP, INCOME_COLOR, SEED_COLOR, fs
 
 STATE_COLORS = {"active": SEED_COLOR, "reached": INCOME_COLOR, "overdue": EXPENSE_COLOR}
 
@@ -36,7 +36,7 @@ def _state_text(progress: SavingsGoalProgress) -> str:
 def goal_state_chip(progress: SavingsGoalProgress) -> ft.Container:
     color = STATE_COLORS[progress.state]
     return ft.Container(
-        content=ft.Text(_state_text(progress), size=11, weight=ft.FontWeight.W_600, color=color),
+        content=ft.Text(_state_text(progress), size=fs(12), weight=ft.FontWeight.W_600, color=color),
         bgcolor=ft.Colors.with_opacity(0.12, color),
         border_radius=10,
         padding=ft.Padding.symmetric(horizontal=8, vertical=3),
@@ -120,7 +120,7 @@ class GoalsView:
                     ft.Row(
                         [
                             ft.Container(
-                                content=ft.Icon(ft.Icons.SAVINGS, color=color, size=22),
+                                content=ft.Icon(ft.Icons.SAVINGS, color=color, size=fs(22)),
                                 width=44,
                                 height=44,
                                 border_radius=14,
@@ -129,8 +129,8 @@ class GoalsView:
                             ),
                             ft.Column(
                                 [
-                                    ft.Text(goal.name, size=16, weight=ft.FontWeight.W_600),
-                                    ft.Text(f"Savings · {progress.account_name}", size=12, color=ft.Colors.ON_SURFACE_VARIANT),
+                                    ft.Text(goal.name, size=fs(16), weight=ft.FontWeight.W_600),
+                                    ft.Text(f"Savings · {progress.account_name}", size=fs(13), color=ft.Colors.ON_SURFACE_VARIANT),
                                 ],
                                 spacing=2,
                                 expand=True,
@@ -144,7 +144,7 @@ class GoalsView:
                         [
                             ft.Text(
                                 f"{format_money(progress.progress_cents)} of {format_money(goal.target_cents)}",
-                                size=15,
+                                size=fs(15),
                                 weight=ft.FontWeight.W_600,
                             ),
                             ft.ProgressBar(
@@ -167,28 +167,28 @@ class GoalsView:
 
     def _goal_details(self, progress: SavingsGoalProgress) -> ft.Control:
         if progress.state == "reached":
-            return ft.Text("Target met — nothing left to save.", size=12, color=INCOME_COLOR)
+            return ft.Text("Target met — nothing left to save.", size=fs(13), color=INCOME_COLOR)
         if progress.state == "overdue":
             return ft.Text(
                 f"Due now {format_money(progress.remaining_cents)}",
-                size=13,
+                size=fs(13),
                 weight=ft.FontWeight.W_600,
                 color=EXPENSE_COLOR,
             )
         return ft.Column(
             [
-                ft.Text(f"{format_money(progress.remaining_cents)} remaining", size=13, weight=ft.FontWeight.W_500),
+                ft.Text(f"{format_money(progress.remaining_cents)} remaining", size=fs(13), weight=ft.FontWeight.W_500),
                 ft.Row(
                     [
                         ft.Text(
                             f"Required {format_money(progress.required_monthly_cents)}/month",
-                            size=12,
+                            size=fs(13),
                             color=ft.Colors.ON_SURFACE_VARIANT,
                         ),
                         ft.Text(
                             f"This month: {format_money(progress.contributed_this_month_cents)} of "
                             f"{format_money(progress.required_monthly_cents)}",
-                            size=12,
+                            size=fs(13),
                             color=ft.Colors.ON_SURFACE_VARIANT,
                         ),
                     ],
@@ -253,17 +253,17 @@ class GoalEditor:
         )
         self.destination_note = ft.Text(
             "The destination can't change while contributions are linked to this goal.",
-            size=12,
+            size=fs(13),
             color=ft.Colors.ON_SURFACE_VARIANT,
             visible=self.contribution_count > 0,
         )
         self.no_savings_note = ft.Text(
             "Add a savings account on the Accounts page first.",
-            size=12,
+            size=fs(13),
             color=EXPENSE_COLOR,
             visible=not savings,
         )
-        self.error = ft.Text("", size=12, color=EXPENSE_COLOR, visible=False)
+        self.error = ft.Text("", size=fs(13), color=EXPENSE_COLOR, visible=False)
 
         self.dialog = ft.AlertDialog(
             modal=True,
@@ -387,7 +387,7 @@ class ContributeDialog:
                     [
                         ft.Text(
                             f"{format_money(progress.remaining_cents)} remaining in '{progress.account_name}'.",
-                            size=12,
+                            size=fs(13),
                             color=ft.Colors.ON_SURFACE_VARIANT,
                         ),
                         self.amount,
@@ -456,7 +456,7 @@ class GoalDetailDialog:
                 [
                     ft.Text(
                         f"{format_money(progress.progress_cents)} of {format_money(goal.target_cents)} saved",
-                        size=15,
+                        size=fs(15),
                         weight=ft.FontWeight.W_600,
                         expand=True,
                     ),
@@ -473,16 +473,16 @@ class GoalDetailDialog:
             ),
         ]
         if progress.state == "reached":
-            summary.append(ft.Text("Target met.", size=12, color=INCOME_COLOR))
+            summary.append(ft.Text("Target met.", size=fs(13), color=INCOME_COLOR))
         elif progress.state == "overdue":
-            summary.append(ft.Text(f"Due now {format_money(progress.remaining_cents)}", size=12, color=EXPENSE_COLOR))
+            summary.append(ft.Text(f"Due now {format_money(progress.remaining_cents)}", size=fs(13), color=EXPENSE_COLOR))
         else:
             summary.append(
                 ft.Text(
                     f"{format_money(progress.remaining_cents)} remaining · "
                     f"{format_money(progress.required_monthly_cents)}/month required · "
                     f"This month {format_money(progress.contributed_this_month_cents)}",
-                    size=12,
+                    size=fs(13),
                     color=ft.Colors.ON_SURFACE_VARIANT,
                 )
             )
@@ -491,9 +491,9 @@ class GoalDetailDialog:
         if progress.plan:
             plan_controls = [_plan_table(progress.plan)]
         elif progress.state == "reached":
-            plan_controls = [ft.Text("The target has been reached, so the monthly plan is complete.", size=12, color=INCOME_COLOR)]
+            plan_controls = [ft.Text("The target has been reached, so the monthly plan is complete.", size=fs(13), color=INCOME_COLOR)]
         else:
-            plan_controls = [ft.Text("The target date has passed, so there is no schedule left to show.", size=12, color=EXPENSE_COLOR)]
+            plan_controls = [ft.Text("The target date has passed, so there is no schedule left to show.", size=fs(13), color=EXPENSE_COLOR)]
 
         if contributions:
             history: ft.Control = ft.DataTable(
@@ -515,7 +515,7 @@ class GoalDetailDialog:
                 column_spacing=24,
             )
         else:
-            history = ft.Text("No contributions yet.", size=12, color=ft.Colors.ON_SURFACE_VARIANT)
+            history = ft.Text("No contributions yet.", size=fs(13), color=ft.Colors.ON_SURFACE_VARIANT)
 
         self.dialog = ft.AlertDialog(
             modal=True,

@@ -17,6 +17,17 @@ def test_light_and_dark_schemes_have_readable_semantic_colors():
     assert theme.build_theme(dark=True).color_scheme.tertiary == "#81C784"
 
 
+def test_text_scale_multiplies_explicit_sizes():
+    theme.set_text_scale(1.0)
+    assert theme.fs(12) == 12
+    theme.set_text_scale(1.15)
+    try:
+        assert theme.fs(12) == 14
+        assert theme.fs(13) == 15
+    finally:
+        theme.set_text_scale(1.0)
+
+
 def test_category_colors_lighten_only_in_dark_mode():
     theme.set_dark(False)
     assert theme.readable("#2E7D32") == "#2E7D32"

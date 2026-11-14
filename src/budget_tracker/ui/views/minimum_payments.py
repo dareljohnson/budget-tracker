@@ -10,7 +10,7 @@ from ...formatting import format_money, month_label, parse_money
 from ...models import Account, MinimumPaymentStatus
 from ...repository import RepositoryError
 from ..context import AppContext
-from ..theme import EXPENSE_COLOR, GAP, INCOME_COLOR, WARNING_COLOR
+from ..theme import EXPENSE_COLOR, GAP, INCOME_COLOR, WARNING_COLOR, fs
 
 RECENT_MONTHS = 18
 
@@ -31,7 +31,7 @@ def recent_months(count: int = RECENT_MONTHS) -> list[str]:
 
 def minimum_status_chip(status: MinimumPaymentStatus | None) -> ft.Control:
     if status is None:
-        return ft.Text("Not recorded", size=12, color=ft.Colors.ON_SURFACE_VARIANT)
+        return ft.Text("Not recorded", size=fs(13), color=ft.Colors.ON_SURFACE_VARIANT)
     if status.state == "paid":
         text, color = "Paid", INCOME_COLOR
     elif status.state == "partial":
@@ -39,7 +39,7 @@ def minimum_status_chip(status: MinimumPaymentStatus | None) -> ft.Control:
         color = WARNING_COLOR
     else:
         text, color = "Unpaid", EXPENSE_COLOR
-    return ft.Text(text, size=12, color=color, weight=ft.FontWeight.W_600)
+    return ft.Text(text, size=fs(13), color=color, weight=ft.FontWeight.W_600)
 
 
 class MinimumPaymentDialog:
@@ -74,7 +74,7 @@ class MinimumPaymentDialog:
                         ft.Text(
                             "Record the minimum printed each month. Payments into this card are matched "
                             "oldest-unpaid first, so a payment in the following month still counts.",
-                            size=12,
+                            size=fs(13),
                             color=ft.Colors.ON_SURFACE_VARIANT,
                         ),
                         ft.Row([self.month, self.amount], spacing=GAP),
@@ -86,7 +86,7 @@ class MinimumPaymentDialog:
                             spacing=GAP,
                         ),
                         ft.Divider(height=1),
-                        ft.Text("History", size=14, weight=ft.FontWeight.W_600),
+                        ft.Text("History", size=fs(14), weight=ft.FontWeight.W_600),
                         self.history,
                     ],
                     spacing=10,
@@ -107,7 +107,7 @@ class MinimumPaymentDialog:
         statuses = self.ctx.service.minimum_payment_statuses(self.account.id)
         if not statuses:
             self.history.controls = [
-                ft.Text("No minimum payments recorded yet.", size=12, color=ft.Colors.ON_SURFACE_VARIANT)
+                ft.Text("No minimum payments recorded yet.", size=fs(13), color=ft.Colors.ON_SURFACE_VARIANT)
             ]
             return
         rows: list[ft.Control] = []
@@ -115,10 +115,10 @@ class MinimumPaymentDialog:
             rows.append(
                 ft.Row(
                     [
-                        ft.Text(month_label(status.month), size=12, width=130),
+                        ft.Text(month_label(status.month), size=fs(13), width=130),
                         ft.Text(
                             format_money(status.amount_cents),
-                            size=12,
+                            size=fs(13),
                             width=86,
                             text_align=ft.TextAlign.RIGHT,
                         ),

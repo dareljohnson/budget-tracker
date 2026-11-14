@@ -13,7 +13,7 @@ from ...models import Transaction, TransactionType
 from ...repository import RepositoryError
 from ..components import card, confirm_dialog, date_field, empty_state, page_header, transaction_row
 from ..context import AppContext
-from ..theme import EXPENSE_COLOR, GAP, INCOME_COLOR
+from ..theme import EXPENSE_COLOR, GAP, INCOME_COLOR, fs
 from .statement_import import StatementImportDialog, open_imported_statements
 
 ALL = "all"
@@ -296,7 +296,7 @@ class TransactionEditor:
             on_change=self._type_changed,
         )
         self.adjustment_label = ft.Text("Adjustment", weight=ft.FontWeight.W_600, visible=self.is_adjustment)
-        self.hint = ft.Text(size=12, color=ft.Colors.ON_SURFACE_VARIANT)
+        self.hint = ft.Text(size=fs(13), color=ft.Colors.ON_SURFACE_VARIANT)
         self.amount = ft.TextField(
             label="Amount",
             prefix_icon=ft.Icons.ATTACH_MONEY,

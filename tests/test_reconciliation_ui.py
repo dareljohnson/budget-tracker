@@ -293,12 +293,36 @@ class TestCandidateSearch(MatchPanelTestCase):
         self.assertIn(str(second.id), self._radio_values(dialog))
         self.assertIsNone(dialog.match_group.value)
         self.assertIsNone(dialog._selected_match)
-        self.assertTrue(dialog.save_button.disabled)
+        # Multiple candidates keep the dialog in create mode, not a selectionless attach mode.
+        self.assertFalse(dialog._match_mode)
+        self.assertFalse(dialog.amount.disabled)
+        self.assertFalse(dialog.account.disabled)
+        self.assertFalse(dialog.category.disabled)
+        self.assertEqual(dialog.save_button.content, "Save")
+        self.assertFalse(dialog.save_button.disabled)
 
         dialog.match_group.value = str(second.id)
         dialog.match_group.on_change(None)
 
         self.assertEqual(dialog._selected_match.transaction.id, second.id)
+        self.assertFalse(dialog.save_button.disabled)
+
+    def test_a_lone_weak_candidate_shows_the_panel_in_create_mode(self):
+        # Six days apart caps the score below STRONG_SCORE even with an identical merchant.
+        self._add_expense(description="Corner Market", occurred_on=date(2026, 10, 22))
+        dialog = self._dialog()
+        dialog._source_path = self.png
+
+        dialog._install(self._draft())
+
+        self.assertTrue(dialog.match_panel.visible)
+        self.assertEqual(len(self._radio_values(dialog)), 1)
+        self.assertIsNone(dialog.match_group.value)
+        self.assertIsNone(dialog._selected_match)
+        self.assertFalse(dialog._match_mode)
+        for field in (dialog.merchant, dialog.amount, dialog.date, dialog.account, dialog.category):
+            self.assertFalse(field.disabled)
+        self.assertEqual(dialog.save_button.content, "Save")
         self.assertFalse(dialog.save_button.disabled)
 
     def test_changing_the_account_clears_an_incompatible_selection(self):
@@ -937,6 +961,18 @@ class TestStatementMatchColumn(StatementMatchTestCase):
         self.assertIn("Imported 1 transaction(s) into Checking.", texts)
         self.assertTrue(any("1 matched row(s)" in text for text in texts))
         self.assertEqual(self.page.errors, [])
+
+    def test_double_click_imports_once_and_shows_no_already_imported_error(self):
+        dialog = self._dialog([self._row()])
+        with mock.patch.object(
+            self.ctx.service, "commit_import", wraps=self.ctx.service.commit_import
+        ) as commit:
+            dialog._commit(None)
+            dialog._commit(None)
+
+        self.assertEqual(commit.call_count, 1)
+        self.assertEqual(self.page.errors, [])
+        self.assertEqual(len(self.repo.list_statements()), 1)
 
     def test_retyping_a_row_recomputes_candidates_and_clears_an_incompatible_match(self):
         expense = self._add_expense(

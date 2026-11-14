@@ -326,6 +326,19 @@ class TestStageRestore(BackupTestCase):
         with self.assertRaises(backups.BackupError):
             backups.stage_restore(archive)
 
+    def test_validation_failure_records_a_failed_status(self):
+        from budget_tracker import backups
+
+        archive = self.make_zip({"manifest.json": self.manifest_bytes()})
+        with self.assertRaises(backups.BackupError) as raised:
+            backups.stage_restore(archive)
+
+        status = backups.read_status()
+        self.assertEqual(status["kind"], "restore")
+        self.assertFalse(status["ok"])
+        self.assertEqual(status["message"], str(raised.exception))
+        self.assertTrue(status["message"])
+
     def test_rejects_missing_or_wrong_manifest(self):
         from budget_tracker import backups
 
@@ -693,6 +706,92 @@ class TestApplyPendingRestore(BackupTestCase):
         finally:
             conn.close()
         self.assertEqual([row[0] for row in rows], ["current row"])
+
+    def test_rollback_keeps_the_saved_set_when_the_database_cannot_be_restored(self):
+        from budget_tracker import backups
+
+        self.make_live_db("current row")
+        self.make_receipt("old.png")
+        db_file = db_path()
+        backups.stage_restore(self.valid_restore_zip("restored row"))
+
+        original = backups._create_backup
+
+        def create_then_leave_wal(*, kind, reason):
+            result = original(kind=kind, reason=reason)
+            Path(str(db_file) + "-wal").write_bytes(b"old wal")
+            Path(str(db_file) + "-shm").write_bytes(b"old shm")
+            return result
+
+        real_replace = os.replace
+
+        def fail_database_rollback(source, target, *args, **kwargs):
+            if Path(target) == Path(db_file) and "replaced-" in str(source):
+                raise OSError("database rollback failed")
+            return real_replace(source, target, *args, **kwargs)
+
+        with mock.patch.object(
+            backups, "_create_backup", side_effect=create_then_leave_wal
+        ), mock.patch.object(
+            backups, "_install_receipts", side_effect=OSError("receipt install failed")
+        ), mock.patch.object(backups.os, "replace", side_effect=fail_database_rollback):
+            message = backups.apply_pending_restore()
+
+        self.assertIn("receipt install failed", message)
+        self.assertIn("previous database could not be restored", message)
+        marker = backups.pending_restore()
+        self.assertEqual(marker["state"], "failed")
+        self.assertIn("previous database could not be restored", marker["message"])
+
+        # The restored database is live and must not be paired with the old WAL/SHM.
+        conn = sqlite3.connect(db_path())
+        try:
+            rows = conn.execute("SELECT description FROM transactions").fetchall()
+        finally:
+            conn.close()
+        self.assertEqual([row[0] for row in rows], ["restored row"])
+        self.assertFalse(Path(str(db_file) + "-wal").exists())
+        self.assertFalse(Path(str(db_file) + "-shm").exists())
+
+        # The entire saved set stays available for manual recovery.
+        [replaced] = backups.backups_dir().glob("replaced-*")
+        self.assertTrue((replaced / "budget_tracker.db").is_file())
+        self.assertTrue((replaced / "budget_tracker.db-wal").is_file())
+        self.assertTrue((replaced / "budget_tracker.db-shm").is_file())
+        self.assertTrue((replaced / "receipts" / "old.png").is_file())
+
+    def test_unwritable_marker_returns_a_failure_message_instead_of_crashing(self):
+        from budget_tracker import backups
+
+        self.make_live_db("current row")
+        staging = self.data / "restore-staging"
+        (staging / "receipts").mkdir(parents=True)
+        (staging / "budget_tracker.db").write_bytes(self.make_db_bytes("restored row"))
+        (self.data / "restore-pending.json").write_text(
+            json.dumps(
+                {
+                    "state": "applying",
+                    "step": "moving-current",
+                    "staging": str(staging),
+                    "created_at": "2026-01-02T03:04:05",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        with mock.patch.object(
+            backups, "_write_marker", side_effect=OSError("marker is read-only")
+        ):
+            message = backups.apply_pending_restore()
+
+        self.assertIn("marker is read-only", message)
+        conn = sqlite3.connect(db_path())
+        try:
+            rows = conn.execute("SELECT description FROM transactions").fetchall()
+        finally:
+            conn.close()
+        self.assertEqual([row[0] for row in rows], ["current row"])
+        self.assertFalse(staging.exists())
 
 
 class TestPreMigrationCopy(BackupTestCase):

@@ -177,6 +177,7 @@ class StatementImportDialog:
         self.on_close = on_close
         self._closed_notified = False
         self._edited = False
+        self._saving = False
         self._file_picker = ft.FilePicker()
         self._path: Path | None = None
         self.preview: ImportPreview | None = None
@@ -1170,6 +1171,9 @@ class StatementImportDialog:
 
     # ---------- commit ----------
     def _commit(self, _: ft.Event) -> None:
+        if self._saving or self._closed_notified:
+            # A double-click must not turn one import into an "already imported" error.
+            return
         if self.preview is None or not self.account.value:
             return
         if int(self.account.value) != self.preview.account_id:
@@ -1197,16 +1201,23 @@ class StatementImportDialog:
         last4 = self.preview.statement.account_last4
         account_id = self.preview.account_id
         commit_rows = [self._oriented(row, account_id) for row in inserted]
+        self._saving = True
+        self.import_button.disabled = True
         try:
             statement = self.ctx.service.commit_import(
                 self.preview, commit_rows, set_opening_balance=set_opening
             )
         except RepositoryError as exc:
+            self._saving = False
+            self.import_button.disabled = False
             self.ctx.notify(str(exc), error=True)
             return
         except OSError as exc:
+            self._saving = False
+            self.import_button.disabled = False
             self.ctx.notify(f"Import failed: {exc.strerror or exc}", error=True)
             return
+        self._saving = False
 
         # The import is committed; a failure to remember the digits must not mask that success.
         number_error: Exception | None = None

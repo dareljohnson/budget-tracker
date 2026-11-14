@@ -356,12 +356,15 @@ def _stage_restore(zip_path: Path) -> Path:
         if staging.exists():
             shutil.rmtree(staging)
         shutil.move(str(work), str(staging))
-    except BackupError:
+    except BackupError as exc:
         _rmtree(work)
+        write_status("restore", False, str(exc))
         raise
     except (OSError, sqlite3.Error, zipfile.BadZipFile) as exc:
         _rmtree(work)
-        raise BackupError(f"The backup could not be staged: {exc}") from exc
+        message = f"The backup could not be staged: {exc}"
+        write_status("restore", False, message)
+        raise BackupError(message) from exc
 
     _write_marker(
         {
@@ -527,34 +530,37 @@ def _apply_pending_restore() -> str | None:
             # The current files were already moved into the replaced folder before the
             # staging folder disappeared. Put them back before clearing the marker.
             try:
-                _rollback(
+                warning = _rollback(
                     _recorded_replaced(marker) or _replaced_from_marker(marker),
                     live_database,
                     live_receipts,
                 )
-            except Exception:  # noqa: BLE001 - rollback is best effort
-                pass
-            message = "The staged restore is missing; the previous data was restored."
+            except Exception as exc:  # noqa: BLE001 - rollback is best effort
+                warning = f"the previous data could not be restored ({exc})"
+            message = (
+                f"The staged restore is missing; {warning}."
+                if warning
+                else "The staged restore is missing; the previous data was restored."
+            )
         else:
             message = "The staged restore is missing; current data was kept."
         _clear_marker()
         write_status("restore", False, message)
         return message
 
-    if state == "applying":
-        replaced = _recorded_replaced(marker)
-        if replaced is None:
-            if step == "moving-current":
-                # Never adopt an older replaced folder for an interrupted move.
-                replaced = _new_replaced_dir()
-                marker["replaced"] = str(replaced)
-                _write_marker(marker)
-            else:
-                replaced = _replaced_from_marker(marker)
-    else:
-        replaced = None
-
+    replaced: Path | None = None
     try:
+        if state == "applying":
+            replaced = _recorded_replaced(marker)
+            if replaced is None:
+                if step == "moving-current":
+                    # Never adopt an older replaced folder for an interrupted move.
+                    replaced = _new_replaced_dir()
+                    marker["replaced"] = str(replaced)
+                    _write_marker(marker)
+                else:
+                    replaced = _replaced_from_marker(marker)
+
         if state != "applying":
             if live_database.exists():
                 _create_backup(kind="pre-restore", reason="before restore")
@@ -604,9 +610,11 @@ def _apply_pending_restore() -> str | None:
     except Exception as exc:  # noqa: BLE001 - keep the app usable on any failure
         message = f"Restore failed: {exc}"
         try:
-            _rollback(replaced, live_database, live_receipts)
-        except Exception:  # noqa: BLE001 - rollback is best effort
-            pass
+            warning = _rollback(replaced, live_database, live_receipts)
+        except Exception as rollback_exc:  # noqa: BLE001 - rollback is best effort
+            warning = f"the previous data could not be restored ({rollback_exc})"
+        if warning:
+            message = f"{message}; {warning}"
         try:
             marker.update(state="failed", step=step, message=message)
             _write_marker(marker)
@@ -694,11 +702,27 @@ def _install_receipts(staged: Path, live: Path) -> None:
     shutil.move(str(staged), str(live))
 
 
-def _rollback(replaced: Path | None, live_database: Path, live_receipts: Path) -> None:
-    """Put saved files back without ever deleting a live file that has no saved copy."""
+def _rollback(
+    replaced: Path | None, live_database: Path, live_receipts: Path
+) -> str | None:
+    """Put saved files back without ever deleting a live file that has no saved copy.
+
+    The database is restored first. If that fails, nothing else is moved: a saved WAL
+    placed beside a different live database would corrupt both, so the whole saved set
+    stays in ``replaced`` for manual recovery and a warning is returned.
+    """
     if replaced is None or not replaced.is_dir():
-        return
-    for suffix in ("", "-wal", "-shm"):
+        return None
+    saved_database = replaced / live_database.name
+    if saved_database.exists():
+        try:
+            os.replace(saved_database, live_database)  # atomically overwrites the live copy
+        except OSError as exc:
+            return (
+                f"the previous database could not be restored ({exc}); "
+                f"the saved files remain in {replaced}"
+            )
+    for suffix in ("-wal", "-shm"):
         source = replaced / (live_database.name + suffix)
         if not source.exists():
             # Nothing was moved out, so the live file is the only copy: leave it alone.
@@ -714,6 +738,7 @@ def _rollback(replaced: Path | None, live_database: Path, live_receipts: Path) -
             _merge_move(old_receipts, live_receipts)
         except OSError:
             pass
+    return None
 
 
 # -- small filesystem helpers -------------------------------------------

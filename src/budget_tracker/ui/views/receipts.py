@@ -474,13 +474,17 @@ class ReceiptImportDialog:
             for candidate in candidates
         ]
         self.match_panel.visible = True
-        if not auto_select:
-            self._set_match_mode(False)
-            return
-        if len(candidates) == 1 and candidates[0].score >= STRONG_SCORE:
+        strong = (
+            auto_select
+            and len(candidates) == 1
+            and candidates[0].score >= STRONG_SCORE
+        )
+        if strong:
             self._selected_match = candidates[0]
             self.match_group.value = str(candidates[0].transaction.id)
-        self._set_match_mode(True)
+        # Multiple or weak candidates show the list but stay in create mode: the owner
+        # keeps editable fields and can still choose one to switch to attach mode.
+        self._set_match_mode(strong)
 
     def _candidate_selected(self, _: ft.Event | None = None) -> None:
         self._selected_match = self._candidate_by_id.get(self.match_group.value)

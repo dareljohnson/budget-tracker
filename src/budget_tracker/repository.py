@@ -184,6 +184,13 @@ class Repository:
         if not name:
             raise RepositoryError("Account name is required")
         number_last4 = _validated_account_digits(account.number_last4)
+        goal = self.conn.execute(
+            "SELECT name FROM savings_goals WHERE account_id = ?", (account.id,)
+        ).fetchone()
+        if goal is not None and account.kind != AccountKind.SAVINGS:
+            raise RepositoryError(
+                f"Account is used by the savings goal '{goal['name']}'; keep it a savings account"
+            )
         try:
             with self.conn:
                 self.conn.execute(
@@ -213,6 +220,11 @@ class Repository:
             "SELECT 1 FROM bills WHERE account_id = ? OR pay_to_account_id = ?", (account_id, account_id)
         ).fetchone():
             raise RepositoryError("Account is used by a bill; change or delete the bill first")
+        goal = self.conn.execute(
+            "SELECT name FROM savings_goals WHERE account_id = ?", (account_id,)
+        ).fetchone()
+        if goal is not None:
+            raise RepositoryError(f"Account is used by the savings goal '{goal['name']}'")
         with self.conn:
             self.conn.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
 

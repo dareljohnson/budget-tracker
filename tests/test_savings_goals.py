@@ -261,3 +261,27 @@ class TestGoalPlan(Base):
             self.service.create_savings_goal(
                 "Bad", 10_000, date(2027, 1, 31), self.accounts["Checking"].id,
             )
+
+
+class TestAccountGuards(Base):
+    def test_destination_account_cannot_be_deleted(self):
+        goal = self.goal()
+        with self.assertRaises(RepositoryError) as ctx:
+            self.repo.delete_account(self.savings.id)
+        self.assertIn("savings goal", str(ctx.exception).lower())
+        self.assertIsNotNone(self.repo.get_savings_goal(goal.id))
+
+    def test_destination_account_cannot_change_kind(self):
+        self.goal()
+        savings = self.repo.get_account(self.savings.id)
+        savings.kind = AccountKind.CHECKING
+        with self.assertRaises(RepositoryError) as ctx:
+            self.repo.update_account(savings)
+        self.assertIn("savings goal", str(ctx.exception).lower())
+        self.assertEqual(self.repo.get_account(self.savings.id).kind, AccountKind.SAVINGS)
+
+    def test_unused_savings_account_can_change_kind(self):
+        other = self.repo.add_account(Account("Spare", AccountKind.SAVINGS))
+        other.kind = AccountKind.CHECKING
+        self.repo.update_account(other)
+        self.assertEqual(self.repo.get_account(other.id).kind, AccountKind.CHECKING)

@@ -47,7 +47,7 @@ class RepoTestCase(unittest.TestCase):
 
 class TestSchema(RepoTestCase):
     def test_seeds_defaults_and_sets_version(self):
-        self.assertEqual(len(self.cats), len(DEFAULT_CATEGORIES))
+        self.assertEqual(len(self.cats), len(DEFAULT_CATEGORIES) + 1)
         self.assertEqual(set(self.accts), {"Checking", "Credit Card", "Cash"})
         self.assertEqual(schema_version(self.repo.conn), len(MIGRATIONS))
 
@@ -76,7 +76,7 @@ class TestSchema(RepoTestCase):
             conn = connect(path)
             count = conn.execute("SELECT COUNT(*) FROM categories").fetchone()[0]
             conn.close()
-            self.assertEqual(count, len(DEFAULT_CATEGORIES) - 1)
+            self.assertEqual(count, len(DEFAULT_CATEGORIES))
 
 
 class TestTransactions(RepoTestCase):

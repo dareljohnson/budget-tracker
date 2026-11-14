@@ -55,6 +55,26 @@ class AccountKind(StrEnum):
         }[self]
 
 
+class DebtKind(StrEnum):
+    CREDIT_CARD = "credit_card"
+    AUTO = "auto"
+    STUDENT = "student"
+    PERSONAL = "personal"
+    MORTGAGE = "mortgage"
+    OTHER = "other"
+
+    @property
+    def label(self) -> str:
+        return {
+            DebtKind.CREDIT_CARD: "Credit card",
+            DebtKind.AUTO: "Auto loan",
+            DebtKind.STUDENT: "Student loan",
+            DebtKind.PERSONAL: "Personal loan",
+            DebtKind.MORTGAGE: "Mortgage",
+            DebtKind.OTHER: "Other",
+        }[self]
+
+
 @dataclass(slots=True)
 class Account:
     name: str
@@ -103,11 +123,24 @@ class Transaction:
     statement_id: int | None = None  # statement this row was imported from
     import_ref: str | None = None  # source reference within the imported statement
     goal_id: int | None = None  # savings goal this transfer contributes to
+    debt_id: int | None = None  # debt this payment is applied to
 
     @property
     def flow_sign(self) -> int:
         """+1 money in, -1 money out, 0 for transfers (net-neutral overall)."""
         return {TransactionType.INCOME: 1, TransactionType.REFUND: 1, TransactionType.EXPENSE: -1}.get(self.type, 0)
+
+
+@dataclass(slots=True)
+class Debt:
+    name: str
+    kind: DebtKind
+    balance_cents: int
+    apr_bps: int
+    minimum_cents: int = 0
+    original_balance_cents: int | None = None
+    account_id: int | None = None  # set only for a debt linked to a credit card
+    id: int | None = None
 
 
 @dataclass(slots=True)

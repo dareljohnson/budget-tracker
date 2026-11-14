@@ -6,6 +6,7 @@ A personal budget tracker desktop app built with **Python 3.13**, **[Flet](https
 
 - **Dashboard**: net worth across all accounts, monthly income and spending, savings rate, spending by category, a six-month income vs. spending trend, account balances, budget health, and recent activity.
 - **Accounts**: checking, savings, credit card, cash, and other accounts, each with a live balance. Credit cards show the amount owed, and **Pay card** records a payment from your checking account.
+- **Goals**: savings targets with progress, a fixed monthly plan, and contributions recorded as transfers.
 - **Year**: monthly budget versus actual spending, year-to-date totals with the same period last year, a run-rate year-end projection, and cash flow across the year.
 - **Balance checks and adjustments**: check any account against the balance your bank shows and see the difference. If they disagree, record a signed correction that changes the account balance only — adjustments are excluded from income, spending, and budgets. Earlier checks are kept in a history.
 - **Bills and reminders**: recurring bills (one-time, weekly, monthly, yearly) and credit card payments, each with a due date. Overdue and soon-due bills show on the Bills page, on the Dashboard, and in a pop-up when the app starts. **Mark paid** records the payment and moves the bill to its next due date. Windows notifications can also remind you when the app is closed (see below).
@@ -91,6 +92,26 @@ tests/             data-layer and UI editor tests
 4. Each month, record the **minimum payment** printed on the card's statement — from the card's **Minimum** row, or while using **Check balance**. The card shows whether that month's minimum has been paid: payments into the card are matched oldest-unpaid first, so a payment made the following month still counts, and anything above a minimum rolls into the next recorded month.
 
 Existing databases are upgraded automatically: transactions recorded before accounts existed are assigned to a **Checking** account.
+
+## Savings goals
+
+Use the **Goals** page to set money aside for a target, such as a trip, a deposit, or an emergency fund.
+
+1. Click **Add goal** and enter a name, a **Target amount**, and a **Target date**. If you have already saved part of the target, enter it in **Already saved** (optional); that amount changes the monthly plan.
+2. Choose the **Destination account** — the savings account the money will live in. If you have no savings account yet, add one on the **Accounts** page first.
+3. The card shows how much you have saved so far, how much remains, the fixed monthly amount planned for the goal, and how much you have contributed this month.
+4. Click **Contribute** to move money into the goal. The contribution is recorded as a transfer from the account you choose into the goal's destination account.
+5. Click **Schedule & history** to see the month-by-month plan and every contribution recorded for the goal.
+
+The monthly amount is fixed when the goal is created: it spreads the amount still to save (the target minus any amount already saved) across the months from the start month through the target month, rounding up and making the final month smaller so the plan lands exactly on the target. Recording a contribution does not change it. Editing the target amount or target date recalculates the plan.
+
+Limits:
+
+- Only contributions recorded from the goal count toward its progress. Other activity in the savings account — deposits, withdrawals, interest, and transfers recorded elsewhere — does not.
+- When two goals share one savings account, each counts only the transfers recorded from that goal. Money saved for one goal does not count toward another.
+- A goal earmarks money; it does not lock it. You can still spend or move money out of the savings account, but progress is based on the goal's recorded contributions, not the account's current balance.
+- Once a goal has contributions, its destination account cannot be changed. You can still edit its name, target amount, target date, and amount already saved; create a new goal for a different account instead.
+- Deleting a goal removes only the goal. Its contribution transfers stay on the **Transactions** list and in the ledger, and the money stays in the savings account.
 
 ## Importing bank statements
 

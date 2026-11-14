@@ -4,7 +4,7 @@ import asyncio
 import tempfile
 import unittest
 import unittest.mock
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -858,6 +858,48 @@ class TestEditors(unittest.TestCase):
         self.assertIn("Partial", minimum_status_chip(MinimumPaymentStatus("2026-11", 3500, 1000)).value)
         self.assertEqual(minimum_status_chip(MinimumPaymentStatus("2026-11", 3500, 0)).value, "Unpaid")
         self.assertEqual(minimum_status_chip(None).value, "Not recorded")
+
+    def test_goals_view_empty_and_after_adding(self):
+        from budget_tracker.models import Account, AccountKind
+        from budget_tracker.ui.views.goals import GoalsView
+
+        savings = self.repo.add_account(Account("Savings", AccountKind.SAVINGS))
+        view = GoalsView(self.ctx)
+        self.assertTrue(view.grid.controls)  # empty-state card
+        self.ctx.service.create_savings_goal("Trip", 100_000, date.today() + timedelta(days=90), savings.id)
+        view.refresh()
+        self.assertEqual(len(view.grid.controls), 1)
+
+    def test_contribute_dialog_prefills_and_saves(self):
+        from budget_tracker.models import Account, AccountKind
+        from budget_tracker.ui.views.goals import ContributeDialog, GoalsView
+
+        savings = self.repo.add_account(Account("Savings", AccountKind.SAVINGS))
+        goal = self.ctx.service.create_savings_goal("Trip", 90_000, date.today() + timedelta(days=90), savings.id)
+        progress = self.ctx.service.goal_progress(goal.id)
+        dialog = ContributeDialog(self.ctx, progress)
+        self.assertEqual(dialog.amount.value, f"{progress.required_monthly_cents / 100:.2f}")
+        dialog._save(None)
+        self.assertEqual(self.ctx.service.goal_progress(goal.id).contributed_cents, progress.required_monthly_cents)
+
+    def test_nav_indices_stay_in_sync_with_goals(self):
+        from budget_tracker import main as shell
+        self.assertEqual(shell.NAV_ITEMS[4][0], "Goals")
+        self.assertEqual(shell.NAV_ITEMS[shell.BILLS_INDEX][0], "Bills")
+
+    def test_editing_a_goal_contribution_preserves_the_tag(self):
+        from budget_tracker.models import Account, AccountKind
+        from budget_tracker.ui.views.transactions import TransactionEditor
+
+        savings = self.repo.add_account(Account("Savings", AccountKind.SAVINGS))
+        goal = self.ctx.service.create_savings_goal("Trip", 90_000, date.today() + timedelta(days=90), savings.id)
+        self.ctx.service.contribute_to_goal(goal.id, self.accts["Checking"].id, 30_000, date.today())
+        tx = self.repo.list_transactions(limit=1)[0]
+        editor = TransactionEditor(self.ctx, tx)
+        editor.amount.value = "60.00"
+        editor._save(None)
+        loaded = self.repo.list_transactions(limit=1)[0]
+        self.assertEqual((loaded.amount_cents, loaded.goal_id), (6_000, goal.id))
 
     def test_balance_check_records_the_statement_minimum(self):
         from budget_tracker.ui.views.reconcile import BalanceCheckDialog

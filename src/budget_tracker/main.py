@@ -23,6 +23,7 @@ from .ui.views.bills import BillsView, bill_avatar, status_chip
 from .ui.views.budgets import BudgetsView
 from .ui.views.categories import CategoriesView
 from .ui.views.dashboard import DashboardView
+from .ui.views.goals import GoalsView
 from .ui.views.transactions import TransactionsView
 from .ui.views.year import YearView
 
@@ -35,12 +36,13 @@ NAV_ITEMS = [
     ("Year", ft.Icons.CALENDAR_MONTH_OUTLINED, ft.Icons.CALENDAR_MONTH),
     ("Transactions", ft.Icons.RECEIPT_LONG_OUTLINED, ft.Icons.RECEIPT_LONG),
     ("Accounts", ft.Icons.ACCOUNT_BALANCE_OUTLINED, ft.Icons.ACCOUNT_BALANCE),
+    ("Goals", ft.Icons.SAVINGS_OUTLINED, ft.Icons.SAVINGS),
     ("Bills", ft.Icons.EVENT_NOTE_OUTLINED, ft.Icons.EVENT_NOTE),
     ("Budgets", ft.Icons.TRACK_CHANGES_OUTLINED, ft.Icons.TRACK_CHANGES),
     ("Categories", ft.Icons.CATEGORY_OUTLINED, ft.Icons.CATEGORY),
 ]
 TRANSACTIONS_INDEX = 2
-BILLS_INDEX = 4
+BILLS_INDEX = 5
 ALERT_MAX_ROWS = 6
 
 
@@ -103,6 +105,7 @@ def main(page: ft.Page) -> None:
         YearView(ctx),
         TransactionsView(ctx),
         AccountsView(ctx),
+        GoalsView(ctx),
         BillsView(ctx),
         BudgetsView(ctx),
         CategoriesView(ctx),

@@ -12,6 +12,7 @@ from .formatting import month_key, shift_month
 from .models import (
     Account,
     AccountBalance,
+    AccountKind,
     BudgetProgress,
     CategoryTotal,
     DueBill,
@@ -21,6 +22,7 @@ from .models import (
     Reconciliation,
     Statement,
     Summary,
+    SavingsGoal,
     Transaction,
     TransactionType,
 )
@@ -92,6 +94,29 @@ class YearOverview:
     @property
     def has_data(self) -> bool:
         return any(month.income_cents or month.spending_cents or month.has_budget for month in self.months)
+
+
+@dataclass(slots=True, frozen=True)
+class GoalScheduleMonth:
+    """One month of a goal's original fixed plan."""
+
+    month: str  # YYYY-MM
+    required_cents: int
+    cumulative_cents: int
+
+
+@dataclass(slots=True, frozen=True)
+class SavingsGoalProgress:
+    goal: SavingsGoal
+    account_name: str
+    contributed_cents: int
+    progress_cents: int
+    remaining_cents: int
+    required_monthly_cents: int
+    months_left: int
+    contributed_this_month_cents: int
+    state: str  # active | reached | overdue
+    plan: list[GoalScheduleMonth]
 
 
 class BudgetService:
@@ -431,3 +456,182 @@ class BudgetService:
     @staticmethod
     def export_xlsx_filename(now: datetime | None = None) -> str:
         return f"budget_tracker_{(now or datetime.now()):%Y%m%d_%H%M%S}.xlsx"
+
+    # ---------- savings goals ----------
+    def _validate_goal(
+        self,
+        name: str,
+        target_cents: int,
+        target_date: date,
+        account_id: int,
+        initial_cents: int,
+    ) -> None:
+        """Reject every value the schema would reject, so callers never see a raw sqlite error."""
+        if not (name or "").strip():
+            raise RepositoryError("Goal name is required")
+        if target_cents <= 0:
+            raise RepositoryError("Target amount must be greater than zero")
+        if initial_cents < 0:
+            raise RepositoryError("Amount already saved cannot be negative")
+        if initial_cents > target_cents:
+            raise RepositoryError("Amount already saved cannot exceed the target")
+        if isinstance(target_date, datetime) or not isinstance(target_date, date):
+            raise RepositoryError("Choose a valid target date")
+        account = self.repo.get_account(account_id)
+        if account is None:
+            raise RepositoryError("Select a destination account")
+        if account.kind is not AccountKind.SAVINGS:
+            raise RepositoryError("Choose a savings account as the destination")
+
+    @staticmethod
+    def _goal_plan(goal: SavingsGoal) -> tuple[int, list[GoalScheduleMonth]]:
+        """The fixed monthly amount and the month-by-month plan, both computed from the goal's terms.
+
+        The plan does not change when contributions are recorded: it is the original schedule.
+        """
+        total = goal.target_cents - goal.initial_cents
+        if total <= 0:
+            return 0, []
+        start_month = month_key(goal.start_date)
+        target_month = month_key(goal.target_date)
+        start_year, start_index = map(int, start_month.split("-"))
+        target_year, target_index = map(int, target_month.split("-"))
+        plan_months = max(1, (target_year - start_year) * 12 + (target_index - start_index) + 1)
+        monthly = max(1, (total + plan_months - 1) // plan_months)
+        plan: list[GoalScheduleMonth] = []
+        remaining = total
+        cumulative = goal.initial_cents
+        month = start_month
+        while remaining > 0:
+            required = min(monthly, remaining)
+            remaining -= required
+            cumulative += required
+            plan.append(GoalScheduleMonth(month, required, cumulative))
+            month = shift_month(month, 1)
+        return monthly, plan
+
+    def list_goal_progress(self, today: date | None = None) -> list[SavingsGoalProgress]:
+        return [self.goal_progress(goal.id, today) for goal in self.repo.list_savings_goals()]
+
+    def goal_progress(self, goal_id: int, today: date | None = None) -> SavingsGoalProgress:
+        today = today or date.today()
+        goal = self.repo.get_savings_goal(goal_id)
+        if goal is None:
+            raise RepositoryError("Goal not found")
+        contributed = self.repo.goal_contributed_cents(goal_id, through=today)
+        progress = goal.initial_cents + contributed
+        remaining = max(0, goal.target_cents - progress)
+        account = self.repo.get_account(goal.account_id)
+        monthly, plan = self._goal_plan(goal)
+        if progress >= goal.target_cents:
+            state, required, plan, months_left = "reached", 0, [], 0
+        elif goal.target_date < today:
+            state, required, plan, months_left = "overdue", remaining, [], 0
+        else:
+            state, required = "active", monthly
+            months_left = (goal.target_date.year - today.year) * 12 + (goal.target_date.month - today.month) + 1
+        return SavingsGoalProgress(
+            goal=goal,
+            account_name=account.name if account else "",
+            contributed_cents=contributed,
+            progress_cents=progress,
+            remaining_cents=remaining,
+            required_monthly_cents=required,
+            months_left=months_left,
+            contributed_this_month_cents=self.repo.goal_contributed_in_month(
+                goal_id, month_key(today), through=today
+            ),
+            state=state,
+            plan=plan,
+        )
+
+    def goal_schedule(self, goal_id: int, today: date | None = None) -> list[GoalScheduleMonth]:
+        return self.goal_progress(goal_id, today).plan
+
+    def create_savings_goal(
+        self,
+        name: str,
+        target_cents: int,
+        target_date: date,
+        account_id: int,
+        initial_cents: int = 0,
+    ) -> SavingsGoal:
+        self._validate_goal(name, target_cents, target_date, account_id, initial_cents)
+        return self.repo.add_savings_goal(
+            SavingsGoal(
+                name=name.strip(),
+                target_cents=target_cents,
+                target_date=target_date,
+                start_date=date.today(),
+                account_id=account_id,
+                initial_cents=initial_cents,
+            )
+        )
+
+    def update_savings_goal(
+        self,
+        goal_id: int,
+        *,
+        name: str,
+        target_cents: int,
+        target_date: date,
+        account_id: int,
+        initial_cents: int,
+    ) -> SavingsGoal:
+        goal = self.repo.get_savings_goal(goal_id)
+        if goal is None:
+            raise RepositoryError("Goal not found")
+        self._validate_goal(name, target_cents, target_date, account_id, initial_cents)
+        if account_id != goal.account_id and self.repo.goal_contribution_count(goal_id) > 0:
+            raise RepositoryError(
+                "This goal already has contributions; remove them or create a new goal for that account"
+            )
+        goal.name = name.strip()
+        goal.target_cents = target_cents
+        goal.target_date = target_date
+        goal.account_id = account_id
+        goal.initial_cents = initial_cents
+        self.repo.update_savings_goal(goal)
+        return goal
+
+    def delete_savings_goal(self, goal_id: int) -> None:
+        self.repo.delete_savings_goal(goal_id)
+
+    def contribute_to_goal(
+        self,
+        goal_id: int,
+        funding_account_id: int,
+        amount_cents: int,
+        on_date: date,
+        *,
+        today: date | None = None,
+    ) -> Transaction:
+        today = today or date.today()
+        goal = self.repo.get_savings_goal(goal_id)
+        if goal is None:
+            raise RepositoryError("Goal not found")
+        funding = self.repo.get_account(funding_account_id)
+        if funding is None:
+            raise RepositoryError("Select a funding account")
+        if funding.kind.is_liability:
+            raise RepositoryError("Choose a non-credit account to fund this goal")
+        if funding.id == goal.account_id:
+            raise RepositoryError("Choose a different account to fund this goal")
+        if amount_cents <= 0:
+            raise RepositoryError("Amount must be greater than zero")
+        if isinstance(on_date, datetime) or not isinstance(on_date, date):
+            raise RepositoryError("Choose a valid contribution date")
+        if on_date > today:
+            raise RepositoryError("Contribution date cannot be in the future")
+        return self.repo.add_transaction(
+            Transaction(
+                amount_cents=amount_cents,
+                type=TransactionType.TRANSFER,
+                category_id=None,
+                occurred_on=on_date,
+                description=f"Savings: {goal.name}",
+                account_id=funding.id,
+                transfer_account_id=goal.account_id,
+                goal_id=goal.id,
+            )
+        )

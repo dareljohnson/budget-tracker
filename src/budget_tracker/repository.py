@@ -22,6 +22,7 @@ from .models import (
     MonthTotal,
     MinimumPayment,
     Reconciliation,
+    SavingsGoal,
     Statement,
     Summary,
     Transaction,
@@ -183,6 +184,13 @@ class Repository:
         if not name:
             raise RepositoryError("Account name is required")
         number_last4 = _validated_account_digits(account.number_last4)
+        goal = self.conn.execute(
+            "SELECT name FROM savings_goals WHERE account_id = ?", (account.id,)
+        ).fetchone()
+        if goal is not None and account.kind != AccountKind.SAVINGS:
+            raise RepositoryError(
+                f"Account is used by the savings goal '{goal['name']}'; keep it a savings account"
+            )
         try:
             with self.conn:
                 self.conn.execute(
@@ -212,6 +220,11 @@ class Repository:
             "SELECT 1 FROM bills WHERE account_id = ? OR pay_to_account_id = ?", (account_id, account_id)
         ).fetchone():
             raise RepositoryError("Account is used by a bill; change or delete the bill first")
+        goal = self.conn.execute(
+            "SELECT name FROM savings_goals WHERE account_id = ?", (account_id,)
+        ).fetchone()
+        if goal is not None:
+            raise RepositoryError(f"Account is used by the savings goal '{goal['name']}'")
         with self.conn:
             self.conn.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
 
@@ -228,6 +241,19 @@ class Repository:
         return [AccountBalance(self._row_to_account(r), r["balance"]) for r in rows]
 
     # ---------- transactions ----------
+    _TX_SELECT = (
+        "SELECT t.id, t.amount_cents, t.type, t.category_id, t.account_id, t.transfer_account_id, "
+        "t.goal_id, t.occurred_on, t.description, t.statement_id, t.import_ref, c.name AS category_name, "
+        "c.color AS category_color, c.icon AS category_icon, a.name AS account_name, "
+        "ta.name AS transfer_account_name"
+    )
+    _TX_FROM = (
+        " FROM transactions t "
+        "JOIN accounts a ON a.id = t.account_id "
+        "LEFT JOIN categories c ON c.id = t.category_id "
+        "LEFT JOIN accounts ta ON ta.id = t.transfer_account_id"
+    )
+
     @staticmethod
     def _row_to_transaction(row: sqlite3.Row) -> Transaction:
         return Transaction(
@@ -246,9 +272,18 @@ class Repository:
             transfer_account_name=row["transfer_account_name"],
             statement_id=row["statement_id"],
             import_ref=row["import_ref"],
+            goal_id=row["goal_id"],
         )
 
     def _validate_transaction(self, tx: Transaction) -> None:
+        if tx.goal_id is not None:
+            goal = self.get_savings_goal(tx.goal_id)
+            if (
+                goal is None
+                or tx.type != TransactionType.TRANSFER
+                or tx.transfer_account_id != goal.account_id
+            ):
+                tx.goal_id = None
         if tx.type == TransactionType.ADJUSTMENT:
             if tx.amount_cents == 0:
                 raise RepositoryError("Adjustment amount cannot be zero")
@@ -282,6 +317,7 @@ class Repository:
             tx.account_id,
             tx.category_id,
             tx.transfer_account_id,
+            tx.goal_id,
             tx.occurred_on.isoformat(),
             tx.description.strip(),
         )
@@ -301,7 +337,8 @@ class Repository:
         with self.conn:
             cur = self.conn.execute(
                 "INSERT INTO transactions (amount_cents, type, account_id, category_id, transfer_account_id, "
-                "occurred_on, description, statement_id, import_ref) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "goal_id, occurred_on, description, statement_id, import_ref) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (*self._tx_params(tx), tx.statement_id, tx.import_ref),
             )
         tx.id = cur.lastrowid
@@ -314,7 +351,7 @@ class Repository:
         with self.conn:
             self.conn.execute(
                 "UPDATE transactions SET amount_cents = ?, type = ?, account_id = ?, category_id = ?, "
-                "transfer_account_id = ?, occurred_on = ?, description = ? WHERE id = ?",
+                "transfer_account_id = ?, goal_id = ?, occurred_on = ?, description = ? WHERE id = ?",
                 (*self._tx_params(tx), tx.id),
             )
 
@@ -354,16 +391,7 @@ class Repository:
                 "OR a.name LIKE ? ESCAPE '\\' OR ta.name LIKE ? ESCAPE '\\')"
             )
             params += [f"%{escaped}%"] * 4
-        sql = (
-            "SELECT t.id, t.amount_cents, t.type, t.category_id, t.account_id, t.transfer_account_id, "
-            "t.occurred_on, t.description, t.statement_id, t.import_ref, c.name AS category_name, "
-            "c.color AS category_color, c.icon AS category_icon, a.name AS account_name, "
-            "ta.name AS transfer_account_name "
-            "FROM transactions t "
-            "JOIN accounts a ON a.id = t.account_id "
-            "LEFT JOIN categories c ON c.id = t.category_id "
-            "LEFT JOIN accounts ta ON ta.id = t.transfer_account_id"
-        )
+        sql = self._TX_SELECT + self._TX_FROM
         if clauses:
             sql += " WHERE " + " AND ".join(clauses)
         sql += " ORDER BY t.occurred_on DESC, t.id DESC"
@@ -378,15 +406,7 @@ class Repository:
         )
         return [r["m"] for r in rows]
 
-    _FIND_SQL = (
-        "SELECT t.id, t.amount_cents, t.type, t.category_id, t.account_id, t.transfer_account_id, "
-        "t.occurred_on, t.description, t.statement_id, t.import_ref, c.name AS category_name, "
-        "c.color AS category_color, c.icon AS category_icon, a.name AS account_name, "
-        "ta.name AS transfer_account_name "
-        "FROM transactions t JOIN accounts a ON a.id = t.account_id "
-        "LEFT JOIN categories c ON c.id = t.category_id "
-        "LEFT JOIN accounts ta ON ta.id = t.transfer_account_id"
-    )
+    _FIND_SQL = _TX_SELECT + _TX_FROM
 
     def find_transaction(
         self, account_id: int, occurred_on: date, amount_cents: int, description: str
@@ -409,6 +429,116 @@ class Repository:
             (account_id, account_id, before.isoformat()),
         ).fetchone()
         return row is not None
+
+    # ---------- savings goals ----------
+    _SAVINGS_GOAL_SELECT = (
+        "SELECT id, name, target_cents, target_date, start_date, account_id, initial_cents FROM savings_goals"
+    )
+
+    @staticmethod
+    def _row_to_savings_goal(row: sqlite3.Row) -> SavingsGoal:
+        return SavingsGoal(
+            id=row["id"],
+            name=row["name"],
+            target_cents=row["target_cents"],
+            target_date=date.fromisoformat(row["target_date"]),
+            start_date=date.fromisoformat(row["start_date"]),
+            account_id=row["account_id"],
+            initial_cents=row["initial_cents"],
+        )
+
+    def list_savings_goals(self) -> list[SavingsGoal]:
+        rows = self.conn.execute(self._SAVINGS_GOAL_SELECT + " ORDER BY target_date, name")
+        return [self._row_to_savings_goal(r) for r in rows]
+
+    def get_savings_goal(self, goal_id: int) -> SavingsGoal | None:
+        row = self.conn.execute(self._SAVINGS_GOAL_SELECT + " WHERE id = ?", (goal_id,)).fetchone()
+        return self._row_to_savings_goal(row) if row else None
+
+    def add_savings_goal(self, goal: SavingsGoal) -> SavingsGoal:
+        with self.conn:
+            cur = self.conn.execute(
+                "INSERT INTO savings_goals (name, target_cents, target_date, start_date, account_id, "
+                "initial_cents) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    goal.name.strip(),
+                    goal.target_cents,
+                    goal.target_date.isoformat(),
+                    goal.start_date.isoformat(),
+                    goal.account_id,
+                    goal.initial_cents,
+                ),
+            )
+        goal.id = cur.lastrowid
+        return goal
+
+    def update_savings_goal(self, goal: SavingsGoal) -> None:
+        if goal.id is None:
+            raise ValueError("Savings goal id is required")
+        existing = self.get_savings_goal(goal.id)
+        if (
+            existing is not None
+            and existing.account_id != goal.account_id
+            and self.goal_contribution_count(goal.id) > 0
+        ):
+            raise RepositoryError(
+                "This goal already has contributions; remove them or create a new goal for that account"
+            )
+        with self.conn:
+            self.conn.execute(
+                "UPDATE savings_goals SET name = ?, target_cents = ?, target_date = ?, start_date = ?, "
+                "account_id = ?, initial_cents = ? WHERE id = ?",
+                (
+                    goal.name.strip(),
+                    goal.target_cents,
+                    goal.target_date.isoformat(),
+                    goal.start_date.isoformat(),
+                    goal.account_id,
+                    goal.initial_cents,
+                    goal.id,
+                ),
+            )
+
+    def delete_savings_goal(self, goal_id: int) -> None:
+        with self.conn:
+            self.conn.execute("DELETE FROM savings_goals WHERE id = ?", (goal_id,))
+
+    def goal_contribution_count(self, goal_id: int) -> int:
+        return self.conn.execute(
+            "SELECT COUNT(*) FROM transactions WHERE goal_id = ?", (goal_id,)
+        ).fetchone()[0]
+
+    def goal_contributed_cents(self, goal_id: int, *, through: date | None = None) -> int:
+        sql = (
+            "SELECT COALESCE(SUM(amount_cents), 0) FROM transactions "
+            "WHERE goal_id = ? AND type = 'transfer' "
+            "AND transfer_account_id = (SELECT account_id FROM savings_goals WHERE id = ?)"
+        )
+        params: list = [goal_id, goal_id]
+        if through is not None:
+            sql += " AND occurred_on <= ?"
+            params.append(through.isoformat())
+        return self.conn.execute(sql, params).fetchone()[0]
+
+    def goal_contributed_in_month(self, goal_id: int, month: str, *, through: date | None = None) -> int:
+        start, end = _month_bounds(month)
+        sql = (
+            "SELECT COALESCE(SUM(amount_cents), 0) FROM transactions "
+            "WHERE goal_id = ? AND type = 'transfer' AND occurred_on >= ? AND occurred_on < ? "
+            "AND transfer_account_id = (SELECT account_id FROM savings_goals WHERE id = ?)"
+        )
+        params: list = [goal_id, start, end, goal_id]
+        if through is not None:
+            sql += " AND occurred_on <= ?"
+            params.append(through.isoformat())
+        return self.conn.execute(sql, params).fetchone()[0]
+
+    def list_goal_contributions(self, goal_id: int) -> list[Transaction]:
+        rows = self.conn.execute(
+            self._TX_SELECT + self._TX_FROM + " WHERE t.goal_id = ? ORDER BY t.occurred_on DESC, t.id DESC",
+            (goal_id,),
+        )
+        return [self._row_to_transaction(r) for r in rows]
 
     # ---------- statements, reconciliations & rules ----------
     @staticmethod
@@ -522,8 +652,8 @@ class Repository:
                     tx.import_ref = f"{statement.file_sha256}:{index}"
                     tx_cur = self.conn.execute(
                         "INSERT INTO transactions (amount_cents, type, account_id, category_id, "
-                        "transfer_account_id, occurred_on, description, statement_id, import_ref) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        "transfer_account_id, goal_id, occurred_on, description, statement_id, import_ref) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (*self._tx_params(tx), tx.statement_id, tx.import_ref),
                     )
                     tx.id = tx_cur.lastrowid
@@ -1006,7 +1136,7 @@ class Repository:
         with self.conn:
             cur = self.conn.execute(
                 "INSERT INTO transactions (amount_cents, type, account_id, category_id, transfer_account_id, "
-                "occurred_on, description) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "goal_id, occurred_on, description) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 self._tx_params(tx),
             )
             if following is None:

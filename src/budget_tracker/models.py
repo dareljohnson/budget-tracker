@@ -102,11 +102,23 @@ class Transaction:
     transfer_account_name: str | None = None
     statement_id: int | None = None  # statement this row was imported from
     import_ref: str | None = None  # source reference within the imported statement
+    goal_id: int | None = None  # savings goal this transfer contributes to
 
     @property
     def flow_sign(self) -> int:
         """+1 money in, -1 money out, 0 for transfers (net-neutral overall)."""
         return {TransactionType.INCOME: 1, TransactionType.REFUND: 1, TransactionType.EXPENSE: -1}.get(self.type, 0)
+
+
+@dataclass(slots=True)
+class SavingsGoal:
+    name: str
+    target_cents: int
+    target_date: date
+    start_date: date
+    account_id: int  # account the saved money lives in
+    initial_cents: int = 0  # already saved when the goal was created
+    id: int | None = None
 
 
 @dataclass(slots=True)

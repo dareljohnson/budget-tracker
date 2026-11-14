@@ -33,6 +33,7 @@ class AccountKind(StrEnum):
     CHECKING = "checking"
     SAVINGS = "savings"
     CREDIT_CARD = "credit_card"
+    LOAN = "loan"
     CASH = "cash"
     OTHER = "other"
 
@@ -42,7 +43,7 @@ class AccountKind(StrEnum):
 
     @property
     def is_liability(self) -> bool:
-        return self is AccountKind.CREDIT_CARD
+        return self in (AccountKind.CREDIT_CARD, AccountKind.LOAN)
 
     @property
     def icon(self) -> str:
@@ -50,6 +51,7 @@ class AccountKind(StrEnum):
             AccountKind.CHECKING: "ACCOUNT_BALANCE",
             AccountKind.SAVINGS: "SAVINGS",
             AccountKind.CREDIT_CARD: "CREDIT_CARD",
+            AccountKind.LOAN: "REQUEST_QUOTE",
             AccountKind.CASH: "PAYMENTS",
             AccountKind.OTHER: "ACCOUNT_BALANCE_WALLET",
         }[self]

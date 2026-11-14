@@ -55,6 +55,45 @@ class DashboardData:
         return [b for b in self.budgets if b.status != "ok"]
 
 
+@dataclass(slots=True, frozen=True)
+class YearMonth:
+    month: str
+    budget_cents: int
+    has_budget: bool
+    income_cents: int
+    spending_cents: int
+
+    @property
+    def difference_cents(self) -> int:
+        return self.budget_cents - self.spending_cents
+
+    @property
+    def net_cents(self) -> int:
+        return self.income_cents - self.spending_cents
+
+
+@dataclass(slots=True, frozen=True)
+class YearOverview:
+    year: int
+    months: list[YearMonth]
+    elapsed_months: int
+    ytd_budget_cents: int
+    ytd_spending_cents: int
+    ytd_income_cents: int
+    budgeted_months: int
+    forecast_spending_cents: int | None
+    prior_spending_cents: int | None
+    prior_income_cents: int | None
+
+    @property
+    def ytd_difference_cents(self) -> int:
+        return self.ytd_budget_cents - self.ytd_spending_cents
+
+    @property
+    def has_data(self) -> bool:
+        return any(month.income_cents or month.spending_cents or month.has_budget for month in self.months)
+
+
 class BudgetService:
     def __init__(self, repo: Repository) -> None:
         self.repo = repo
@@ -74,6 +113,67 @@ class BudgetService:
             recent=self.repo.list_transactions(limit=6),
             budgets=self.repo.budget_progress(month),
             upcoming_bills=self.due_bills(),
+        )
+
+    def available_years(self) -> list[int]:
+        return self.repo.data_years()
+
+    def year_overview(self, year: int, today: date | None = None) -> YearOverview:
+        """Monthly budget-vs-spending and cash flow for one year.
+
+        The YTD figures cover January through the chosen month for the current year, all twelve
+        months for a past year, and nothing for a future year. The year-end projection is a simple
+        run-rate: YTD spending divided by the months elapsed, times twelve.
+        """
+        today = today or date.today()
+        if year < today.year:
+            elapsed = 12
+        elif year == today.year:
+            elapsed = today.month
+        else:
+            elapsed = 0
+        months = [f"{year:04d}-{month:02d}" for month in range(1, 13)]
+        totals = {total.month: total for total in self.repo.monthly_totals(months)}
+        budgets = self.repo.budget_totals(months)
+        year_months: list[YearMonth] = []
+        for month in months:
+            total = totals.get(month)
+            limit, count = budgets.get(month, (0, 0))
+            year_months.append(
+                YearMonth(
+                    month=month,
+                    budget_cents=limit,
+                    has_budget=count > 0,
+                    income_cents=total.income_cents if total else 0,
+                    spending_cents=total.expense_cents if total else 0,
+                )
+            )
+        elapsed_months = year_months[:elapsed]
+        ytd_budget = sum(month.budget_cents for month in elapsed_months)
+        ytd_spending = sum(month.spending_cents for month in elapsed_months)
+        ytd_income = sum(month.income_cents for month in elapsed_months)
+        budgeted_months = sum(1 for month in elapsed_months if month.has_budget)
+        forecast = None
+        if elapsed and year == today.year and (ytd_budget or ytd_spending or ytd_income):
+            forecast = round(ytd_spending / elapsed * 12)
+        prior_spending = prior_income = None
+        if elapsed:
+            prior_months = [f"{year - 1:04d}-{month:02d}" for month in range(1, elapsed + 1)]
+            prior = self.repo.monthly_totals(prior_months)
+            if any(month.income_cents or month.expense_cents for month in prior):
+                prior_spending = sum(month.expense_cents for month in prior)
+                prior_income = sum(month.income_cents for month in prior)
+        return YearOverview(
+            year=year,
+            months=year_months,
+            elapsed_months=elapsed,
+            ytd_budget_cents=ytd_budget,
+            ytd_spending_cents=ytd_spending,
+            ytd_income_cents=ytd_income,
+            budgeted_months=budgeted_months,
+            forecast_spending_cents=forecast,
+            prior_spending_cents=prior_spending,
+            prior_income_cents=prior_income,
         )
 
     def due_bills(self, today: date | None = None) -> list[DueBill]:

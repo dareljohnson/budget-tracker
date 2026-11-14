@@ -806,6 +806,36 @@ class TestEditors(unittest.TestCase):
         view = AccountsView(self.ctx)
         self.assertEqual(view.grid.vertical_alignment, ft.CrossAxisAlignment.STRETCH)
 
+    def test_year_view_builds_with_empty_data(self):
+        from budget_tracker.ui.views.year import YearView
+
+        view = YearView(self.ctx)
+        self.assertEqual(view.year.value, str(date.today().year))
+        self.assertTrue(view.body.controls)
+
+    def test_year_view_shows_kpis_when_data_exists(self):
+        from budget_tracker.models import Budget, Transaction, TransactionType
+        from budget_tracker.ui.views.year import YearView
+
+        groceries = next(
+            category for category in self.repo.list_categories(TransactionType.EXPENSE)
+            if category.name == "Groceries"
+        )
+        month = self.ctx.service.current_month()
+        self.repo.set_budget(Budget(groceries.id, month, 50_000))
+        self.repo.add_transaction(
+            Transaction(
+                60_000,
+                TransactionType.EXPENSE,
+                groceries.id,
+                date.today(),
+                "Test",
+                account_id=self.accts["Checking"].id,
+            )
+        )
+        view = YearView(self.ctx)
+        self.assertGreaterEqual(len(view.body.controls), 3)
+
     def test_minimum_payment_dialog_records_and_lists(self):
         from budget_tracker.ui.views.minimum_payments import MinimumPaymentDialog
 

@@ -22,6 +22,14 @@ class AppContext:
     def on_data_changed(self, callback: Callable[[], None]) -> None:
         self._listeners.append(callback)
 
+    def reset_listeners(self) -> None:
+        """Drop view callbacks before the shell rebuilds its views."""
+        self._listeners.clear()
+
+    def reset_listeners(self) -> None:
+        """Drop view callbacks before the shell rebuilds its views."""
+        self._listeners.clear()
+
     def data_changed(self) -> None:
         """Notify all views that underlying data changed so they can re-render."""
         for callback in self._listeners:

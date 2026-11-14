@@ -9,7 +9,7 @@ import flet as ft
 
 from ..formatting import format_money, month_label, parse_date, shift_month
 from ..models import Account, AccountBalance, Transaction, TransactionType
-from .theme import EXPENSE_COLOR, GAP, INCOME_COLOR, RADIUS, SEED_COLOR, icon_for, readable
+from .theme import EXPENSE_COLOR, GAP, INCOME_COLOR, RADIUS, SEED_COLOR, icon_for, readable, fs
 
 
 def card(
@@ -34,25 +34,38 @@ def card(
     return container
 
 
-def page_header(title: str, subtitle: str, actions: list[ft.Control] | None = None) -> ft.Row:
-    return ft.Row(
+def page_header(title: str, subtitle: str, actions: list[ft.Control] | None = None) -> ft.Control:
+    title_block = ft.Column(
         [
-            ft.Column(
-                [
-                    ft.Text(title, size=28, weight=ft.FontWeight.BOLD),
-                    ft.Text(subtitle, size=14, color=ft.Colors.ON_SURFACE_VARIANT),
-                ],
-                spacing=2,
-                expand=True,
-            ),
-            ft.Row(actions or [], spacing=8, wrap=True, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            ft.Text(title, size=fs(28), weight=ft.FontWeight.BOLD),
+            ft.Text(subtitle, size=fs(14), color=ft.Colors.ON_SURFACE_VARIANT),
         ],
+        spacing=2,
+    )
+    actions_row = ft.Row(
+        actions or [],
+        spacing=8,
+        wrap=True,
+        alignment=ft.MainAxisAlignment.END,
+        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+    )
+    if len(actions or []) > 3:
+        # Pages with many toolbar buttons stack them below the title, so the title keeps its width
+        # at larger text sizes instead of collapsing into a narrow column.
+        return ft.Column([title_block, actions_row], spacing=8)
+    return ft.ResponsiveRow(
+        [
+            ft.Column(title_block.controls, spacing=2, col={"xs": 12, "md": 7, "lg": 8}),
+            ft.Container(actions_row, col={"xs": 12, "md": 5, "lg": 4}),
+        ],
+        spacing=GAP,
+        run_spacing=8,
         vertical_alignment=ft.CrossAxisAlignment.CENTER,
     )
 
 
 def section_title(text: str, trailing: ft.Control | None = None) -> ft.Row:
-    controls: list[ft.Control] = [ft.Text(text, size=16, weight=ft.FontWeight.W_600, expand=True)]
+    controls: list[ft.Control] = [ft.Text(text, size=fs(16), weight=ft.FontWeight.W_600, expand=True)]
     if trailing:
         controls.append(trailing)
     return ft.Row(controls, vertical_alignment=ft.CrossAxisAlignment.CENTER)
@@ -76,15 +89,15 @@ def stat_card(title: str, value: str, icon: ft.IconData, color: str, caption: st
             [
                 ft.Column(
                     [
-                        ft.Text(title, size=13, color=ft.Colors.ON_SURFACE_VARIANT, weight=ft.FontWeight.W_500),
-                        ft.Text(value, size=24, weight=ft.FontWeight.BOLD),
-                        ft.Text(caption, size=12, color=ft.Colors.ON_SURFACE_VARIANT, visible=bool(caption)),
+                        ft.Text(title, size=fs(13), color=ft.Colors.ON_SURFACE_VARIANT, weight=ft.FontWeight.W_500),
+                        ft.Text(value, size=fs(24), weight=ft.FontWeight.BOLD),
+                        ft.Text(caption, size=fs(13), color=ft.Colors.ON_SURFACE_VARIANT, visible=bool(caption)),
                     ],
                     spacing=4,
                     expand=True,
                 ),
                 ft.Container(
-                    content=ft.Icon(icon, color=color, size=26),
+                    content=ft.Icon(icon, color=color, size=fs(26)),
                     width=52,
                     height=52,
                     border_radius=14,
@@ -100,9 +113,9 @@ def stat_card(title: str, value: str, icon: ft.IconData, color: str, caption: st
 
 def empty_state(icon: ft.IconData, title: str, message: str, action: ft.Control | None = None) -> ft.Container:
     controls: list[ft.Control] = [
-        ft.Icon(icon, size=48, color=ft.Colors.OUTLINE),
-        ft.Text(title, size=16, weight=ft.FontWeight.W_600),
-        ft.Text(message, size=13, color=ft.Colors.ON_SURFACE_VARIANT, text_align=ft.TextAlign.CENTER),
+        ft.Icon(icon, size=fs(48), color=ft.Colors.OUTLINE),
+        ft.Text(title, size=fs(16), weight=ft.FontWeight.W_600),
+        ft.Text(message, size=fs(13), color=ft.Colors.ON_SURFACE_VARIANT, text_align=ft.TextAlign.CENTER),
     ]
     if action:
         controls.append(action)
@@ -192,7 +205,7 @@ def transaction_row(
                 ft.Column(
                     [
                         ft.Text(title, weight=ft.FontWeight.W_500, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
-                        ft.Text(_transaction_subtitle(tx), size=12, color=ft.Colors.ON_SURFACE_VARIANT),
+                        ft.Text(_transaction_subtitle(tx), size=fs(13), color=ft.Colors.ON_SURFACE_VARIANT),
                     ],
                     spacing=2,
                     expand=True,
@@ -214,7 +227,7 @@ class MonthSelector:
     def __init__(self, month: str, on_change: Callable[[str], None]) -> None:
         self.month = month
         self._on_change = on_change
-        self._label = ft.Text(month_label(month), size=15, weight=ft.FontWeight.W_600, width=150, text_align=ft.TextAlign.CENTER)
+        self._label = ft.Text(month_label(month), size=fs(15), weight=ft.FontWeight.W_600, width=150, text_align=ft.TextAlign.CENTER)
         self.control = ft.Row(
             controls=[
                 ft.IconButton(ft.Icons.CHEVRON_LEFT, tooltip="Previous month", on_click=lambda _: self._shift(-1)),

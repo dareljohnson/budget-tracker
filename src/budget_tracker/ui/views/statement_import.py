@@ -21,7 +21,7 @@ from ...statements.model import (
 )
 from ..components import confirm_dialog, empty_state
 from ..context import AppContext
-from ..theme import EXPENSE_COLOR, GAP, INCOME_COLOR, WARNING_COLOR
+from ..theme import EXPENSE_COLOR, GAP, INCOME_COLOR, WARNING_COLOR, fs
 
 INCLUDE_WIDTH = 36
 DATE_WIDTH = 84
@@ -103,13 +103,13 @@ class SaveCategoryRuleDialog:
                     [
                         ft.Text(
                             "Future imports whose description contains this text use the category below.",
-                            size=12,
+                            size=fs(13),
                             color=ft.Colors.ON_SURFACE_VARIANT,
                         ),
                         self.match_text,
                         ft.Row(
                             [
-                                ft.Text("Category", size=12, color=ft.Colors.ON_SURFACE_VARIANT),
+                                ft.Text("Category", size=fs(13), color=ft.Colors.ON_SURFACE_VARIANT),
                                 ft.Text(category.name, weight=ft.FontWeight.W_500),
                             ],
                             spacing=8,
@@ -166,27 +166,27 @@ class StatementImportDialog:
             options=[ft.DropdownOption(key=str(a.id), text=f"{a.name} ({a.kind.label})") for a in self._accounts],
             on_select=self._account_changed,
         )
-        self.match_note = ft.Text("", size=12, color=INCOME_COLOR, weight=ft.FontWeight.W_600, visible=False)
-        self.mismatch_note = ft.Text("", size=12, color=EXPENSE_COLOR, weight=ft.FontWeight.W_600, visible=False)
-        self.ocr_badge = ft.Text("Read from image (OCR)", size=12, weight=ft.FontWeight.W_600, visible=False)
-        self.statement_meta = ft.Text("", size=12, color=ft.Colors.ON_SURFACE_VARIANT)
+        self.match_note = ft.Text("", size=fs(13), color=INCOME_COLOR, weight=ft.FontWeight.W_600, visible=False)
+        self.mismatch_note = ft.Text("", size=fs(13), color=EXPENSE_COLOR, weight=ft.FontWeight.W_600, visible=False)
+        self.ocr_badge = ft.Text("Read from image (OCR)", size=fs(13), weight=ft.FontWeight.W_600, visible=False)
+        self.statement_meta = ft.Text("", size=fs(13), color=ft.Colors.ON_SURFACE_VARIANT)
         self.projection_statement = ft.Text("", weight=ft.FontWeight.W_600)
-        self.projection_balance_label = ft.Text("", size=12, color=ft.Colors.ON_SURFACE_VARIANT)
+        self.projection_balance_label = ft.Text("", size=fs(13), color=ft.Colors.ON_SURFACE_VARIANT)
         self.projection_balance = ft.Text("", weight=ft.FontWeight.W_600)
         self.projection_difference = ft.Text("", weight=ft.FontWeight.W_600)
-        self.projection_note = ft.Text("", size=11, color=ft.Colors.ON_SURFACE_VARIANT, visible=False)
+        self.projection_note = ft.Text("", size=fs(12), color=ft.Colors.ON_SURFACE_VARIANT, visible=False)
         self.projection_panel = ft.Container(
             content=ft.Column(
                 [
-                    ft.Text("Reconciliation preview", size=12, weight=ft.FontWeight.W_600),
+                    ft.Text("Reconciliation preview", size=fs(13), weight=ft.FontWeight.W_600),
                     ft.Row(
-                        [ft.Text("Statement ending", size=12, color=ft.Colors.ON_SURFACE_VARIANT, expand=True),
+                        [ft.Text("Statement ending", size=fs(13), color=ft.Colors.ON_SURFACE_VARIANT, expand=True),
                          self.projection_statement],
                         spacing=8,
                     ),
                     ft.Row([self.projection_balance_label, self.projection_balance], spacing=8),
                     ft.Row(
-                        [ft.Text("Projected difference", size=12, color=ft.Colors.ON_SURFACE_VARIANT, expand=True),
+                        [ft.Text("Projected difference", size=fs(13), color=ft.Colors.ON_SURFACE_VARIANT, expand=True),
                          self.projection_difference],
                         spacing=8,
                     ),
@@ -201,7 +201,7 @@ class StatementImportDialog:
             visible=False,
         )
         self.summary_holder = ft.Row([], spacing=28, wrap=True, vertical_alignment=ft.CrossAxisAlignment.CENTER)
-        self.rows_count = ft.Text("", size=12, color=ft.Colors.ON_SURFACE_VARIANT)
+        self.rows_count = ft.Text("", size=fs(13), color=ft.Colors.ON_SURFACE_VARIANT)
         self.rows_column = ft.Column(spacing=2, tight=True)
 
         self.select_all = ft.Checkbox(label="Select all", value=False, on_change=self._select_all_changed)
@@ -255,7 +255,7 @@ class StatementImportDialog:
                         self.remember,
                         ft.Text(
                             "Statements are parsed locally. Nothing is written until you choose Import.",
-                            size=11,
+                            size=fs(12),
                             color=ft.Colors.ON_SURFACE_VARIANT,
                         ),
                     ],
@@ -349,10 +349,10 @@ class StatementImportDialog:
                     ft.Container(
                         content=ft.Row(
                             [
-                                ft.Icon(ft.Icons.VERIFIED, size=16, color=INCOME_COLOR),
+                                ft.Icon(ft.Icons.VERIFIED, size=fs(16), color=INCOME_COLOR),
                                 ft.Text(
                                     "Statement verified",
-                                    size=12,
+                                    size=fs(13),
                                     weight=ft.FontWeight.W_600,
                                     color=INCOME_COLOR,
                                 ),
@@ -394,8 +394,8 @@ class StatementImportDialog:
         def stat(label: str, cents: int, color: str | None = None) -> ft.Control:
             return ft.Column(
                 [
-                    ft.Text(label, size=11, color=ft.Colors.ON_SURFACE_VARIANT),
-                    ft.Text(format_money(cents), size=16, weight=ft.FontWeight.W_600, color=color),
+                    ft.Text(label, size=fs(12), color=ft.Colors.ON_SURFACE_VARIANT),
+                    ft.Text(format_money(cents), size=fs(16), weight=ft.FontWeight.W_600, color=color),
                 ],
                 spacing=2,
                 tight=True,
@@ -476,7 +476,7 @@ class StatementImportDialog:
         duplicate_badge: ft.Control
         if row.duplicate:
             duplicate_badge = ft.Container(
-                content=ft.Text("Duplicate", size=10, weight=ft.FontWeight.W_600, color=WARNING_COLOR),
+                content=ft.Text("Duplicate", size=fs(11), weight=ft.FontWeight.W_600, color=WARNING_COLOR),
                 width=DUPLICATE_WIDTH,
                 padding=ft.Padding.symmetric(horizontal=6, vertical=3),
                 border_radius=10,
@@ -491,7 +491,7 @@ class StatementImportDialog:
             content=ft.Row(
                 [
                     include,
-                    ft.Text(f"{tx.occurred_on:%Y-%m-%d}", width=DATE_WIDTH, size=12),
+                    ft.Text(f"{tx.occurred_on:%Y-%m-%d}", width=DATE_WIDTH, size=fs(13)),
                     ft.Text(
                         tx.description or "(no description)",
                         expand=True,
@@ -1005,28 +1005,28 @@ class ImportResultDialog:
         self.is_liability = account.kind.is_liability
 
         controls: list[ft.Control] = [
-            ft.Text(f"Imported {count} transaction(s) into {account.name}.", size=13),
+            ft.Text(f"Imported {count} transaction(s) into {account.name}.", size=fs(13)),
         ]
         if reconciliation is None:
             controls.append(
-                ft.Text("No reconciliation was recorded for this import.", size=12,
+                ft.Text("No reconciliation was recorded for this import.", size=fs(13),
                         color=ft.Colors.ON_SURFACE_VARIANT)
             )
         else:
             resolved = reconciliation.difference_cents == 0
             controls += [
                 ft.Row(
-                    [ft.Text("Statement ending", size=12, color=ft.Colors.ON_SURFACE_VARIANT, expand=True),
+                    [ft.Text("Statement ending", size=fs(13), color=ft.Colors.ON_SURFACE_VARIANT, expand=True),
                      ft.Text(format_money(self._display(reconciliation.stated_cents)), weight=ft.FontWeight.W_600)],
                     spacing=8,
                 ),
                 ft.Row(
-                    [ft.Text("Computed balance", size=12, color=ft.Colors.ON_SURFACE_VARIANT, expand=True),
+                    [ft.Text("Computed balance", size=fs(13), color=ft.Colors.ON_SURFACE_VARIANT, expand=True),
                      ft.Text(format_money(self._display(reconciliation.computed_cents)), weight=ft.FontWeight.W_600)],
                     spacing=8,
                 ),
                 ft.Row(
-                    [ft.Text("Difference", size=12, color=ft.Colors.ON_SURFACE_VARIANT, expand=True),
+                    [ft.Text("Difference", size=fs(13), color=ft.Colors.ON_SURFACE_VARIANT, expand=True),
                      ft.Text(
                          format_money(self._display(reconciliation.difference_cents)),
                          weight=ft.FontWeight.W_600,
@@ -1042,7 +1042,7 @@ class ImportResultDialog:
                         f"{format_money(self._display(reconciliation.difference_cents))}. "
                         "Use Check balance to review it and record a correction if needed."
                     ),
-                    size=12,
+                    size=fs(13),
                     color=INCOME_COLOR if resolved else EXPENSE_COLOR,
                     weight=ft.FontWeight.W_500,
                 ),
@@ -1096,7 +1096,7 @@ class ImportedStatementsDialog:
                         ft.Text(
                             "Deleting an import removes its transactions and reconciliation, "
                             "and frees the file to be imported again.",
-                            size=12,
+                            size=fs(13),
                             color=ft.Colors.ON_SURFACE_VARIANT,
                         ),
                         self.list_column,
@@ -1137,13 +1137,13 @@ class ImportedStatementsDialog:
         return ft.Container(
             content=ft.Row(
                 [
-                    ft.Icon(ft.Icons.DESCRIPTION_OUTLINED, size=20, color=ft.Colors.ON_SURFACE_VARIANT),
+                    ft.Icon(ft.Icons.DESCRIPTION_OUTLINED, size=fs(20), color=ft.Colors.ON_SURFACE_VARIANT),
                     ft.Column(
                         [
                             ft.Text(account, weight=ft.FontWeight.W_500),
                             ft.Text(
                                 f"{_period(statement)}  •  ending {format_money(statement.ending_cents)}",
-                                size=12,
+                                size=fs(13),
                                 color=ft.Colors.ON_SURFACE_VARIANT,
                             ),
                         ],

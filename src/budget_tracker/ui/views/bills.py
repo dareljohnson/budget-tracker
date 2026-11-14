@@ -11,7 +11,7 @@ from ...models import AccountKind, Bill, BillFrequency, DueBill, TransactionType
 from ...repository import RepositoryError
 from ..components import card, category_avatar, confirm_dialog, date_field, empty_state, page_header, stat_card
 from ..context import AppContext
-from ..theme import EXPENSE_COLOR, GAP, INCOME_COLOR, SEED_COLOR, WARNING_COLOR
+from ..theme import EXPENSE_COLOR, GAP, INCOME_COLOR, SEED_COLOR, WARNING_COLOR, fs
 
 REMINDER_CHOICES = (0, 1, 2, 3, 5, 7, 14)
 STATUS_COLORS = {"overdue": EXPENSE_COLOR, "today": WARNING_COLOR, "soon": WARNING_COLOR}
@@ -30,7 +30,7 @@ def monthly_equivalent(bill: Bill) -> int:
 def status_chip(due: DueBill) -> ft.Container:
     color = STATUS_COLORS[due.status]
     return ft.Container(
-        content=ft.Text(due.due_text, size=11, weight=ft.FontWeight.W_600, color=color),
+        content=ft.Text(due.due_text, size=fs(12), weight=ft.FontWeight.W_600, color=color),
         bgcolor=ft.Colors.with_opacity(0.12, color),
         border_radius=10,
         padding=ft.Padding.symmetric(horizontal=8, vertical=3),
@@ -124,11 +124,11 @@ class BillsView:
         else:
             amount = "Full balance"
         if not bill.active:
-            when: ft.Control = ft.Text("Paid", size=12, color=INCOME_COLOR, weight=ft.FontWeight.W_600)
+            when: ft.Control = ft.Text("Paid", size=fs(13), color=INCOME_COLOR, weight=ft.FontWeight.W_600)
         elif due:
             when = status_chip(due)
         else:
-            when = ft.Text(f"Due {bill.next_due:%b %d, %Y}", size=12, color=ft.Colors.ON_SURFACE_VARIANT)
+            when = ft.Text(f"Due {bill.next_due:%b %d, %Y}", size=fs(13), color=ft.Colors.ON_SURFACE_VARIANT)
         actions: list[ft.Control] = []
         if bill.active:
             actions += [
@@ -145,14 +145,14 @@ class BillsView:
                     bill_avatar(bill),
                     ft.Column(
                         [
-                            ft.Text(bill.name, size=15, weight=ft.FontWeight.W_600),
-                            ft.Text(f"{bill.frequency.label}  •  {detail}", size=12, color=ft.Colors.ON_SURFACE_VARIANT),
+                            ft.Text(bill.name, size=fs(15), weight=ft.FontWeight.W_600),
+                            ft.Text(f"{bill.frequency.label}  •  {detail}", size=fs(13), color=ft.Colors.ON_SURFACE_VARIANT),
                         ],
                         spacing=2,
                         expand=True,
                     ),
                     ft.Column(
-                        [ft.Text(amount, size=15, weight=ft.FontWeight.W_600), when],
+                        [ft.Text(amount, size=fs(15), weight=ft.FontWeight.W_600), when],
                         spacing=4,
                         horizontal_alignment=ft.CrossAxisAlignment.END,
                     ),
@@ -213,7 +213,7 @@ class MarkPaidDialog:
                 width=420,
                 content=ft.Column(
                     [
-                        ft.Text(f"Due {bill.next_due:%b %d, %Y}. Records the payment {target}.", size=12, color=ft.Colors.ON_SURFACE_VARIANT),
+                        ft.Text(f"Due {bill.next_due:%b %d, %Y}. Records the payment {target}.", size=fs(13), color=ft.Colors.ON_SURFACE_VARIANT),
                         self.amount,
                         self.date,
                         self.account,
@@ -282,7 +282,7 @@ class BillEditor:
             ],
             on_change=self._kind_changed,
         )
-        self.hint = ft.Text(size=12, color=ft.Colors.ON_SURFACE_VARIANT)
+        self.hint = ft.Text(size=fs(13), color=ft.Colors.ON_SURFACE_VARIANT)
         self.name = ft.TextField(label="Name", value=bill.name if bill else "", max_length=60, on_submit=self._save)
         self.amount = ft.TextField(
             label="Amount",

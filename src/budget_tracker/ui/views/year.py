@@ -10,7 +10,7 @@ from ...formatting import format_money, short_month_label
 from ...services import YearMonth, YearOverview
 from ..components import card, empty_state, page_header, section_title, stat_card
 from ..context import AppContext
-from ..theme import EXPENSE_COLOR, GAP, INCOME_COLOR, SEED_COLOR
+from ..theme import EXPENSE_COLOR, GAP, INCOME_COLOR, SEED_COLOR, fs
 
 CHART_HEIGHT = 150
 COLUMN_WIDTH = 70
@@ -144,7 +144,7 @@ class YearView:
                     ),
                     ft.Text(
                         short_month_label(month.month),
-                        size=12,
+                        size=fs(13),
                         color=SEED_COLOR if month.month == current else ft.Colors.ON_SURFACE_VARIANT,
                         weight=ft.FontWeight.W_600 if month.month == current else ft.FontWeight.NORMAL,
                     ),
@@ -159,7 +159,7 @@ class YearView:
 
         def legend(color: str, text: str) -> ft.Row:
             return ft.Row(
-                [ft.Container(width=10, height=10, border_radius=2, bgcolor=color), ft.Text(text, size=12)],
+                [ft.Container(width=10, height=10, border_radius=2, bgcolor=color), ft.Text(text, size=fs(13))],
                 spacing=6,
             )
 
@@ -186,12 +186,12 @@ class YearView:
     def _table(self, overview: YearOverview) -> ft.Column:
         header = ft.Row(
             [
-                ft.Text("Month", size=11, width=60, color=ft.Colors.ON_SURFACE_VARIANT),
-                ft.Text("Budget", size=11, width=92, text_align=ft.TextAlign.RIGHT, color=ft.Colors.ON_SURFACE_VARIANT),
-                ft.Text("Spent", size=11, width=92, text_align=ft.TextAlign.RIGHT, color=ft.Colors.ON_SURFACE_VARIANT),
-                ft.Text("Difference", size=11, width=100, text_align=ft.TextAlign.RIGHT, color=ft.Colors.ON_SURFACE_VARIANT),
-                ft.Text("Income", size=11, width=92, text_align=ft.TextAlign.RIGHT, color=ft.Colors.ON_SURFACE_VARIANT),
-                ft.Text("Net", size=11, width=92, text_align=ft.TextAlign.RIGHT, color=ft.Colors.ON_SURFACE_VARIANT),
+                ft.Text("Month", size=fs(12), width=60, color=ft.Colors.ON_SURFACE_VARIANT),
+                ft.Text("Budget", size=fs(12), width=92, text_align=ft.TextAlign.RIGHT, color=ft.Colors.ON_SURFACE_VARIANT),
+                ft.Text("Spent", size=fs(12), width=92, text_align=ft.TextAlign.RIGHT, color=ft.Colors.ON_SURFACE_VARIANT),
+                ft.Text("Difference", size=fs(12), width=100, text_align=ft.TextAlign.RIGHT, color=ft.Colors.ON_SURFACE_VARIANT),
+                ft.Text("Income", size=fs(12), width=92, text_align=ft.TextAlign.RIGHT, color=ft.Colors.ON_SURFACE_VARIANT),
+                ft.Text("Net", size=fs(12), width=92, text_align=ft.TextAlign.RIGHT, color=ft.Colors.ON_SURFACE_VARIANT),
             ],
             spacing=8,
         )
@@ -204,21 +204,21 @@ class YearView:
         rows.append(
             ft.Row(
                 [
-                    ft.Text(label, size=12, width=60, weight=ft.FontWeight.W_600),
-                    ft.Text(format_money(overview.ytd_budget_cents), size=12, width=92, text_align=ft.TextAlign.RIGHT, weight=ft.FontWeight.W_600),
-                    ft.Text(format_money(overview.ytd_spending_cents), size=12, width=92, text_align=ft.TextAlign.RIGHT, weight=ft.FontWeight.W_600),
+                    ft.Text(label, size=fs(13), width=60, weight=ft.FontWeight.W_600),
+                    ft.Text(format_money(overview.ytd_budget_cents), size=fs(13), width=92, text_align=ft.TextAlign.RIGHT, weight=ft.FontWeight.W_600),
+                    ft.Text(format_money(overview.ytd_spending_cents), size=fs(13), width=92, text_align=ft.TextAlign.RIGHT, weight=ft.FontWeight.W_600),
                     ft.Text(
                         format_money(difference, signed=True),
-                        size=12,
+                        size=fs(13),
                         width=100,
                         text_align=ft.TextAlign.RIGHT,
                         weight=ft.FontWeight.W_600,
                         color=INCOME_COLOR if difference >= 0 else EXPENSE_COLOR,
                     ),
-                    ft.Text(format_money(overview.ytd_income_cents), size=12, width=92, text_align=ft.TextAlign.RIGHT, weight=ft.FontWeight.W_600),
+                    ft.Text(format_money(overview.ytd_income_cents), size=fs(13), width=92, text_align=ft.TextAlign.RIGHT, weight=ft.FontWeight.W_600),
                     ft.Text(
                         format_money(overview.ytd_income_cents - overview.ytd_spending_cents, signed=True),
-                        size=12,
+                        size=fs(13),
                         width=92,
                         text_align=ft.TextAlign.RIGHT,
                         weight=ft.FontWeight.W_600,
@@ -238,14 +238,14 @@ class YearView:
         )
         return ft.Row(
             [
-                ft.Text(short_month_label(month.month), size=12, width=60),
-                ft.Text(budget, size=12, width=92, text_align=ft.TextAlign.RIGHT),
-                ft.Text(format_money(month.spending_cents), size=12, width=92, text_align=ft.TextAlign.RIGHT),
-                ft.Text(difference, size=12, width=100, text_align=ft.TextAlign.RIGHT, color=difference_color),
-                ft.Text(format_money(month.income_cents), size=12, width=92, text_align=ft.TextAlign.RIGHT),
+                ft.Text(short_month_label(month.month), size=fs(13), width=60),
+                ft.Text(budget, size=fs(13), width=92, text_align=ft.TextAlign.RIGHT),
+                ft.Text(format_money(month.spending_cents), size=fs(13), width=92, text_align=ft.TextAlign.RIGHT),
+                ft.Text(difference, size=fs(13), width=100, text_align=ft.TextAlign.RIGHT, color=difference_color),
+                ft.Text(format_money(month.income_cents), size=fs(13), width=92, text_align=ft.TextAlign.RIGHT),
                 ft.Text(
                     format_money(month.net_cents, signed=True),
-                    size=12,
+                    size=fs(13),
                     width=92,
                     text_align=ft.TextAlign.RIGHT,
                     color=INCOME_COLOR if month.net_cents >= 0 else EXPENSE_COLOR,

@@ -16,6 +16,18 @@ FONT_FAMILY = "Segoe UI"
 RADIUS = 14
 GAP = 16
 
+_text_scale = 1.0
+
+
+def set_text_scale(scale: float) -> None:
+    global _text_scale
+    _text_scale = scale
+
+
+def fs(size: int) -> int:
+    """Scale an explicit font/icon size with the user's text-size setting."""
+    return max(1, round(size * _text_scale))
+
 PALETTE = [
     "#E53935", "#D81B60", "#8E24AA", "#5E35B1", "#3949AB", "#1E88E5",
     "#039BE5", "#00897B", "#43A047", "#2E7D32", "#7CB342", "#F9A825",
@@ -35,7 +47,7 @@ LIGHT_SCHEME = ft.ColorScheme(
     on_primary="#FFFFFF",
     primary_container="#E8EAF6",
     on_primary_container="#1A237E",
-    secondary="#EF6C00",
+    secondary="#B45309",
     on_secondary="#FFFFFF",
     secondary_container="#FFE0B2",
     on_secondary_container="#4A2800",

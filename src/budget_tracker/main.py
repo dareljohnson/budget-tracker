@@ -17,7 +17,7 @@ from .formatting import format_money
 from .repository import Repository
 from .services import BudgetService
 from .ui.context import AppContext
-from .ui.theme import EXPENSE_COLOR, SEED_COLOR, WARNING_COLOR, build_theme, set_dark
+from .ui.theme import EXPENSE_COLOR, SEED_COLOR, WARNING_COLOR, build_theme, fs, set_dark, set_text_scale
 from .ui.views.accounts import AccountsView
 from .ui.views.bills import BillsView, bill_avatar, status_chip
 from .ui.views.budgets import BudgetsView
@@ -31,6 +31,7 @@ from .ui.views.year import YearView
 log = logging.getLogger(__name__)
 
 THEME_SETTING = "theme_mode"
+TEXT_SIZE_SETTING = "text_scale"
 
 NAV_ITEMS = [
     ("Dashboard", ft.Icons.DASHBOARD_OUTLINED, ft.Icons.DASHBOARD),
@@ -90,6 +91,7 @@ def main(page: ft.Page) -> None:
     page.dark_theme = build_theme(dark=True)
     page.theme_mode = ft.ThemeMode.DARK if repo.get_setting(THEME_SETTING) == "dark" else ft.ThemeMode.LIGHT
     set_dark(page.theme_mode == ft.ThemeMode.DARK)
+    set_text_scale(1.15 if repo.get_setting(TEXT_SIZE_SETTING) == "large" else 1.0)
     page.padding = 0
     page.window.width = 1320
     page.window.height = 860
@@ -103,17 +105,20 @@ def main(page: ft.Page) -> None:
         content.content = _pinned_page(views[index].control)
         page.update()
 
-    views = [
-        DashboardView(ctx, on_view_bills=lambda: show_view(BILLS_INDEX)),
-        YearView(ctx),
-        TransactionsView(ctx),
-        AccountsView(ctx),
-        GoalsView(ctx),
-        DebtsView(ctx),
-        BillsView(ctx),
-        BudgetsView(ctx),
-        CategoriesView(ctx),
-    ]
+    def build_views() -> list:
+        return [
+            DashboardView(ctx, on_view_bills=lambda: show_view(BILLS_INDEX)),
+            YearView(ctx),
+            TransactionsView(ctx),
+            AccountsView(ctx),
+            GoalsView(ctx),
+            DebtsView(ctx),
+            BillsView(ctx),
+            BudgetsView(ctx),
+            CategoriesView(ctx),
+        ]
+
+    views = build_views()
     content = ft.Container(
         content=_pinned_page(views[0].control),
         padding=ft.Padding.symmetric(horizontal=32, vertical=24),
@@ -141,6 +146,11 @@ def main(page: ft.Page) -> None:
         tooltip="Toggle light/dark theme",
         on_click=toggle_theme,
     )
+    text_button = ft.IconButton(
+        icon=ft.Icons.FORMAT_SIZE,
+        tooltip="Text size",
+        on_click=lambda event: choose_text_size(event),
+    )
 
     rail = ft.NavigationRail(
         selected_index=0,
@@ -154,14 +164,14 @@ def main(page: ft.Page) -> None:
         leading=ft.Column(
             [
                 ft.Container(
-                    content=ft.Icon(ft.Icons.ACCOUNT_BALANCE_WALLET, color=ft.Colors.ON_PRIMARY, size=26),
+                    content=ft.Icon(ft.Icons.ACCOUNT_BALANCE_WALLET, color=ft.Colors.ON_PRIMARY, size=fs(26)),
                     width=48,
                     height=48,
                     border_radius=14,
                     bgcolor=SEED_COLOR,
                     alignment=ft.Alignment.CENTER,
                 ),
-                ft.Text("Budget", size=12, weight=ft.FontWeight.BOLD),
+                ft.Text("Budget", size=fs(13), weight=ft.FontWeight.BOLD),
                 ft.Container(height=8),
                 ft.FloatingActionButton(icon=ft.Icons.ADD, tooltip="Add transaction", on_click=quick_add, mini=True),
             ],
@@ -169,7 +179,14 @@ def main(page: ft.Page) -> None:
             spacing=4,
         ),
         trailing=ft.Column(
-            [theme_button, ft.Text(f"v{__version__}", size=10, color=ft.Colors.ON_SURFACE_VARIANT)],
+            [
+                ft.Row(
+                    [theme_button, text_button],
+                    alignment=ft.MainAxisAlignment.CENTER,
+                    spacing=0,
+                ),
+                ft.Text(f"v{__version__}", size=fs(11), color=ft.Colors.ON_SURFACE_VARIANT),
+            ],
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
             spacing=2,
         ),
@@ -183,6 +200,50 @@ def main(page: ft.Page) -> None:
         ],
         on_change=navigate,
     )
+
+    def rebuild_views() -> None:
+        nonlocal views
+        ctx.reset_listeners()
+        views = build_views()
+        rail.selected_index = min(rail.selected_index, len(views) - 1)
+        content.content = _pinned_page(views[rail.selected_index].control)
+        page.update()
+
+    def apply_text_scale(scale: float, label: str) -> None:
+        set_text_scale(scale)
+        repo.set_setting(TEXT_SIZE_SETTING, label)
+        page.pop_dialog()
+        rebuild_views()
+
+    def choose_text_size(_: ft.Event) -> None:
+        page.show_dialog(
+            ft.AlertDialog(
+                modal=True,
+                title=ft.Text("Text size"),
+                content=ft.Column(
+                    [
+                        ft.Text(
+                            "Choose a larger size if small text is hard to read.",
+                            size=fs(13),
+                        ),
+                        ft.FilledButton(
+                            content="Normal",
+                            on_click=lambda _: apply_text_scale(1.0, "normal"),
+                        ),
+                        ft.FilledButton(
+                            content="Large",
+                            on_click=lambda _: apply_text_scale(1.15, "large"),
+                        ),
+                    ],
+                    spacing=12,
+                    tight=True,
+                ),
+                actions=[
+                    ft.TextButton(content="Cancel", on_click=lambda _: page.pop_dialog())
+                ],
+                actions_alignment=ft.MainAxisAlignment.END,
+            )
+        )
 
     def on_disconnect(_: ft.Event) -> None:
         repo.close()
@@ -216,7 +277,7 @@ def show_due_bills_alert(ctx: AppContext, on_view_bills: Callable[[], None]) -> 
         for d in due[:ALERT_MAX_ROWS]
     ]
     if len(due) > ALERT_MAX_ROWS:
-        rows.append(ft.Text(f"and {len(due) - ALERT_MAX_ROWS} more…", size=12, color=ft.Colors.ON_SURFACE_VARIANT))
+        rows.append(ft.Text(f"and {len(due) - ALERT_MAX_ROWS} more…", size=fs(13), color=ft.Colors.ON_SURFACE_VARIANT))
     page.show_dialog(
         ft.AlertDialog(
             modal=True,

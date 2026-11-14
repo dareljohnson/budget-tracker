@@ -6,7 +6,7 @@ import flet as ft
 
 from ...models import Category, CategoryRule
 from ..context import AppContext
-from ..theme import EXPENSE_COLOR, GAP
+from ..theme import EXPENSE_COLOR, GAP, fs
 
 
 class CategoryRulesDialog:
@@ -38,7 +38,7 @@ class CategoryRulesDialog:
             self.list_column.controls = [
                 ft.Text(
                     "No rules yet — save one from the import preview.",
-                    size=13,
+                    size=fs(13),
                     color=ft.Colors.ON_SURFACE_VARIANT,
                 )
             ]
@@ -51,10 +51,10 @@ class CategoryRulesDialog:
         return ft.Container(
             content=ft.Row(
                 [
-                    ft.Icon(ft.Icons.RULE, size=20, color=ft.Colors.ON_SURFACE_VARIANT),
+                    ft.Icon(ft.Icons.RULE, size=fs(20), color=ft.Colors.ON_SURFACE_VARIANT),
                     ft.Text(
                         f'"{rule.match_text}" → {category_name}',
-                        size=14,
+                        size=fs(14),
                         expand=True,
                         max_lines=1,
                         overflow=ft.TextOverflow.ELLIPSIS,

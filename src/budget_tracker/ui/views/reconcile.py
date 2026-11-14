@@ -11,7 +11,7 @@ from ...models import Account, AccountKind, Reconciliation
 from ...repository import RepositoryError
 from ..components import date_field
 from ..context import AppContext
-from ..theme import EXPENSE_COLOR, GAP, INCOME_COLOR, WARNING_COLOR
+from ..theme import EXPENSE_COLOR, GAP, INCOME_COLOR, WARNING_COLOR, fs
 
 
 class BalanceCheckDialog:
@@ -31,7 +31,7 @@ class BalanceCheckDialog:
         self._stated_cents: int | None = None
         self._adjusted_check: Reconciliation | None = None
 
-        self.status = ft.Text(size=12, color=ft.Colors.ON_SURFACE_VARIANT)
+        self.status = ft.Text(size=fs(13), color=ft.Colors.ON_SURFACE_VARIANT)
         self.date = date_field(ctx.page, "As of", date.today())
         self.stated = ft.TextField(
             label="Amount owed" if self.is_liability else "Stated balance",
@@ -50,9 +50,9 @@ class BalanceCheckDialog:
             visible=account.kind is AccountKind.CREDIT_CARD,
         )
 
-        self.computed_value = ft.Text(size=15, weight=ft.FontWeight.W_600)
-        self.stated_value = ft.Text(size=15, weight=ft.FontWeight.W_600)
-        self.difference_value = ft.Text(size=15, weight=ft.FontWeight.W_600)
+        self.computed_value = ft.Text(size=fs(15), weight=ft.FontWeight.W_600)
+        self.stated_value = ft.Text(size=fs(15), weight=ft.FontWeight.W_600)
+        self.difference_value = ft.Text(size=fs(15), weight=ft.FontWeight.W_600)
         self.result = ft.Column(
             [
                 self._amount_row("Computed", self.computed_value),
@@ -81,7 +81,7 @@ class BalanceCheckDialog:
             [
                 ft.Text(
                     "The ledger differs from the stated balance. Record an adjustment to reconcile it.",
-                    size=12,
+                    size=fs(13),
                     color=WARNING_COLOR,
                 ),
                 ft.Row(
@@ -112,7 +112,7 @@ class BalanceCheckDialog:
                         self.result,
                         self.adjust_row,
                         ft.Divider(height=1),
-                        ft.Text("History", size=14, weight=ft.FontWeight.W_600),
+                        ft.Text("History", size=fs(14), weight=ft.FontWeight.W_600),
                         self.history,
                     ],
                     spacing=12,
@@ -139,7 +139,7 @@ class BalanceCheckDialog:
     @staticmethod
     def _amount_row(label: str, value: ft.Text) -> ft.Row:
         return ft.Row(
-            [ft.Text(label, size=13, color=ft.Colors.ON_SURFACE_VARIANT, expand=True), value],
+            [ft.Text(label, size=fs(13), color=ft.Colors.ON_SURFACE_VARIANT, expand=True), value],
             spacing=GAP,
         )
 
@@ -163,16 +163,16 @@ class BalanceCheckDialog:
         records = self.ctx.repo.list_reconciliations(self.account.id)
         if not records:
             self.history.controls = [
-                ft.Text("No balance checks yet.", size=12, color=ft.Colors.ON_SURFACE_VARIANT)
+                ft.Text("No balance checks yet.", size=fs(13), color=ft.Colors.ON_SURFACE_VARIANT)
             ]
             return
         header = ft.Row(
             [
-                ft.Text("Date", size=11, width=96, color=ft.Colors.ON_SURFACE_VARIANT),
-                ft.Text("Stated", size=11, width=82, color=ft.Colors.ON_SURFACE_VARIANT, text_align=ft.TextAlign.RIGHT),
-                ft.Text("Computed", size=11, width=82, color=ft.Colors.ON_SURFACE_VARIANT, text_align=ft.TextAlign.RIGHT),
-                ft.Text("Difference", size=11, width=82, color=ft.Colors.ON_SURFACE_VARIANT, text_align=ft.TextAlign.RIGHT),
-                ft.Text("Note", size=11, expand=True, color=ft.Colors.ON_SURFACE_VARIANT),
+                ft.Text("Date", size=fs(12), width=96, color=ft.Colors.ON_SURFACE_VARIANT),
+                ft.Text("Stated", size=fs(12), width=82, color=ft.Colors.ON_SURFACE_VARIANT, text_align=ft.TextAlign.RIGHT),
+                ft.Text("Computed", size=fs(12), width=82, color=ft.Colors.ON_SURFACE_VARIANT, text_align=ft.TextAlign.RIGHT),
+                ft.Text("Difference", size=fs(12), width=82, color=ft.Colors.ON_SURFACE_VARIANT, text_align=ft.TextAlign.RIGHT),
+                ft.Text("Note", size=fs(12), expand=True, color=ft.Colors.ON_SURFACE_VARIANT),
             ],
             spacing=6,
         )
@@ -182,12 +182,12 @@ class BalanceCheckDialog:
             rows.append(
                 ft.Row(
                     [
-                        ft.Text(f"{record.as_of:%b %d, %Y}", size=12, width=96),
-                        ft.Text(format_money(self._display(record.stated_cents)), size=12, width=82, text_align=ft.TextAlign.RIGHT),
-                        ft.Text(format_money(self._display(record.computed_cents)), size=12, width=82, text_align=ft.TextAlign.RIGHT),
+                        ft.Text(f"{record.as_of:%b %d, %Y}", size=fs(13), width=96),
+                        ft.Text(format_money(self._display(record.stated_cents)), size=fs(13), width=82, text_align=ft.TextAlign.RIGHT),
+                        ft.Text(format_money(self._display(record.computed_cents)), size=fs(13), width=82, text_align=ft.TextAlign.RIGHT),
                         ft.Text(
                             format_money(self._display(record.difference_cents)),
-                            size=12,
+                            size=fs(13),
                             width=82,
                             text_align=ft.TextAlign.RIGHT,
                             color=INCOME_COLOR if reconciled else EXPENSE_COLOR,
@@ -195,7 +195,7 @@ class BalanceCheckDialog:
                         ),
                         ft.Text(
                             record.note or ("Reconciled" if reconciled else "Unresolved"),
-                            size=12,
+                            size=fs(13),
                             expand=True,
                             max_lines=1,
                             overflow=ft.TextOverflow.ELLIPSIS,

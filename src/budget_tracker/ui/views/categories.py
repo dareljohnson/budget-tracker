@@ -8,7 +8,7 @@ from ...models import Category, TransactionType
 from ...repository import RepositoryError
 from ..components import card, category_avatar, confirm_dialog, empty_state, page_header, section_title
 from ..context import AppContext
-from ..theme import EXPENSE_COLOR, GAP, ICON_CHOICES, PALETTE, icon_for
+from ..theme import EXPENSE_COLOR, GAP, ICON_CHOICES, PALETTE, icon_for, fs
 from .category_rules import CategoryRulesDialog
 
 
@@ -66,7 +66,7 @@ class CategoriesView:
                     ft.Column(
                         [
                             ft.Text(category.name, weight=ft.FontWeight.W_500),
-                            ft.Text(f"{usage} transaction(s)", size=12, color=ft.Colors.ON_SURFACE_VARIANT),
+                            ft.Text(f"{usage} transaction(s)", size=fs(13), color=ft.Colors.ON_SURFACE_VARIANT),
                         ],
                         spacing=2,
                         expand=True,
@@ -117,7 +117,7 @@ class CategoryEditor:
             ],
             on_change=self._type_changed,
         )
-        self.preview = category_avatar(self.icon, self.color, size=56)
+        self.preview = category_avatar(self.icon, self.color, size=fs(56))
         self.color_grid = ft.Row(wrap=True, spacing=8, run_spacing=8)
         self.icon_grid = ft.Row(wrap=True, spacing=6, run_spacing=6)
         self._render_pickers()
@@ -166,7 +166,7 @@ class CategoryEditor:
         ]
         self.icon_grid.controls = [
             ft.Container(
-                content=ft.Icon(icon_for(name), size=20, color=self.color if name == self.icon else ft.Colors.ON_SURFACE_VARIANT),
+                content=ft.Icon(icon_for(name), size=fs(20), color=self.color if name == self.icon else ft.Colors.ON_SURFACE_VARIANT),
                 width=38,
                 height=38,
                 border_radius=10,
@@ -177,7 +177,7 @@ class CategoryEditor:
             )
             for name in ICON_CHOICES
         ]
-        avatar = category_avatar(self.icon, self.color, size=56)
+        avatar = category_avatar(self.icon, self.color, size=fs(56))
         self.preview.content = avatar.content
         self.preview.bgcolor = avatar.bgcolor
 

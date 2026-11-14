@@ -561,6 +561,27 @@ class TestReceiptImportDialog(ReceiptDialogTestCase):
             asyncio.run(dialog._choose_file(None))
         self.assertIn("Could not open the file picker", self.page.errors[0])
 
+    def test_closed_dialog_picker_failure_does_not_notify_or_load(self):
+        dialog = self._dialog()
+        dialog._closed_notified = True
+        with mock.patch.object(
+            dialog._file_picker, "pick_files", new=mock.AsyncMock(side_effect=RuntimeError("no picker"))
+        ), mock.patch.object(dialog, "_load", new=mock.AsyncMock()) as loader:
+            asyncio.run(dialog._choose_file(None))
+        self.assertEqual(self.page.errors, [])
+        loader.assert_not_called()
+
+    def test_closed_dialog_picker_success_does_not_load(self):
+        dialog = self._dialog()
+        dialog._closed_notified = True
+        files = [SimpleNamespace(path=str(self.png))]
+        with mock.patch.object(
+            dialog._file_picker, "pick_files", new=mock.AsyncMock(return_value=files)
+        ), mock.patch.object(dialog, "_load", new=mock.AsyncMock()) as loader:
+            asyncio.run(dialog._choose_file(None))
+        self.assertEqual(self.page.errors, [])
+        loader.assert_not_called()
+
     def test_preview_for_uses_magic_bytes(self):
         from budget_tracker.ui.views.receipts import preview_for
 

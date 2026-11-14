@@ -1,11 +1,14 @@
+import os
 import sqlite3
 import tempfile
 import unittest
 from datetime import date
 from pathlib import Path
+from unittest import mock
 
 from budget_tracker.db import MIGRATIONS, connect, migrate, schema_version
 from budget_tracker.models import Transaction, TransactionType
+from budget_tracker.receipts import storage
 from budget_tracker.repository import Repository, RepositoryError
 
 
@@ -61,13 +64,19 @@ class TestReceiptPath(unittest.TestCase):
 
     def test_deleting_a_transaction_leaves_the_receipt_file(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            saved = self.repo.add_transaction(self._tx(receipt_path="receipts/keep.png"))
-            stored = Path(temp_dir) / saved.receipt_path
-            stored.parent.mkdir(parents=True, exist_ok=True)
-            stored.write_bytes(b"image")
+            env = mock.patch.dict(os.environ, {"BUDGET_TRACKER_HOME": temp_dir})
+            env.start()
+            self.addCleanup(env.stop)
+            source = Path(temp_dir) / "source.png"
+            source.write_bytes(b"\x89PNG\r\n\x1a\n" + b"image")
+            stored = storage.store_receipt(source)
+            saved = self.repo.add_transaction(self._tx(receipt_path=stored))
+            self.assertTrue(storage.resolve_receipt(stored).is_file())
+
             self.repo.delete_transaction(saved.id)
+
             self.assertIsNone(self.repo.get_transaction(saved.id))
-            self.assertTrue(stored.is_file())
+            self.assertTrue(storage.resolve_receipt(stored).is_file())
 
 
 class TestUpgradeFromV8(unittest.TestCase):

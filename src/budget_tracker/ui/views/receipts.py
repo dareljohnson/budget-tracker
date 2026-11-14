@@ -215,7 +215,10 @@ class ReceiptImportDialog:
                 allowed_extensions=["pdf", "png", "jpg", "jpeg"],
             )
         except Exception as exc:  # noqa: BLE001 - native picker can be unavailable
-            self.ctx.notify(f"Could not open the file picker: {exc}", error=True)
+            if not self._closed_notified:
+                self.ctx.notify(f"Could not open the file picker: {exc}", error=True)
+            return
+        if self._closed_notified:
             return
         chosen = next((f for f in files or [] if f.path), None)
         if chosen is None:

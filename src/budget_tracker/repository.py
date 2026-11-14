@@ -18,6 +18,8 @@ from .models import (
     Category,
     CategoryRule,
     CategoryTotal,
+    Debt,
+    DebtKind,
     DueBill,
     MonthTotal,
     MinimumPayment,
@@ -191,6 +193,13 @@ class Repository:
             raise RepositoryError(
                 f"Account is used by the savings goal '{goal['name']}'; keep it a savings account"
             )
+        debt = self.conn.execute(
+            "SELECT name FROM debts WHERE account_id = ?", (account.id,)
+        ).fetchone()
+        if debt is not None and account.kind is not AccountKind.CREDIT_CARD:
+            raise RepositoryError(
+                f"Account is linked to the debt '{debt['name']}'; keep it a credit-card account"
+            )
         try:
             with self.conn:
                 self.conn.execute(
@@ -225,6 +234,11 @@ class Repository:
         ).fetchone()
         if goal is not None:
             raise RepositoryError(f"Account is used by the savings goal '{goal['name']}'")
+        debt = self.conn.execute(
+            "SELECT name FROM debts WHERE account_id = ?", (account_id,)
+        ).fetchone()
+        if debt is not None:
+            raise RepositoryError(f"Account is linked to the debt '{debt['name']}'")
         with self.conn:
             self.conn.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
 
@@ -742,6 +756,103 @@ class Repository:
             (account_id,),
         )
         return [self._row_to_reconciliation(r) for r in rows]
+
+    # ---------- debts ----------
+    _DEBT_SELECT = (
+        "SELECT id, name, kind, balance_cents, apr_bps, minimum_cents, "
+        "original_balance_cents, account_id FROM debts"
+    )
+
+    def _row_to_debt(self, row: sqlite3.Row) -> Debt:
+        return Debt(
+            id=row["id"],
+            name=row["name"],
+            kind=DebtKind(row["kind"]),
+            balance_cents=row["balance_cents"],
+            apr_bps=row["apr_bps"],
+            minimum_cents=row["minimum_cents"],
+            original_balance_cents=row["original_balance_cents"],
+            account_id=row["account_id"],
+        )
+
+    def list_debts(self) -> list[Debt]:
+        rows = self.conn.execute(self._DEBT_SELECT + " ORDER BY name COLLATE NOCASE")
+        return [self._row_to_debt(row) for row in rows]
+
+    def get_debt(self, debt_id: int) -> Debt | None:
+        row = self.conn.execute(self._DEBT_SELECT + " WHERE id = ?", (debt_id,)).fetchone()
+        return self._row_to_debt(row) if row else None
+
+    def debt_usage(self, account_id: int) -> int:
+        return self.conn.execute(
+            "SELECT COUNT(*) FROM debts WHERE account_id = ?", (account_id,)
+        ).fetchone()[0]
+
+    def add_debt(self, debt: Debt) -> Debt:
+        self._validate_debt(debt)
+        try:
+            with self.conn:
+                cur = self.conn.execute(
+                    "INSERT INTO debts (name, kind, balance_cents, apr_bps, minimum_cents, "
+                    "original_balance_cents, account_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        debt.name.strip(), debt.kind.value, debt.balance_cents, debt.apr_bps,
+                        debt.minimum_cents, debt.original_balance_cents, debt.account_id,
+                    ),
+                )
+        except sqlite3.IntegrityError as exc:
+            raise RepositoryError("This credit card is already linked to a debt") from exc
+        debt.id = cur.lastrowid
+        return debt
+
+    def update_debt(self, debt: Debt) -> None:
+        if debt.id is None:
+            raise ValueError("Debt id is required")
+        self._validate_debt(debt)
+        try:
+            with self.conn:
+                self.conn.execute(
+                    "UPDATE debts SET name = ?, kind = ?, balance_cents = ?, apr_bps = ?, "
+                    "minimum_cents = ?, original_balance_cents = ?, account_id = ? WHERE id = ?",
+                    (
+                        debt.name.strip(), debt.kind.value, debt.balance_cents, debt.apr_bps,
+                        debt.minimum_cents, debt.original_balance_cents, debt.account_id, debt.id,
+                    ),
+                )
+        except sqlite3.IntegrityError as exc:
+            raise RepositoryError("This credit card is already linked to a debt") from exc
+
+    def delete_debt(self, debt_id: int) -> None:
+        with self.conn:
+            self.conn.execute("DELETE FROM debts WHERE id = ?", (debt_id,))
+
+    def _validate_debt(self, debt: Debt) -> None:
+        if not (debt.name or "").strip():
+            raise RepositoryError("Debt name is required")
+        if not isinstance(debt.kind, DebtKind):
+            raise RepositoryError("Choose a debt kind")
+        if debt.balance_cents < 0:
+            raise RepositoryError("Balance cannot be negative")
+        if not (0 <= debt.apr_bps <= 10_000):
+            raise RepositoryError("APR must be between 0 and 100")
+        if debt.minimum_cents < 0:
+            raise RepositoryError("Minimum payment cannot be negative")
+        if debt.original_balance_cents is not None and debt.original_balance_cents < 0:
+            raise RepositoryError("Original balance cannot be negative")
+        if debt.account_id is not None:
+            if debt.kind is not DebtKind.CREDIT_CARD:
+                raise RepositoryError("A linked debt must be a credit card")
+            account = self.get_account(debt.account_id)
+            if account is None:
+                raise RepositoryError("Select a credit-card account")
+            if account.kind is not AccountKind.CREDIT_CARD:
+                raise RepositoryError("Link a debt only to a credit-card account")
+            linked = self.conn.execute(
+                "SELECT id FROM debts WHERE account_id = ? AND id IS NOT ?",
+                (debt.account_id, debt.id),
+            ).fetchone()
+            if linked is not None:
+                raise RepositoryError("This credit card is already linked to a debt")
 
     # ---------- credit card minimum payments ----------
     def list_minimum_payments(self, account_id: int) -> list[MinimumPayment]:

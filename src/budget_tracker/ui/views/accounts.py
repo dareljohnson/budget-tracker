@@ -52,8 +52,8 @@ class AccountsView:
         balances = self.ctx.repo.account_balances()
         net_worth = sum(b.balance_cents for b in balances)
         assets = sum(b.balance_cents for b in balances if b.balance_cents > 0)
-        # Only credit cards are debts here; an overdrawn checking or savings account is not a
-        # credit card balance (it still lowers net worth above and shows on its own card).
+        # Only liabilities count as debts here; an overdrawn checking or savings account is not a
+        # debt (it still lowers net worth above and shows on its own card).
         debts = sum(
             -b.balance_cents
             for b in balances
@@ -177,7 +177,7 @@ class AccountsView:
         candidates = [a for a in self.ctx.repo.list_accounts() if not a.kind.is_liability]
         source = next((a for a in candidates if a.kind == AccountKind.CHECKING), candidates[0] if candidates else None)
         if source is None:
-            self.ctx.notify("Add a checking or cash account to pay the card from", error=True)
+            self.ctx.notify("Add a checking or cash account to pay from", error=True)
             return
         TransactionEditor(
             self.ctx,

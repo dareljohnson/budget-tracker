@@ -800,11 +800,12 @@ class TestEditors(unittest.TestCase):
         self.assertEqual(self.repo.list_category_rules(), [])
         self.assertIsNone(self.repo.suggest_category_id("Card Purchase Kroger #443", TransactionType.EXPENSE))
 
-    def test_accounts_debts_stat_counts_only_credit_cards(self):
+    def test_accounts_debts_stat_counts_negative_liabilities(self):
         from budget_tracker.formatting import format_money
         from budget_tracker.ui.views.accounts import AccountsView
 
         savings = self.repo.add_account(Account("Regions Savings", AccountKind.SAVINGS))
+        self.repo.add_account(Account("Mortgage", AccountKind.LOAN, opening_balance_cents=-100_000))
         category = self.repo.list_categories(TransactionType.EXPENSE)[0]
         self.repo.add_transaction(Transaction(
             26_996, TransactionType.EXPENSE, category.id, date(2026, 11, 14),
@@ -819,7 +820,7 @@ class TestEditors(unittest.TestCase):
             card.content.controls[0].controls[0].value: card.content.controls[0].controls[1].value
             for card in view.stats.controls
         }
-        self.assertEqual(stats["Debts"], "$50.00")
+        self.assertEqual(stats["Debts"], "$1,050.00")
         self.assertEqual(
             stats["Net Worth"],
             format_money(sum(b.balance_cents for b in self.repo.account_balances())),

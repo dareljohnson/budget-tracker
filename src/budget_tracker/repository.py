@@ -151,7 +151,7 @@ class Repository:
     def list_accounts(self) -> list[Account]:
         rows = self.conn.execute(
             "SELECT id, name, kind, opening_balance_cents, color, number_last4 FROM accounts "
-            "ORDER BY kind = 'credit_card', name"
+            "ORDER BY kind IN ('credit_card','loan'), name"
         )
         return [self._row_to_account(r) for r in rows]
 
@@ -250,7 +250,7 @@ class Repository:
             "+ COALESCE((SELECT SUM(CASE t.type WHEN 'expense' THEN -t.amount_cents WHEN 'transfer' THEN -t.amount_cents "
             "WHEN 'adjustment' THEN t.amount_cents ELSE t.amount_cents END) FROM transactions t WHERE t.account_id = a.id), 0) "
             "+ COALESCE((SELECT SUM(t.amount_cents) FROM transactions t WHERE t.transfer_account_id = a.id), 0) AS balance "
-            "FROM accounts a ORDER BY a.kind = 'credit_card', a.name"
+            "FROM accounts a ORDER BY a.kind IN ('credit_card','loan'), a.name"
         )
         return [AccountBalance(self._row_to_account(r), r["balance"]) for r in rows]
 

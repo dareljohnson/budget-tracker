@@ -1,8 +1,9 @@
 import sqlite3
 import unittest
+from datetime import date
 
 from budget_tracker.db import MIGRATIONS, _seed, connect, migrate, schema_version
-from budget_tracker.models import AccountKind
+from budget_tracker.models import Account, AccountKind, Transaction, TransactionType
 from budget_tracker.repository import Repository
 
 
@@ -135,3 +136,26 @@ class TestMigrationV8(unittest.TestCase):
             conn.execute("SELECT kind FROM accounts WHERE name = 'Auto Loan'").fetchone()[0], "loan"
         )
         conn.close()
+
+
+class TestLoanBalances(unittest.TestCase):
+    def setUp(self) -> None:
+        self.repo = Repository(connect(":memory:"))
+        self.accounts = {a.name: a for a in self.repo.list_accounts()}
+
+    def tearDown(self) -> None:
+        self.repo.close()
+
+    def test_loan_owed_balance_and_payment(self):
+        loan = self.repo.add_account(Account("Mortgage", AccountKind.LOAN, opening_balance_cents=-100_000))
+        self.repo.add_transaction(Transaction(
+            20_000, TransactionType.TRANSFER, None, date(2026, 11, 10), "",
+            account_id=self.accounts["Checking"].id, transfer_account_id=loan.id,
+        ))
+        balance = next(b for b in self.repo.account_balances() if b.account.id == loan.id)
+        self.assertEqual((balance.balance_cents, balance.owed_cents), (-80_000, 80_000))
+
+    def test_loans_sort_with_liabilities(self):
+        self.repo.add_account(Account("Mortgage", AccountKind.LOAN, opening_balance_cents=-100_000))
+        names = [a.name for a in self.repo.list_accounts()]
+        self.assertEqual(names[-2:], ["Credit Card", "Mortgage"])

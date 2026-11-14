@@ -870,6 +870,50 @@ class TestEditors(unittest.TestCase):
         view.refresh()
         self.assertEqual(len(view.grid.controls), 1)
 
+    def test_goal_editor_save_replaces_the_empty_state_with_the_card(self):
+        from budget_tracker.models import Account, AccountKind
+        from budget_tracker.ui.views.goals import GoalEditor, GoalsView
+
+        savings = self.repo.add_account(Account("Savings", AccountKind.SAVINGS))
+        view = GoalsView(self.ctx)
+        self.assertIn("No goals yet", self._texts(view.grid.controls[0]))
+
+        editor = GoalEditor(self.ctx, None)
+        editor.name.value = "Trip"
+        editor.target.value = "500.00"
+        editor.target_date.value = (date.today() + timedelta(days=90)).isoformat()
+        editor.destination.value = str(savings.id)
+        editor._save(None)
+
+        self.assertEqual(len(view.grid.controls), 1)
+        texts = self._texts(view.grid.controls[0])
+        self.assertIn("Trip", texts)
+        self.assertNotIn("No goals yet", texts)
+
+    @staticmethod
+    def _texts(control) -> list[str]:
+        values = []
+        value = getattr(control, "value", None)
+        if isinstance(value, str):
+            values.append(value)
+        for child in getattr(control, "controls", None) or []:
+            values.extend(TestEditors._texts(child))
+        content = getattr(control, "content", None)
+        if content is not None:
+            values.extend(TestEditors._texts(content))
+        return values
+
+    def test_goals_grid_is_not_stretch_aligned(self):
+        """Flet 1.1.2 collapses a STRETCH ResponsiveRow in the Goals scrollable body.
+
+        The grid then renders no cards at all (not even the empty state), so keep it on the
+        default alignment until the client handles STRETCH without an explicit height.
+        """
+        from budget_tracker.ui.views.goals import GoalsView
+
+        view = GoalsView(self.ctx)
+        self.assertNotEqual(view.grid.vertical_alignment, ft.CrossAxisAlignment.STRETCH)
+
     def test_contribute_dialog_prefills_and_saves(self):
         from budget_tracker.models import Account, AccountKind
         from budget_tracker.ui.views.goals import ContributeDialog, GoalsView

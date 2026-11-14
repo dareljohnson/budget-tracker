@@ -51,10 +51,12 @@ def _progress_ratio(progress: SavingsGoalProgress) -> float:
 class GoalsView:
     def __init__(self, ctx: AppContext) -> None:
         self.ctx = ctx
+        # Plain alignment, not CrossAxisAlignment.STRETCH: on Flet 1.1.2 a ResponsiveRow using
+        # STRETCH without an explicit height collapses to zero height in this view's scrollable
+        # body, so the cards (and the empty state) never appear. Cards size to their content.
         self.grid = ft.ResponsiveRow(
             spacing=GAP,
             run_spacing=GAP,
-            vertical_alignment=ft.CrossAxisAlignment.STRETCH,
         )
         self.control = ft.Column(
             [
@@ -85,7 +87,6 @@ class GoalsView:
                 col=12,
             )
         ]
-        self.ctx.page.update()
 
     def _goal_card(self, progress: SavingsGoalProgress) -> ft.Container:
         goal = progress.goal

@@ -403,11 +403,13 @@ class Repository:
                         "UPDATE debts SET balance_cents = balance_cents + ? WHERE id = ?",
                         (old["amount_cents"], old["debt_id"]),
                     )
-            self.conn.execute(
+            updated = self.conn.execute(
                 "UPDATE transactions SET amount_cents = ?, type = ?, account_id = ?, category_id = ?, "
                 "transfer_account_id = ?, goal_id = ?, debt_id = ?, occurred_on = ?, description = ? WHERE id = ?",
                 (*self._tx_params(tx), tx.id),
             )
+            if updated.rowcount != 1:
+                raise RepositoryError("Transaction not found")
             if (debt := self._payment_debt(tx)) is not None:
                 cur = self.conn.execute(
                     "UPDATE debts SET balance_cents = balance_cents - ? "
@@ -724,6 +726,7 @@ class Repository:
                     if not row.include:
                         continue
                     tx = row.transaction
+                    tx.debt_id = None  # imported rows are not debt payments
                     self._validate_transaction(tx)
                     tx.statement_id = statement.id
                     tx.import_ref = f"{statement.file_sha256}:{index}"

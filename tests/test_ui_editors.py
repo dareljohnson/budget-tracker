@@ -945,6 +945,24 @@ class TestEditors(unittest.TestCase):
         loaded = self.repo.list_transactions(limit=1)[0]
         self.assertEqual((loaded.amount_cents, loaded.goal_id), (6_000, goal.id))
 
+    def test_editing_a_debt_payment_preserves_the_tag(self):
+        from budget_tracker.models import Debt, DebtKind
+        from budget_tracker.ui.views.transactions import TransactionEditor
+
+        debt = self.repo.add_debt(Debt("Loan", DebtKind.PERSONAL, 100_000, 1200, 2_000))
+        category = next(c for c in self.repo.list_categories() if c.name == "Debt payments")
+        tx = self.repo.add_transaction(Transaction(
+            20_000, TransactionType.EXPENSE, category.id, date.today(), "Payment",
+            account_id=self.accts["Checking"].id, debt_id=debt.id,
+        ))
+        editor = TransactionEditor(self.ctx, tx)
+        editor.amount.value = "300.00"
+        editor._save(None)
+
+        loaded = self.repo.list_transactions(limit=1)[0]
+        self.assertEqual((loaded.debt_id, loaded.amount_cents), (debt.id, 30_000))
+        self.assertEqual(self.repo.get_debt(debt.id).balance_cents, 70_000)
+
     def test_balance_check_records_the_statement_minimum(self):
         from budget_tracker.ui.views.reconcile import BalanceCheckDialog
 

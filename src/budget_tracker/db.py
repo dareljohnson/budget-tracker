@@ -291,6 +291,13 @@ def migrate(conn: sqlite3.Connection) -> None:
     for version, script in enumerate(MIGRATIONS[current:], start=current + 1):
         fk_off = version in FOREIGN_KEYS_OFF_MIGRATIONS
         if fk_off:
+            if conn.in_transaction:
+                raise RuntimeError("Cannot migrate inside an open transaction")
+            preexisting = conn.execute("PRAGMA foreign_key_check").fetchall()
+            if preexisting:
+                raise sqlite3.IntegrityError(
+                    f"Pre-existing foreign key violations before migration {version}: {preexisting[:3]}"
+                )
             conn.execute("PRAGMA foreign_keys = OFF")
         try:
             conn.executescript(f"BEGIN;\n{script}\nPRAGMA user_version = {version};\nCOMMIT;")
@@ -298,14 +305,16 @@ def migrate(conn: sqlite3.Connection) -> None:
             if conn.in_transaction:
                 conn.rollback()
             raise
-        finally:
+        else:
             if fk_off:
-                conn.execute("PRAGMA foreign_keys = ON")
                 violations = conn.execute("PRAGMA foreign_key_check").fetchall()
                 if violations:
                     raise sqlite3.IntegrityError(
                         f"Foreign key violations after migration {version}: {violations[:3]}"
                     )
+        finally:
+            if fk_off:
+                conn.execute("PRAGMA foreign_keys = ON")
     if current == 0:
         _seed(conn)
 

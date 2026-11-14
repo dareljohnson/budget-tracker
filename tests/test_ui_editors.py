@@ -51,7 +51,13 @@ class _PageStub:
 
     @property
     def errors(self) -> list[str]:
-        return [c.content.value for c in self.overlay if isinstance(c, ft.SnackBar) and c.bgcolor != "#2E7D32"]
+        from budget_tracker.ui.theme import INCOME_COLOR
+
+        return [
+            c.content.value
+            for c in self.overlay
+            if isinstance(c, ft.SnackBar) and c.bgcolor != INCOME_COLOR
+        ]
 
 
 def _event(**attrs) -> SimpleNamespace:

@@ -21,7 +21,7 @@ from ..components import (
     transaction_row,
 )
 from ..context import AppContext
-from ..theme import EXPENSE_COLOR, GAP, INCOME_COLOR, WARNING_COLOR
+from ..theme import EXPENSE_COLOR, GAP, INCOME_COLOR, WARNING_COLOR, readable
 from .bills import bill_avatar, status_chip
 
 TREND_HEIGHT = 170
@@ -104,7 +104,7 @@ class DashboardView:
         if denominator:
             stacked = ft.Container(
                 content=ft.Row(
-                    [ft.Container(bgcolor=t.color, expand=max(1, round(t.total_cents / denominator * 1000)), tooltip=t.name) for t in totals],
+                    [ft.Container(bgcolor=readable(t.color), expand=max(1, round(t.total_cents / denominator * 1000)), tooltip=t.name) for t in totals],
                     spacing=2,
                 ),
                 height=14,
@@ -114,7 +114,7 @@ class DashboardView:
         legend = [
             ft.Row(
                 [
-                    ft.Container(width=10, height=10, border_radius=5, bgcolor=t.color),
+                    ft.Container(width=10, height=10, border_radius=5, bgcolor=readable(t.color)),
                     ft.Text(t.name, expand=True, size=13),
                     ft.Text(f"{t.total_cents / denominator:.0%}" if denominator else "—", size=12, color=ft.Colors.ON_SURFACE_VARIANT, width=44, text_align=ft.TextAlign.RIGHT),
                     ft.Text(format_money(t.total_cents), size=13, weight=ft.FontWeight.W_600, width=100, text_align=ft.TextAlign.RIGHT),

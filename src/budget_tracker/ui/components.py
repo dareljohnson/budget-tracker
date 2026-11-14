@@ -9,7 +9,7 @@ import flet as ft
 
 from ..formatting import format_money, month_label, parse_date, shift_month
 from ..models import Account, AccountBalance, Transaction, TransactionType
-from .theme import EXPENSE_COLOR, GAP, INCOME_COLOR, RADIUS, SEED_COLOR, icon_for
+from .theme import EXPENSE_COLOR, GAP, INCOME_COLOR, RADIUS, SEED_COLOR, icon_for, readable
 
 
 def card(
@@ -59,7 +59,7 @@ def section_title(text: str, trailing: ft.Control | None = None) -> ft.Row:
 
 
 def category_avatar(icon: str | None, color: str | None, size: int = 40) -> ft.Container:
-    color = color or ft.Colors.PRIMARY
+    color = readable(color) or SEED_COLOR
     return ft.Container(
         content=ft.Icon(icon_for(icon), color=color, size=size * 0.5),
         width=size,

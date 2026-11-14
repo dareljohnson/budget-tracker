@@ -1,14 +1,18 @@
 """Scan one page from the first scanner attached to this Windows computer.
 
 Windows Image Acquisition (WIA) is driven through a short PowerShell script, so scanning
-needs no extra Python dependency. The script connects to the first scanner device,
-transfers one page as PNG and saves it to the destination path we pass in.
+needs no extra Python dependency. The script connects to the first scanner device and
+transfers one page to the destination path we pass in. WIA drivers do not always honour
+the requested format (some return BMP regardless), so the result is normalised to PNG
+with Pillow before it is returned.
 """
 
 import os
 import shutil
 import subprocess
 from pathlib import Path
+
+from PIL import Image
 
 from budget_tracker.receipts.errors import ReceiptScanError
 
@@ -103,4 +107,30 @@ def scan_receipt(destination: Path, *, timeout: float = 60) -> Path:
         raise ReceiptScanError(_last_stderr_line(result.stderr) or _NO_IMAGE)
     if not destination.is_file() or destination.stat().st_size == 0:
         raise ReceiptScanError(_last_stderr_line(result.stderr) or _NO_IMAGE)
+    _normalize_image(destination)
     return destination
+
+
+def _normalize_image(destination: Path) -> None:
+    """Rewrite a scanner's output as PNG when its driver ignored the requested format.
+
+    WIA drivers commonly return BMP even when a PNG format GUID is requested. The file is
+    read into memory and closed before rewriting it, because Windows will not let the
+    image be saved over a file that is still open.
+    """
+    try:
+        with Image.open(destination) as image:
+            image.load()
+            converted = None if image.format == "PNG" else image.convert("RGB")
+    except OSError as exc:
+        destination.unlink(missing_ok=True)
+        raise ReceiptScanError("The scanner returned an image that could not be read.") from exc
+    if converted is None:
+        return
+    try:
+        converted.save(destination, format="PNG")
+    except OSError as exc:
+        destination.unlink(missing_ok=True)
+        raise ReceiptScanError("The scanned image could not be prepared for review.") from exc
+    finally:
+        converted.close()

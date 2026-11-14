@@ -18,11 +18,15 @@ _TOTAL_LINE = re.compile(r"\b(?:GRAND\s+TOTAL|TOTAL|AMOUNT\s+DUE|BALANCE\s+DUE)\
 _TOTAL_SUFFIX = re.compile(r"\bTOTAL\s+(?:SAVINGS|ITEMS|TAX|DISCOUNT|QTY|COUNT)\b", re.IGNORECASE)
 _ISO_DATE = re.compile(r"\b(\d{4})-(\d{2})-(\d{2})\b")
 _US_DATE = re.compile(r"^\d{1,2}/\d{1,2}/(?:\d{2}|\d{4})$")
-_MONTH_DATE = re.compile(r"\b([A-Za-z]+ \d{1,2}, \d{4})\b")
+_MONTH_DATE = re.compile(r"\b([A-Za-z]{3,9})\s*(\d{1,2})\s*,\s*(\d{4})\b")
 _CARD_MASKS = (
     re.compile(r"[*xX]{4,}\s*[- ]?\s*(\d{4})\b"),
     re.compile(r"\bending\s+in\s+(\d{4})\b", re.IGNORECASE),
     re.compile(r"\b\d{4}[ -]\d{4}[ -]\d{4}[ -](\d{4})\b"),
+    re.compile(
+        r"\b(?:visa|mastercard|master card|amex|american express|discover)\s*[*x#-]*\s*(\d{4})",
+        re.IGNORECASE,
+    ),
 )
 _CASH = re.compile(r"\bCASH\b", re.IGNORECASE)
 _PHONE = re.compile(r"\(?\d{3}\)?[ -]\d{3}[ -]\d{4}")
@@ -85,7 +89,7 @@ def _total_cents(lines: list[str]) -> int | None:
     line. A receipt without a total line yields ``None`` rather than a guess.
     """
     total: int | None = None
-    for line in lines:
+    for index, line in enumerate(lines):
         if _TOTAL_SUFFIX.search(line) is not None:
             continue
         if _TOTAL_LINE.search(line) is None:
@@ -97,6 +101,20 @@ def _total_cents(lines: list[str]) -> int | None:
                 continue
             if best is None or amount > best:
                 best = amount
+        if best is None:
+            # Point-of-sale receipts often print the label and the amount on
+            # separate lines. Accept only the immediate next non-empty line and
+            # only when that whole line is an amount, so item/tax lines do not
+            # become the total.
+            for following in lines[index + 1 :]:
+                if not following.strip():
+                    continue
+                if _TOTAL_LINE.search(following) or _TOTAL_SUFFIX.search(following):
+                    break
+                following_amount = _amount(following.strip())
+                if following_amount is not None and following_amount > 0:
+                    best = following_amount
+                break
         if best is not None:
             total = best
     return total
@@ -126,9 +144,10 @@ def _receipt_date(lines: list[str], today: date) -> date:
         except ValueError:
             continue
     for line in lines:
-        month_match = _MONTH_DATE.search(line)
-        if month_match is not None:
-            parsed = parse_date(month_match.group(1), today)
+        for month_match in _MONTH_DATE.finditer(line):
+            parsed = parse_date(
+                f"{month_match.group(1)} {month_match.group(2)}, {month_match.group(3)}", today
+            )
             if parsed is not None:
                 return parsed
         for token in line.split():

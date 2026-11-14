@@ -50,10 +50,17 @@ class AccountsView:
 
     def refresh(self) -> None:
         balances = self.ctx.repo.account_balances()
+        net_worth = sum(b.balance_cents for b in balances)
         assets = sum(b.balance_cents for b in balances if b.balance_cents > 0)
-        debts = sum(-b.balance_cents for b in balances if b.balance_cents < 0)
+        # Only credit cards are debts here; an overdrawn checking or savings account is not a
+        # credit card balance (it still lowers net worth above and shows on its own card).
+        debts = sum(
+            -b.balance_cents
+            for b in balances
+            if b.account.kind.is_liability and b.balance_cents < 0
+        )
         self.stats.controls = [
-            stat_card("Net Worth", format_money(assets - debts), ft.Icons.ACCOUNT_BALANCE_WALLET, SEED_COLOR, "Assets minus debts"),
+            stat_card("Net Worth", format_money(net_worth), ft.Icons.ACCOUNT_BALANCE_WALLET, SEED_COLOR, "Assets minus debts"),
             stat_card("Assets", format_money(assets), ft.Icons.TRENDING_UP, INCOME_COLOR, "Accounts in credit"),
             stat_card("Debts", format_money(debts), ft.Icons.CREDIT_CARD, EXPENSE_COLOR, "Credit card balances owed"),
         ]

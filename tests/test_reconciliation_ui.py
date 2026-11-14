@@ -12,7 +12,14 @@ from unittest import mock
 import flet as ft
 
 from budget_tracker.db import connect
-from budget_tracker.models import Account, AccountKind, Transaction, TransactionType
+from budget_tracker.models import (
+    Account,
+    AccountKind,
+    Bill,
+    BillFrequency,
+    Transaction,
+    TransactionType,
+)
 from budget_tracker.receipts import storage
 from budget_tracker.repository import Repository
 from budget_tracker.services import BudgetService
@@ -385,6 +392,223 @@ class TestCandidateSearch(MatchPanelTestCase):
         self.assertEqual(dialog.match_note.size, fs(12))
         [radio] = dialog.match_group.content.controls
         self.assertEqual(radio.label_style.size, fs(13))
+
+
+class BillMatchTestCase(MatchPanelTestCase):
+    """Shared helpers for the bill 'Mark paid' dialog."""
+
+    def _bill(
+        self,
+        *,
+        name: str = "Rent",
+        amount_cents: int = 1500,
+        next_due: date = date(2026, 11, 1),
+        account_id: int | None = None,
+        pay_to_account_id: int | None = None,
+    ) -> Bill:
+        return self.repo.add_bill(
+            Bill(
+                name=name,
+                amount_cents=amount_cents,
+                frequency=BillFrequency.MONTHLY,
+                next_due=next_due,
+                account_id=(account_id or self.checking.id),
+                category_id=None if pay_to_account_id else self.groceries.id,
+                pay_to_account_id=pay_to_account_id,
+            )
+        )
+
+    def _bill_dialog(self, bill: Bill, today: date = date(2026, 11, 1)):
+        from budget_tracker.ui.views.bills import MarkPaidDialog
+
+        return MarkPaidDialog(self.ctx, bill, today)
+
+    def _transfer(
+        self,
+        amount_cents: int,
+        source: Account,
+        destination: Account,
+        occurred_on: date,
+        description: str,
+    ) -> Transaction:
+        return self.repo.add_transaction(
+            Transaction(
+                amount_cents=amount_cents,
+                type=TransactionType.TRANSFER,
+                category_id=None,
+                occurred_on=occurred_on,
+                description=description,
+                account_id=source.id,
+                transfer_account_id=destination.id,
+            )
+        )
+
+    def _radio_values(self, dialog) -> list[str]:
+        return [radio.value for radio in dialog.match_group.content.controls]
+
+
+class TestBillStrongCandidate(BillMatchTestCase):
+    def test_a_single_strong_candidate_is_preselected_and_the_footer_uses_it(self):
+        bill = self._bill()
+        candidate = self._add_expense(description="Rent", amount_cents=1500, occurred_on=date(2026, 11, 1))
+        dialog = self._bill_dialog(bill)
+        dialog.open()
+        before = self.repo.list_transactions()
+
+        self.assertTrue(dialog.match_panel.visible)
+        self.assertEqual(dialog.match_group.value, str(candidate.id))
+        self.assertIsNotNone(dialog._selected_match)
+        self.assertEqual(dialog._selected_match.transaction.id, candidate.id)
+        self.assertTrue(dialog._use_existing)
+
+        with mock.patch.object(
+            self.repo, "mark_bill_paid", wraps=self.repo.mark_bill_paid
+        ) as mark_paid:
+            dialog._save(None)
+
+        mark_paid.assert_called_once_with(
+            bill.id,
+            paid_on=date(2026, 11, 1),
+            amount_cents=1500,
+            account_id=self.checking.id,
+            existing_transaction_id=candidate.id,
+        )
+        self.assertEqual(len(self.repo.list_transactions()), len(before))
+        kept = self.repo.get_transaction(candidate.id)
+        self.assertEqual(kept.amount_cents, 1500)
+        self.assertEqual(kept.description, "Rent")
+        self.assertEqual(kept.occurred_on, date(2026, 11, 1))
+        self.assertEqual(kept.category_id, self.groceries.id)
+        self.assertEqual(kept.account_id, self.checking.id)
+        self.assertEqual(kept.source, "manual")
+        self.assertEqual(self.repo.get_bill(bill.id).next_due, date(2026, 12, 1))
+        self.assertEqual(self.page.open_dialogs, [])
+        self.assertEqual(self.page.errors, [])
+
+    def test_record_a_new_payment_switches_modes_and_inserts_a_transaction(self):
+        bill = self._bill()
+        self._add_expense(description="Rent", amount_cents=1500, occurred_on=date(2026, 11, 1))
+        dialog = self._bill_dialog(bill)
+        dialog.open()
+        self.assertTrue(dialog._use_existing)
+
+        dialog.record_new_button.on_click(None)
+
+        self.assertFalse(dialog._use_existing)
+
+        dialog._save(None)
+
+        transactions = self.repo.list_transactions()
+        self.assertEqual(len(transactions), 2)
+        created = next(t for t in transactions if t.source == "bill")
+        self.assertEqual(created.amount_cents, 1500)
+        self.assertEqual(created.type, TransactionType.EXPENSE)
+        self.assertEqual(created.account_id, self.checking.id)
+        self.assertEqual(created.occurred_on, date(2026, 11, 1))
+        self.assertEqual(self.page.open_dialogs, [])
+
+
+class TestBillCandidateSearch(BillMatchTestCase):
+    def test_changing_the_amount_refreshes_and_clears_an_incompatible_selection(self):
+        bill = self._bill()
+        self._add_expense(description="Rent", amount_cents=1500, occurred_on=date(2026, 11, 1))
+        dialog = self._bill_dialog(bill)
+        self.assertIsNotNone(dialog._selected_match)
+
+        dialog.amount.value = "20.00"
+        dialog.amount.on_change(None)
+
+        self.assertIsNone(dialog._selected_match)
+        self.assertFalse(dialog._use_existing)
+        self.assertFalse(dialog.match_panel.visible)
+        self.assertEqual(dialog.match_group.content.controls, [])
+
+    def test_changing_the_date_refreshes_and_clears_an_incompatible_selection(self):
+        bill = self._bill()
+        self._add_expense(description="Rent", amount_cents=1500, occurred_on=date(2026, 11, 1))
+        dialog = self._bill_dialog(bill)
+        self.assertIsNotNone(dialog._selected_match)
+
+        dialog.date.value = "2026-11-20"
+        dialog.date.on_change(None)
+
+        self.assertIsNone(dialog._selected_match)
+        self.assertFalse(dialog._use_existing)
+        self.assertFalse(dialog.match_panel.visible)
+
+    def test_changing_the_account_recomputes_and_clears_an_incompatible_selection(self):
+        bill = self._bill()
+        on_checking = self._add_expense(
+            description="Rent", amount_cents=1500, occurred_on=date(2026, 11, 1)
+        )
+        on_cash = self._add_expense(
+            description="Rent",
+            amount_cents=1500,
+            occurred_on=date(2026, 11, 1),
+            account=self.cash,
+        )
+        empty = self.repo.add_account(Account(name="Empty Wallet", kind=AccountKind.SAVINGS))
+        dialog = self._bill_dialog(bill)
+        self.assertEqual(dialog._selected_match.transaction.id, on_checking.id)
+
+        dialog.account.value = str(self.cash.id)
+        dialog.account.on_select(None)
+
+        self.assertEqual([t.transaction.id for t in dialog._candidates], [on_cash.id])
+        self.assertEqual(dialog._selected_match.transaction.id, on_cash.id)
+        self.assertEqual(dialog.match_group.value, str(on_cash.id))
+        self.assertTrue(dialog._use_existing)
+
+        dialog.account.value = str(empty.id)
+        dialog.account.on_select(None)
+
+        self.assertIsNone(dialog._selected_match)
+        self.assertFalse(dialog._use_existing)
+        self.assertFalse(dialog.match_panel.visible)
+
+    def test_a_card_bill_only_offers_transfers_to_its_destination_account(self):
+        card = next(a for a in self.repo.list_accounts() if a.name == "Credit Card")
+        bill = self._bill(
+            name="Visa payment",
+            amount_cents=2500,
+            account_id=self.checking.id,
+            pay_to_account_id=card.id,
+        )
+        outgoing = self._transfer(
+            2500, self.checking, card, date(2026, 11, 1), "Visa payment"
+        )
+        self._transfer(2500, self.checking, self.cash, date(2026, 11, 1), "Cash")
+        self._transfer(2500, card, self.checking, date(2026, 11, 1), "Refund")
+
+        dialog = self._bill_dialog(bill)
+
+        self.assertTrue(dialog.match_panel.visible)
+        self.assertEqual(self._radio_values(dialog), [str(outgoing.id)])
+        self.assertEqual(dialog._selected_match.transaction.id, outgoing.id)
+
+
+class TestBillMismatch(BillMatchTestCase):
+    def test_a_mismatched_existing_transaction_keeps_the_dialog_open_with_a_notification(self):
+        bill = self._bill()
+        candidate = self._add_expense(
+            description="Rent", amount_cents=1500, occurred_on=date(2026, 11, 1)
+        )
+        dialog = self._bill_dialog(bill)
+        dialog.open()
+        self.assertTrue(dialog._use_existing)
+
+        # Change the row after it was offered so the repository rejects the match.
+        self.repo.conn.execute(
+            "UPDATE transactions SET amount_cents = 9999 WHERE id = ?", (candidate.id,)
+        )
+        self.repo.conn.commit()
+
+        dialog._save(None)
+
+        self.assertEqual(self.page.open_dialogs, [dialog.dialog])
+        self.assertEqual(self.page.errors, ["That transaction does not match this bill"])
+        self.assertEqual(len(self.repo.list_transactions()), 1)
+        self.assertEqual(self.repo.get_bill(bill.id).next_due, date(2026, 11, 1))
 
 
 if __name__ == "__main__":

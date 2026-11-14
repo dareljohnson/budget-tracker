@@ -7,6 +7,7 @@ from datetime import date
 import flet as ft
 
 from ...formatting import format_money, parse_date, parse_money, parse_signed_money
+from ...matching import STRONG_SCORE, MatchCandidate, source_label
 from ...models import AccountKind, Bill, BillFrequency, DueBill, TransactionType
 from ...repository import RepositoryError
 from ..components import card, category_avatar, confirm_dialog, date_field, empty_state, page_header, stat_card
@@ -16,6 +17,20 @@ from ..theme import EXPENSE_COLOR, GAP, INCOME_COLOR, SEED_COLOR, WARNING_COLOR,
 REMINDER_CHOICES = (0, 1, 2, 3, 5, 7, 14)
 STATUS_COLORS = {"overdue": EXPENSE_COLOR, "today": WARNING_COLOR, "soon": WARNING_COLOR}
 BILL_KIND, CARD_KIND = "bill", "card"
+
+_MATCH_TITLE = "Already recorded"
+_MATCH_NOTE = "The existing transaction keeps its own date, amount, category, account, and description."
+_USE_EXISTING_LABEL = "Use this transaction"
+_RECORD_NEW_LABEL = "Record a new payment"
+
+
+def _match_label(candidate: MatchCandidate) -> str:
+    """Date, description, amount and provenance, in the order the owner scans them."""
+    tx = candidate.transaction
+    return (
+        f"{tx.occurred_on.isoformat()} · {tx.description} · "
+        f"{format_money(tx.amount_cents)} · {source_label(tx.source)}"
+    )
 
 
 def monthly_equivalent(bill: Bill) -> int:
@@ -189,6 +204,10 @@ class MarkPaidDialog:
     def __init__(self, ctx: AppContext, bill: Bill, today: date | None = None) -> None:
         self.ctx = ctx
         self.bill = bill
+        self._use_existing = False
+        self._selected_match: MatchCandidate | None = None
+        self._candidates: list[MatchCandidate] = []
+        self._candidate_by_id: dict[str, MatchCandidate] = {}
         sources = [a for a in ctx.repo.list_accounts() if a.id != bill.pay_to_account_id]
         amount = ctx.repo.amount_due(bill)
         self.amount = ft.TextField(
@@ -197,13 +216,50 @@ class MarkPaidDialog:
             value=f"{amount / 100:.2f}" if amount else "",
             keyboard_type=ft.KeyboardType.NUMBER,
             autofocus=True,
+            on_change=self._value_changed,
             on_submit=self._save,
         )
-        self.date = date_field(ctx.page, "Paid on", today or date.today())
+        self.date = date_field(
+            ctx.page, "Paid on", today or date.today(), on_change=self._value_changed
+        )
         self.account = ft.Dropdown(
             label="Paid from",
             options=[ft.DropdownOption(key=str(a.id), text=f"{a.name} ({a.kind.label})") for a in sources],
             value=str(bill.account_id) if any(a.id == bill.account_id for a in sources) else None,
+            on_select=self._account_changed,
+        )
+        self.match_group = ft.RadioGroup(
+            content=ft.Column([], spacing=4),
+            on_change=self._candidate_selected,
+        )
+        self.match_note = ft.Text("", size=fs(12), color=ft.Colors.ON_SURFACE_VARIANT)
+        self.match_title = ft.Text(_MATCH_TITLE, size=fs(14), weight=ft.FontWeight.W_600)
+        self.use_existing_button = ft.OutlinedButton(
+            content=_USE_EXISTING_LABEL,
+            on_click=self._use_this_transaction,
+        )
+        self.record_new_button = ft.OutlinedButton(
+            content=_RECORD_NEW_LABEL,
+            on_click=self._record_new,
+        )
+        self.match_panel = ft.Container(
+            visible=False,
+            padding=10,
+            border=ft.Border.all(1, ft.Colors.OUTLINE_VARIANT),
+            border_radius=10,
+            content=ft.Column(
+                [
+                    self.match_title,
+                    self.match_group,
+                    self.match_note,
+                    ft.Row(
+                        [self.use_existing_button, self.record_new_button],
+                        spacing=8,
+                        wrap=True,
+                    ),
+                ],
+                spacing=6,
+            ),
         )
         target = f"to {bill.pay_to_account_name} (transfer)" if bill.is_card_payment else f"as {bill.category_name} expense"
         self.dialog = ft.AlertDialog(
@@ -217,10 +273,12 @@ class MarkPaidDialog:
                         self.amount,
                         self.date,
                         self.account,
+                        self.match_panel,
                     ],
                     spacing=14,
                     tight=True,
                     horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
+                    scroll=ft.ScrollMode.AUTO,
                 ),
             ),
             actions=[
@@ -229,9 +287,117 @@ class MarkPaidDialog:
             ],
             actions_alignment=ft.MainAxisAlignment.END,
         )
+        self._refresh_candidates(auto_select=True)
 
     def open(self) -> None:
         self.ctx.page.show_dialog(self.dialog)
+
+    # ---------- match panel ----------
+    def _search_values(self) -> tuple[int, date, int] | None:
+        """The amount, date and source account currently entered, or ``None`` if incomplete."""
+        try:
+            amount = parse_money(self.amount.value)
+            paid_on = parse_date(self.date.value)
+        except ValueError:
+            return None
+        if not self.account.value:
+            return None
+        return amount, paid_on, int(self.account.value)
+
+    def _refresh_candidates(self, *, auto_select: bool = False) -> None:
+        """Recompute every candidate from the current fields; never hide one by score.
+
+        A fresh dialog preselects a lone strong candidate. Later edits keep a compatible
+        selection and clear an incompatible one, but only switch on a lone strong candidate
+        when ``auto_select`` is requested (a fresh dialog or an explicit account change).
+        """
+        previous = self._selected_match
+        self._candidates = []
+        self._candidate_by_id = {}
+        self._selected_match = None
+        self.match_group.content.controls = []
+        self.match_group.value = None
+        self.match_panel.visible = False
+
+        values = self._search_values()
+        if values is None:
+            self._set_use_existing(False)
+            return
+        amount, paid_on, account_id = values
+        candidates = self.ctx.service.bill_match_candidates(
+            self.bill, amount, paid_on, account_id
+        )
+        if not candidates:
+            self._set_use_existing(False)
+            return
+
+        self._candidates = candidates
+        self._candidate_by_id = {str(c.transaction.id): c for c in candidates}
+        self.match_group.content.controls = [
+            ft.Radio(
+                value=str(candidate.transaction.id),
+                label=_match_label(candidate),
+                label_style=ft.TextStyle(size=fs(13)),
+            )
+            for candidate in candidates
+        ]
+        self.match_panel.visible = True
+
+        chosen: MatchCandidate | None = None
+        if auto_select and len(candidates) == 1 and candidates[0].score >= STRONG_SCORE:
+            chosen = candidates[0]
+        elif previous is not None and str(previous.transaction.id) in self._candidate_by_id:
+            chosen = self._candidate_by_id[str(previous.transaction.id)]
+        if chosen is not None:
+            self._selected_match = chosen
+            self.match_group.value = str(chosen.transaction.id)
+            if auto_select:
+                self._set_use_existing(True)
+        else:
+            # Nothing is selected: record a new payment unless an edit keeps a compatible row.
+            self._set_use_existing(False)
+        self._refresh_ui()
+
+    def _candidate_selected(self, _: ft.Event | None = None) -> None:
+        self._selected_match = self._candidate_by_id.get(self.match_group.value)
+        self._set_use_existing(self._selected_match is not None)
+
+    def _use_this_transaction(self, _: ft.Event | None = None) -> None:
+        """Make the chosen candidate the footer action again after recording a new payment."""
+        self._selected_match = self._candidate_by_id.get(self.match_group.value)
+        self._set_use_existing(self._selected_match is not None)
+
+    def _record_new(self, _: ft.Event | None = None) -> None:
+        self._set_use_existing(False)
+
+    def _set_use_existing(self, enabled: bool) -> None:
+        """Toggle whether the footer reuses the chosen row instead of inserting one."""
+        self._use_existing = bool(enabled)
+        self.match_note.value = _MATCH_NOTE if self._use_existing else ""
+        self.match_note.visible = self._use_existing
+        self._refresh_ui()
+
+    def _value_changed(self, _: ft.Event | None = None) -> None:
+        """Amount or date edits change what can match; recompute from the fields as typed."""
+        self._refresh_candidates(auto_select=False)
+
+    def _account_changed(self, _: ft.Event | None = None) -> None:
+        self.account.error_text = None
+        # Only pull the owner into reusing a row when they were already doing so.
+        self._refresh_candidates(auto_select=self._use_existing)
+
+    def _is_mounted(self) -> bool:
+        control: ft.Control | None = self.dialog
+        while control is not None:
+            if isinstance(control, ft.Page):
+                return True
+            control = control.parent
+        return False
+
+    def _refresh_ui(self) -> None:
+        """Refresh the dialog when it is mounted; direct tests build it without a page."""
+        if self._is_mounted():
+            self.dialog.update()
 
     def _save(self, _: ft.Event) -> None:
         valid = True
@@ -252,8 +418,27 @@ class MarkPaidDialog:
         if not valid:
             self.dialog.update()
             return
+        existing_id = (
+            self._selected_match.transaction.id
+            if self._use_existing and self._selected_match is not None
+            else None
+        )
         try:
-            self.ctx.repo.mark_bill_paid(self.bill.id, paid_on=paid_on, amount_cents=amount, account_id=int(self.account.value))
+            if existing_id is not None:
+                self.ctx.repo.mark_bill_paid(
+                    self.bill.id,
+                    paid_on=paid_on,
+                    amount_cents=amount,
+                    account_id=int(self.account.value),
+                    existing_transaction_id=existing_id,
+                )
+            else:
+                self.ctx.repo.mark_bill_paid(
+                    self.bill.id,
+                    paid_on=paid_on,
+                    amount_cents=amount,
+                    account_id=int(self.account.value),
+                )
         except RepositoryError as exc:
             self.ctx.notify(str(exc), error=True)
             return

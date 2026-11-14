@@ -126,6 +126,7 @@ class Transaction:
     import_ref: str | None = None  # source reference within the imported statement
     goal_id: int | None = None  # savings goal this transfer contributes to
     debt_id: int | None = None  # debt this payment is applied to
+    receipt_path: str | None = None  # stored receipt image, relative to the app data folder
 
     @property
     def flow_sign(self) -> int:

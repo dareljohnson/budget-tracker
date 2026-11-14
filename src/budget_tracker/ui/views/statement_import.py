@@ -1217,6 +1217,12 @@ class StatementImportDialog:
             self.import_button.disabled = False
             self.ctx.notify(f"Import failed: {exc.strerror or exc}", error=True)
             return
+        except Exception:
+            # A locked/failed database must not leave the dialog permanently disabled.
+            self._saving = False
+            self.import_button.disabled = False
+            self._refresh_ui()
+            raise
         self._saving = False
 
         # The import is committed; a failure to remember the digits must not mask that success.

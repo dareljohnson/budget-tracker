@@ -586,6 +586,9 @@ class BudgetService:
             balance = balance_cents
         self._validate_debt_record(name, kind, balance, apr_bps, minimum_cents,
                                    original_balance_cents, account_id, debt_id=debt_id)
+        if existing.account_id is None and account_id is not None:
+            # Pre-link payments are superseded by the card's live balance snapshot.
+            self.repo.clear_debt_payments(debt_id)
         self.repo.update_debt(Debt(
             id=debt_id, name=name.strip(), kind=kind, balance_cents=balance, apr_bps=apr_bps,
             minimum_cents=minimum_cents, original_balance_cents=original_balance_cents,

@@ -998,6 +998,50 @@ class TestEditors(unittest.TestCase):
         self.assertEqual(self.ctx.repo.list_debts(), [])
         self.assertEqual(editor.apr.error, "Enter a rate between 0 and 100")
 
+    def _statement_driven_debt(self):
+        from budget_tracker.models import DebtKind
+
+        card = self.accts["Credit Card"]
+        other = next(c for c in self.repo.list_categories() if c.name == "Other")
+        self.repo.add_transaction(Transaction(
+            40_000, TransactionType.EXPENSE, other.id, date(2026, 11, 1),
+            "Purchase", account_id=card.id,
+        ))
+        debt = self.ctx.service.create_debt("Visa", DebtKind.CREDIT_CARD, 0, 2499, 10_500,
+                                            account_id=card.id)
+        self.ctx.service.record_minimum_payment(card.id, self.ctx.service.current_month(), 7_500)
+        return debt
+
+    def test_debt_editor_keeps_the_stored_minimum_for_a_statement_driven_card(self):
+        from budget_tracker.ui.views.debts import DebtEditor
+
+        debt = self._statement_driven_debt()
+        editor = DebtEditor(self.ctx, debt)
+        self.assertEqual(editor.minimum.value, "75.00")
+        editor.name.value = "Visa Signature"
+        editor._save(None)
+        stored = self.ctx.repo.get_debt(debt.id)
+        self.assertEqual((stored.name, stored.minimum_cents), ("Visa Signature", 10_500))
+
+    def test_debt_editor_disables_fields_driven_by_the_statement(self):
+        from budget_tracker.ui.views.debts import DebtEditor
+
+        debt = self._statement_driven_debt()
+        editor = DebtEditor(self.ctx, debt)
+        self.assertTrue(editor.balance.disabled)
+        self.assertTrue(editor.minimum.disabled)
+        self.assertEqual(editor.minimum.value, "75.00")
+        self.assertTrue(editor.minimum_note.visible)
+        self.assertIn("statement minimum", editor.minimum_note.value)
+
+    def test_no_payment_warning_when_minimums_and_extra_are_zero(self):
+        from budget_tracker.models import DebtKind
+        from budget_tracker.ui.views.debts import DebtsView
+
+        self.ctx.service.create_debt("Loan", DebtKind.PERSONAL, 100_000, 0, 0)
+        view = DebtsView(self.ctx)
+        self.assertIn("No payment is being made.", self._texts(view.plan_panel))
+
     def test_nav_indices_stay_in_sync_with_debts(self):
         from budget_tracker import main as shell
         self.assertEqual(shell.NAV_ITEMS[5][0], "Debts")

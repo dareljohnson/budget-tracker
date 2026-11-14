@@ -277,6 +277,51 @@ class TestDebtService(ServiceCase):
                                  original_balance_cents=None, account_id=None)
         self.assertEqual(self.repo.get_debt(debt.id).balance_cents, 50_000)
 
+    def test_editing_a_linked_debt_keeps_the_live_card_balance(self):
+        self.owe_card(50_000)
+        debt = self.service.create_debt("Visa", DebtKind.CREDIT_CARD, 0, 2499, 10_500,
+                                        account_id=self.card.id)
+        self.owe_card(20_000)
+        self.service.update_debt(debt.id, name="Visa Signature", kind=DebtKind.CREDIT_CARD,
+                                 balance_cents=1, apr_bps=2499, minimum_cents=10_500,
+                                 original_balance_cents=None, account_id=self.card.id)
+        self.assertEqual(self.service.debt_summary(debt.id).balance_cents, 70_000)
+        self.assertEqual(self.repo.get_debt(debt.id).balance_cents, 70_000)
+
+    def test_linking_a_debt_clears_its_tagged_payments(self):
+        debt = self.service.create_debt("Loan", DebtKind.PERSONAL, 100_000, 1200, 2_000)
+        tx = self.service.record_debt_payment(debt.id, self.checking.id, 20_000,
+                                              date(2026, 11, 10), today=date(2026, 11, 14))
+        self.assertEqual(self.repo.get_debt(debt.id).balance_cents, 80_000)
+        self.owe_card(50_000)
+        self.service.update_debt(debt.id, name="Loan", kind=DebtKind.CREDIT_CARD,
+                                 balance_cents=999, apr_bps=1200, minimum_cents=2_000,
+                                 original_balance_cents=None, account_id=self.card.id)
+        self.assertEqual(self.repo.list_debt_payments(debt.id), [])
+        self.assertEqual(self.repo.get_debt(debt.id).balance_cents, 50_000)
+        self.assertEqual(self.service.debt_summary(debt.id).balance_cents, 50_000)
+        self.repo.delete_transaction(tx.id)
+        self.assertEqual(self.repo.get_debt(debt.id).balance_cents, 50_000)
+
+    def test_negative_extra_is_rejected(self):
+        self.service.create_debt("Loan", DebtKind.PERSONAL, 100_000, 1200, 2_000)
+        with self.assertRaises(RepositoryError):
+            self.service.debt_plan(-1, DebtStrategy.AVALANCHE, today=date(2026, 11, 14))
+
+    def test_payment_rejects_non_positive_amounts_and_non_expense_categories(self):
+        debt = self.service.create_debt("Loan", DebtKind.PERSONAL, 100_000, 1200, 2_000)
+        income = next(c for c in self.repo.list_categories() if c.type is TransactionType.INCOME)
+        for amount in (0, -100):
+            with self.assertRaises(RepositoryError):
+                self.service.record_debt_payment(debt.id, self.checking.id, amount,
+                                                 date(2026, 11, 10), today=date(2026, 11, 14))
+        with self.assertRaises(RepositoryError):
+            self.service.record_debt_payment(debt.id, self.checking.id, 1_000,
+                                             date(2026, 11, 10), category_id=income.id,
+                                             today=date(2026, 11, 14))
+        self.assertEqual(self.repo.get_debt(debt.id).balance_cents, 100_000)
+        self.assertEqual(self.repo.list_transactions(), [])
+
     def test_second_debt_for_a_card_is_rejected(self):
         self.owe_card()
         self.service.create_debt("Visa", DebtKind.CREDIT_CARD, 0, 2499, 10_500, account_id=self.card.id)

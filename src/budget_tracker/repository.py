@@ -438,6 +438,10 @@ class Repository:
         )
         return [self._row_to_transaction(row) for row in rows]
 
+    def clear_debt_payments(self, debt_id: int) -> None:
+        with self.conn:
+            self.conn.execute("UPDATE transactions SET debt_id = NULL WHERE debt_id = ?", (debt_id,))
+
     def list_transactions(
         self,
         *,

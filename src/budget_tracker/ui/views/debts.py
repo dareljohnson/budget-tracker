@@ -163,6 +163,10 @@ class DebtsView:
             warnings.append(
                 ft.Text("Not paid off within 50 years at this payment.", size=12, color=EXPENSE_COLOR)
             )
+        if self.extra_cents == 0 and all(
+            summary.effective_minimum_cents == 0 for summary in summaries
+        ):
+            warnings.append(ft.Text("No payment is being made.", size=12, color=EXPENSE_COLOR))
         if warnings:
             controls.append(ft.Container(
                 content=ft.Column(warnings, spacing=4),
@@ -435,7 +439,9 @@ class DebtsView:
                           on_click=lambda _: self._confirm_delete(debt)),
         ]
         return card(
-            ft.Column([ft.Text(debt.name, size=16, weight=ft.FontWeight.W_600), *details,
+            ft.Column([ft.Text(debt.name, size=16, weight=ft.FontWeight.W_600),
+                       ft.Text(debt.kind.label, size=12, color=ft.Colors.ON_SURFACE_VARIANT),
+                       *details,
                        ft.Row(actions, alignment=ft.MainAxisAlignment.END, spacing=4, wrap=True)],
                       spacing=8),
             col={"xs": 12, "md": 6, "xl": 4},
@@ -483,6 +489,7 @@ class DebtEditor:
         self.apr = ft.TextField(label="APR (%)", value=format_percent(debt.apr_bps).rstrip("%") if debt else "")
         self.minimum = ft.TextField(label="Minimum / month", prefix_icon=ft.Icons.ATTACH_MONEY,
                                     value=f"{debt.minimum_cents / 100:.2f}" if debt and debt.minimum_cents else "")
+        self.minimum_note = ft.Text("", size=11, color=ft.Colors.ON_SURFACE_VARIANT, visible=False)
         self.original = ft.TextField(label="Original balance", hint_text="Optional",
                                      prefix_icon=ft.Icons.ATTACH_MONEY,
                                      value=(f"{debt.original_balance_cents / 100:.2f}"
@@ -499,8 +506,8 @@ class DebtEditor:
             modal=True,
             title=ft.Text("Edit Debt" if debt else "New Debt"),
             content=ft.Container(width=460, content=ft.Column(
-                [self.name, self.kind, self.balance, self.apr, self.minimum, self.original,
-                 self.link, self.error],
+                [self.name, self.kind, self.balance, self.apr, self.minimum, self.minimum_note,
+                 self.original, self.link, self.error],
                 spacing=14, tight=True, horizontal_alignment=ft.CrossAxisAlignment.STRETCH)),
             actions=[
                 ft.TextButton(content="Cancel", on_click=lambda _: ctx.page.pop_dialog()),
@@ -524,10 +531,14 @@ class DebtEditor:
             if status is not None:
                 self.minimum.value = f"{status.amount_cents / 100:.2f}"
                 self.minimum.disabled = True
+                self.minimum_note.value = f"Driven by the {month_label(status.month)} statement minimum"
+                self.minimum_note.visible = True
             else:
                 self.minimum.disabled = False
+                self.minimum_note.visible = False
         else:
             self.minimum.disabled = False
+            self.minimum_note.visible = False
 
     def open(self) -> None:
         self.ctx.page.show_dialog(self.dialog)
@@ -579,6 +590,9 @@ class DebtEditor:
         except ValueError as exc:
             self.original.error = str(exc)
             valid = False
+        if self.debt is not None and self.minimum.disabled:
+            # A statement minimum drives the plan; keep the stored fallback untouched.
+            minimum = self.debt.minimum_cents
         link = int(self.link.value) if self.link.value not in (None, "", "none") else None
         kind = DebtKind.CREDIT_CARD if link is not None else DebtKind(self.kind.value)
         if not valid:

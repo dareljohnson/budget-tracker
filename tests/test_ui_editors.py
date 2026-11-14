@@ -1322,6 +1322,37 @@ class TestEditors(unittest.TestCase):
         self.assertFalse(editor.minimum.disabled)
         self.assertFalse(editor.minimum_note.visible)
 
+    def test_debt_editor_keeps_a_typed_minimum_when_linking_a_loan(self):
+        from budget_tracker.models import Account, AccountKind, DebtKind
+        from budget_tracker.ui.views.debts import DebtEditor
+
+        loan = self.repo.add_account(Account("Mortgage", AccountKind.LOAN, opening_balance_cents=-100_000))
+        editor = DebtEditor(self.ctx, None)
+        editor.name.value = "Mortgage"
+        editor.kind.value = DebtKind.MORTGAGE.value
+        editor.apr.value = "3.65"
+        editor.minimum.value = "500.00"
+        editor.link.value = str(loan.id)
+        editor._link_changed()
+        self.assertEqual(editor.minimum.value, "500.00")
+        editor._save(None)
+        self.assertEqual(self.repo.list_debts()[0].minimum_cents, 50_000)
+
+    def test_debt_editor_resets_only_a_statement_driven_minimum_when_linking_a_loan(self):
+        from budget_tracker.models import Account, AccountKind
+        from budget_tracker.ui.views.debts import DebtEditor
+
+        loan = self.repo.add_account(Account("Mortgage", AccountKind.LOAN, opening_balance_cents=-100_000))
+        debt = self._statement_driven_debt()
+        editor = DebtEditor(self.ctx, debt)
+        self.assertTrue(editor.minimum.disabled)
+        self.assertEqual(editor.minimum.value, "75.00")
+        editor.link.value = str(loan.id)
+        editor._link_changed()
+        self.assertEqual(editor.minimum.value, "105.00")
+        self.assertFalse(editor.minimum.disabled)
+        self.assertFalse(editor.minimum_note.visible)
+
 
 def _dialog_rule_texts(dialog) -> list:
     return [row.content.controls[1] for row in dialog.content.content.controls]

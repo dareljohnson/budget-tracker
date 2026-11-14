@@ -591,6 +591,7 @@ class DebtEditor:
         account_id = int(self.link.value) if self.link.value not in (None, "", "none") else None
         account = self.ctx.repo.get_account(account_id) if account_id is not None else None
         is_loan = account is not None and account.kind is AccountKind.LOAN
+        was_statement_driven = self.minimum.disabled
         self.balance.disabled = account is not None
         # A card link fixes the kind to credit card; a loan link lets the user choose the loan kind.
         self.kind.disabled = account is not None and not is_loan
@@ -602,8 +603,9 @@ class DebtEditor:
             if is_loan:
                 if self.kind.value == DebtKind.CREDIT_CARD.value:
                     self.kind.value = DebtKind.PERSONAL.value
-                # A loan link uses the stored minimum; drop any card statement minimum in the field.
-                self.minimum.value = self._stored_minimum_value()
+                # Drop a card statement minimum, but keep a value the user typed for this debt.
+                if was_statement_driven:
+                    self.minimum.value = self._stored_minimum_value()
                 self.minimum.disabled = False
                 self.minimum_note.visible = False
             else:
@@ -618,7 +620,8 @@ class DebtEditor:
                     self.minimum.disabled = False
                     self.minimum_note.visible = False
         else:
-            self.minimum.value = self._stored_minimum_value()
+            if was_statement_driven:
+                self.minimum.value = self._stored_minimum_value()
             self.minimum.disabled = False
             self.minimum_note.visible = False
 

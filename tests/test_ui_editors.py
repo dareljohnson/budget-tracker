@@ -800,6 +800,12 @@ class TestEditors(unittest.TestCase):
         self.assertEqual(self.repo.list_category_rules(), [])
         self.assertIsNone(self.repo.suggest_category_id("Card Purchase Kroger #443", TransactionType.EXPENSE))
 
+    def test_accounts_grid_stretches_cards_to_equal_height(self):
+        from budget_tracker.ui.views.accounts import AccountsView
+
+        view = AccountsView(self.ctx)
+        self.assertEqual(view.grid.vertical_alignment, ft.CrossAxisAlignment.STRETCH)
+
     def test_minimum_payment_dialog_records_and_lists(self):
         from budget_tracker.ui.views.minimum_payments import MinimumPaymentDialog
 

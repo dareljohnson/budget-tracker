@@ -4,6 +4,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from PIL import Image
+
 from budget_tracker.receipts import scanner
 from budget_tracker.receipts.errors import ReceiptScanError
 
@@ -29,7 +31,7 @@ class TestScanner(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "scan.png"
             def fake_run(args, **kwargs):
-                target.write_bytes(b"\x89PNG\r\n\x1a\n")
+                Image.new("RGB", (4, 4), "white").save(target, format="PNG")
                 fake_run.args, fake_run.kwargs = args, kwargs
                 return mock.Mock(returncode=0, stdout="", stderr="")
             with mock.patch.object(scanner, "IS_WINDOWS", True), \
@@ -67,6 +69,37 @@ class TestScanner(unittest.TestCase):
                  mock.patch.object(scanner.subprocess, "run", return_value=ok):
                 with self.assertRaises(ReceiptScanError):
                     scanner.scan_receipt(target)
+
+    def test_driver_bmp_output_is_converted_to_png(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "scan.png"
+
+            def fake_run(args, **kwargs):
+                Image.new("RGB", (8, 8), "white").save(target, format="BMP")
+                return mock.Mock(returncode=0, stdout="", stderr="")
+
+            with mock.patch.object(scanner, "IS_WINDOWS", True), \
+                 mock.patch.object(scanner, "_powershell", return_value="powershell"), \
+                 mock.patch.object(scanner.subprocess, "run", side_effect=fake_run):
+                self.assertEqual(scanner.scan_receipt(target), target)
+            self.assertTrue(target.read_bytes().startswith(b"\x89PNG\r\n\x1a\n"))
+            with Image.open(target) as image:
+                self.assertEqual(image.format, "PNG")
+
+    def test_unreadable_scanner_output_raises(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "scan.png"
+
+            def fake_run(args, **kwargs):
+                target.write_bytes(b"not an image")
+                return mock.Mock(returncode=0, stdout="", stderr="")
+
+            with mock.patch.object(scanner, "IS_WINDOWS", True), \
+                 mock.patch.object(scanner, "_powershell", return_value="powershell"), \
+                 mock.patch.object(scanner.subprocess, "run", side_effect=fake_run):
+                with self.assertRaises(ReceiptScanError):
+                    scanner.scan_receipt(target)
+            self.assertFalse(target.exists())
 
     def test_scan_timeout_raises(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -74,6 +74,22 @@ class TestReceiptParser(unittest.TestCase):
         self.assertEqual(draft("SHOP", "DATE October 28, 2026", "TOTAL 1.00").occurred_on, date(2026, 10, 28))
         self.assertEqual(draft("SHOP", "October 28, 2026 14:35", "TOTAL 1.00").occurred_on, date(2026, 10, 28))
 
+    def test_month_name_without_spaces(self):
+        self.assertEqual(draft("SHOP", "September19,2026", "TOTAL 1.00").occurred_on, date(2026, 9, 19))
+
+    def test_total_label_and_amount_on_separate_lines(self):
+        result = draft(
+            "SHOP",
+            "Subtotal",
+            "$32.00",
+            "Sales Tax (8.9%)",
+            "$2.85",
+            "Total",
+            "$34.85",
+        )
+        self.assertEqual(result.total_cents, 3485)
+        self.assertEqual(result.missing, frozenset())
+
     def test_invalid_dates_fall_back(self):
         self.assertEqual(draft("SHOP", "2026-13-45", "TOTAL 1.00").occurred_on, TODAY)
         self.assertEqual(draft("SHOP", "13/45/2026", "TOTAL 1.00").occurred_on, TODAY)
@@ -82,6 +98,10 @@ class TestReceiptParser(unittest.TestCase):
         self.assertEqual(draft("SHOP", "VISA **** 1234", "TOTAL 1.00").card_last4, "1234")
         self.assertEqual(draft("SHOP", "XXXX-4321", "TOTAL 1.00").card_last4, "4321")
         self.assertEqual(draft("SHOP", "ending in 9876", "TOTAL 1.00").card_last4, "9876")
+
+    def test_card_brand_printed_next_to_last_four(self):
+        self.assertEqual(draft("SHOP", "Visa2895(Contactless)", "TOTAL 1.00").card_last4, "2895")
+        self.assertEqual(draft("SHOP", "MasterCard 1234", "TOTAL 1.00").card_last4, "1234")
 
     def test_full_card_number(self):
         result = draft("SHOP", "4111 1111 1111 1111", "TOTAL 1.00")

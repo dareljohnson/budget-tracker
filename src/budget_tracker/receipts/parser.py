@@ -15,20 +15,23 @@ from budget_tracker.statements.numbers import parse_amount, parse_date
 from budget_tracker.statements.ocr import normalize_amount_token
 
 _TOTAL_LINE = re.compile(r"\b(?:GRAND\s+TOTAL|TOTAL|AMOUNT\s+DUE|BALANCE\s+DUE)\b", re.IGNORECASE)
+_TOTAL_SUFFIX = re.compile(r"\bTOTAL\s+(?:SAVINGS|ITEMS|TAX|DISCOUNT|QTY|COUNT)\b", re.IGNORECASE)
 _ISO_DATE = re.compile(r"\b(\d{4})-(\d{2})-(\d{2})\b")
+_US_DATE = re.compile(r"^\d{1,2}/\d{1,2}/(?:\d{2}|\d{4})$")
+_MONTH_DATE = re.compile(r"\b([A-Za-z]+ \d{1,2}, \d{4})\b")
 _CARD_MASKS = (
     re.compile(r"[*xX]{4,}\s*[- ]?\s*(\d{4})\b"),
     re.compile(r"\bending\s+in\s+(\d{4})\b", re.IGNORECASE),
-    re.compile(r"\b(?:\d{4}[ -]?){3}(\d{4})\b"),
+    re.compile(r"\b\d{4}[ -]\d{4}[ -]\d{4}[ -](\d{4})\b"),
 )
 _CASH = re.compile(r"\bCASH\b", re.IGNORECASE)
 _PHONE = re.compile(r"\(?\d{3}\)?[ -]\d{3}[ -]\d{4}")
-_HEADER_NOISE = re.compile(r"\b(?:RECEIPT|INVOICE|STORE|PHONE|TEL|WWW|ORDER|THANK YOU)\b", re.IGNORECASE)
+_HEADER_NOISE = re.compile(r"^(?:RECEIPT|INVOICE|STORE|PHONE|TEL|WWW|ORDER|THANK YOU)\b", re.IGNORECASE)
 _WHOLE_DOLLARS = re.compile(r"^\$?\d+(?:,\d{3})*$")
 _MERCHANT_CUTS = (
     _PHONE,
     re.compile(r"#\d+"),
-    re.compile(r"\bSTORE\b", re.IGNORECASE),
+    re.compile(r"\bSTORE\b\s*#?\d", re.IGNORECASE),
     re.compile(r"\b\d{4}\b"),
 )
 
@@ -83,6 +86,8 @@ def _total_cents(lines: list[str]) -> int | None:
     """
     total: int | None = None
     for line in lines:
+        if _TOTAL_SUFFIX.search(line) is not None:
+            continue
         if _TOTAL_LINE.search(line) is None:
             continue
         best: int | None = None
@@ -109,31 +114,47 @@ def _amount(token: str) -> int | None:
 
 
 def _receipt_date(lines: list[str], today: date) -> date:
-    """Return the first ISO date, else the first parseable date, else ``today``."""
+    """Return the first explicit dated form, else ``today``.
+
+    Only a full ISO date, a month-name date with a year, or a numeric date that
+    includes a year counts. Yearless ``10/28`` fragments, card expiry months and
+    invalid calendar dates are not dates; they must not replace the anchor.
+    """
     for match in _ISO_DATE.finditer("\n".join(lines)):
         try:
             return date(int(match.group(1)), int(match.group(2)), int(match.group(3)))
         except ValueError:
             continue
     for line in lines:
-        parsed = _date_in(line, today)
-        if parsed is not None:
-            return parsed
+        month_match = _MONTH_DATE.search(line)
+        if month_match is not None:
+            parsed = parse_date(month_match.group(1), today)
+            if parsed is not None:
+                return parsed
+        for token in line.split():
+            if _US_DATE.match(token) is None:
+                continue
+            parsed = parse_date(token, today)
+            if parsed is not None:
+                return parsed
     return today
 
 
-def _date_in(line: str, today: date) -> date | None:
-    text = line.strip()
-    if not text:
-        return None
-    parsed = parse_date(text, today)
-    if parsed is not None:
-        return parsed
-    for token in text.split():
-        parsed = parse_date(token, today)
-        if parsed is not None:
-            return parsed
-    return None
+def _is_date_line(line: str) -> bool:
+    """Return whether a line's text is one of the recognised dated forms."""
+    if _ISO_DATE.search(line) is not None or _MONTH_DATE.search(line) is not None:
+        return True
+    return any(_US_DATE.match(token) for token in line.split())
+
+
+def _has_amount(line: str) -> bool:
+    """Return whether any token on a line looks like an amount."""
+    for token in line.split():
+        if parse_amount(token) is not None:
+            return True
+        if token.startswith("$") and _WHOLE_DOLLARS.match(token):
+            return True
+    return False
 
 
 def _merchant(lines: list[str]) -> str:
@@ -143,7 +164,7 @@ def _merchant(lines: list[str]) -> str:
         cleaned = _clean_merchant(line)
         if not cleaned:
             continue
-        if _TOTAL_LINE.search(line) or _HEADER_NOISE.search(line):
+        if _TOTAL_LINE.search(line) or _HEADER_NOISE.match(line):
             continue
         if "@" in line or "://" in line:
             continue
@@ -154,12 +175,19 @@ def _merchant(lines: list[str]) -> str:
         digits = sum(char.isdigit() for char in stripped)
         if letters < 2 or digits > letters:
             continue
+        if _is_date_line(stripped) or _has_amount(stripped):
+            continue
         return cleaned
     return ""
 
 
 def _clean_merchant(line: str) -> str:
-    """Trim address/phone/store noise appended to a merchant line."""
+    """Trim address/phone/store noise appended to a merchant line.
+
+    A store number suffix (``WALMART STORE #123``) is removed along with the
+    ``STORE`` word, while a merchant whose name ends in ``STORE`` (``BOOK STORE``)
+    is kept intact.
+    """
     text = " ".join(line.split())
     cut = len(text)
     for pattern in _MERCHANT_CUTS:

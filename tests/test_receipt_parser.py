@@ -54,8 +54,29 @@ class TestReceiptParser(unittest.TestCase):
     def test_iso_date(self):
         self.assertEqual(draft("SHOP", "2026-10-28", "TOTAL 1.00").occurred_on, date(2026, 10, 28))
 
+    def test_subtotal_and_total_savings_lines_are_ignored(self):
+        self.assertEqual(draft("SHOP", "SUBTOTAL 5.99", "TOTAL 6.47").total_cents, 647)
+        self.assertEqual(draft("SHOP", "TOTAL 12.50", "TOTAL SAVINGS 2.00").total_cents, 1250)
+        self.assertIsNone(draft("SHOP", "TOTAL SAVINGS 2.00").total_cents)
+
     def test_date_defaults_to_today(self):
         self.assertEqual(draft("SHOP", "TOTAL 1.00").occurred_on, TODAY)
+
+    def test_yearless_and_expiry_dates_are_not_dates(self):
+        self.assertEqual(draft("SHOP", "10/28", "TOTAL 1.00").occurred_on, TODAY)
+        self.assertEqual(draft("SHOP", "1/2 GAL MILK 3.49", "TOTAL 3.49").occurred_on, TODAY)
+        self.assertEqual(draft("SHOP", "VISA EXP 12/29", "TOTAL 1.00").occurred_on, TODAY)
+
+    def test_two_digit_year(self):
+        self.assertEqual(draft("SHOP", "10/28/26", "TOTAL 1.00").occurred_on, date(2026, 10, 28))
+
+    def test_month_name_with_label_or_time(self):
+        self.assertEqual(draft("SHOP", "DATE October 28, 2026", "TOTAL 1.00").occurred_on, date(2026, 10, 28))
+        self.assertEqual(draft("SHOP", "October 28, 2026 14:35", "TOTAL 1.00").occurred_on, date(2026, 10, 28))
+
+    def test_invalid_dates_fall_back(self):
+        self.assertEqual(draft("SHOP", "2026-13-45", "TOTAL 1.00").occurred_on, TODAY)
+        self.assertEqual(draft("SHOP", "13/45/2026", "TOTAL 1.00").occurred_on, TODAY)
 
     def test_card_masks(self):
         self.assertEqual(draft("SHOP", "VISA **** 1234", "TOTAL 1.00").card_last4, "1234")
@@ -66,6 +87,10 @@ class TestReceiptParser(unittest.TestCase):
         result = draft("SHOP", "4111 1111 1111 1111", "TOTAL 1.00")
         self.assertEqual(result.card_last4, "1111")
 
+    def test_long_reference_number_is_not_a_card(self):
+        self.assertIsNone(draft("SHOP", "AUTH CODE 5555123412345678", "TOTAL 1.00").card_last4)
+        self.assertIsNone(draft("SHOP", "TRANS ID 2026102814551234", "TOTAL 1.00").card_last4)
+
     def test_cash_receipt(self):
         result = draft("SHOP", "CASH 6.47", "TOTAL 6.47")
         self.assertTrue(result.paid_cash)
@@ -74,6 +99,14 @@ class TestReceiptParser(unittest.TestCase):
     def test_merchant_skips_header_address_and_phone(self):
         result = draft("STORE #123", "123 MAIN ST", "PHONE 555-123-4567", "CORNER MARKET", "TOTAL 5.00")
         self.assertEqual(result.merchant, "CORNER MARKET")
+
+    def test_merchant_skips_price_and_date_lines(self):
+        self.assertEqual(draft("STORE #123", "123 MAIN ST", "PHONE 555-123-4567", "MILK 3.49", "TOTAL 3.49").merchant, "")
+        self.assertEqual(draft("October 28, 2026", "CORNER MARKET", "TOTAL 5.00").merchant, "CORNER MARKET")
+
+    def test_merchant_strips_store_suffix_without_dropping_name(self):
+        self.assertEqual(draft("WALMART STORE #123", "TOTAL 5.00").merchant, "WALMART")
+        self.assertEqual(draft("BOOK STORE", "TOTAL 5.00").merchant, "BOOK STORE")
 
     def test_empty_ocr_text(self):
         result = parse_receipt([], today=TODAY)

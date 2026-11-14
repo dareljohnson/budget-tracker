@@ -514,7 +514,12 @@ class BudgetService:
             for category in categories:
                 if category.name.casefold() == wanted:
                     return category.id
-        return self._default_category_id(TransactionType.EXPENSE)
+        try:
+            return self._default_category_id(TransactionType.EXPENSE)
+        except RepositoryError:
+            if categories:
+                return categories[0].id
+            raise
 
     def create_receipt_transaction(
         self,

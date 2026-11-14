@@ -63,8 +63,24 @@ class TestReceiptServices(unittest.TestCase):
     def test_unmatched_card_does_not_fall_back_to_checking(self):
         self.assertIsNone(self.service.receipt_account(self.draft(card_last4="9999")))
 
+    def test_ambiguous_card_returns_none(self):
+        self.repo.add_account(Account("Visa", AccountKind.CREDIT_CARD, number_last4="1234"))
+        self.repo.add_account(Account("Mastercard", AccountKind.CREDIT_CARD, number_last4="1234"))
+        self.assertIsNone(self.service.receipt_account(self.draft(card_last4="1234")))
+
     def test_no_payment_method_uses_first_checking_account(self):
         self.assertEqual(self.service.receipt_account(self.draft()).id, self.checking.id)
+
+    def test_without_checking_uses_first_non_liability_account(self):
+        for account in (self.checking, self.cash):
+            self.repo.delete_account(account.id)
+        savings = self.repo.add_account(Account("Savings", AccountKind.SAVINGS))
+        self.assertEqual(self.service.receipt_account(self.draft()).id, savings.id)
+
+    def test_only_liabilities_returns_none(self):
+        for account in (self.checking, self.cash):
+            self.repo.delete_account(account.id)
+        self.assertIsNone(self.service.receipt_account(self.draft()))
 
     def test_cash_prefers_cash_account(self):
         self.assertEqual(self.service.receipt_account(self.draft(paid_cash=True)).id, self.cash.id)
@@ -96,13 +112,40 @@ class TestReceiptServices(unittest.TestCase):
             self.service.receipt_category_id(self.draft(merchant="SHELL FUEL")), transportation.id
         )
 
+    def test_pizza_merchant_maps_to_dining_out(self):
+        dining = next(c for c in self.repo.list_categories() if c.name == "Dining Out")
+        self.assertEqual(
+            self.service.receipt_category_id(self.draft(merchant="Joe's Pizza")), dining.id
+        )
+
+    def test_pharmacy_merchant_maps_to_health(self):
+        health = next(c for c in self.repo.list_categories() if c.name == "Health")
+        self.assertEqual(
+            self.service.receipt_category_id(self.draft(merchant="CVS Pharmacy")), health.id
+        )
+
     def test_unknown_merchant_uses_other_category(self):
         self.assertEqual(
             self.service.receipt_category_id(self.draft(merchant="Mystery Bazaar")), self.other.id
         )
 
+    def test_renamed_keyword_category_falls_through_to_other(self):
+        self.groceries.name = "Food"
+        self.repo.update_category(self.groceries)
+        self.assertEqual(
+            self.service.receipt_category_id(self.draft(merchant="Corner Market")), self.other.id
+        )
+
+    def test_deleted_other_category_falls_back_to_first_expense_category(self):
+        self.repo.delete_category(self.other.id)
+        first = self.repo.list_categories(TransactionType.EXPENSE)[0]
+        self.assertEqual(
+            self.service.receipt_category_id(self.draft(merchant="Mystery Bazaar")), first.id
+        )
+
     # ---------- creation ----------
     def test_create_writes_expense_with_receipt_and_keeps_source(self):
+        source_bytes = self.png.read_bytes()
         tx = self.service.create_receipt_transaction(
             amount_cents=647,
             occurred_on=date(2026, 10, 28),
@@ -114,8 +157,22 @@ class TestReceiptServices(unittest.TestCase):
         self.assertEqual(tx.type, TransactionType.EXPENSE)
         self.assertRegex(tx.receipt_path, r"^receipts/[0-9a-f]{32}\.png$")
         self.assertTrue((Path(self.tmp) / tx.receipt_path).is_file())
-        self.assertTrue(self.png.is_file())
+        self.assertEqual(len(self._receipt_files()), 1)
+        self.assertEqual(self.png.read_bytes(), source_bytes)
         self.assertEqual(self.repo.get_transaction(tx.id).receipt_path, tx.receipt_path)
+
+    def test_missing_source_raises_and_saves_nothing(self):
+        with self.assertRaises(OSError):
+            self.service.create_receipt_transaction(
+                amount_cents=647,
+                occurred_on=date(2026, 10, 28),
+                description="Corner Market",
+                account_id=self.checking.id,
+                category_id=self.groceries.id,
+                source_path=Path(self.tmp) / "missing.png",
+            )
+        self.assertEqual(self.repo.list_transactions(), [])
+        self.assertEqual(self._receipt_files(), [])
 
     def test_zero_amount_is_rejected_before_storing(self):
         with self.assertRaises(RepositoryError):
@@ -167,19 +224,33 @@ class TestReceiptServices(unittest.TestCase):
         self.assertFalse(self._stored(old).exists())
         self.assertEqual(self.repo.get_transaction(tx.id).receipt_path, attached)
 
+    def test_attach_without_old_receipt_stores_one(self):
+        tx = self._expense()
+
+        attached = self.service.attach_receipt(tx.id, self.png)
+
+        self.assertTrue(self._stored(attached).is_file())
+        self.assertEqual(self.repo.get_transaction(tx.id).receipt_path, attached)
+        self.assertEqual(len(self._receipt_files()), 1)
+
     def test_attach_to_missing_transaction_raises(self):
         with self.assertRaises(RepositoryError):
             self.service.attach_receipt(9999, self.png)
         self.assertEqual(self._receipt_files(), [])
 
-    def test_attach_failure_removes_new_copy(self):
+    def test_attach_failure_removes_new_copy_and_keeps_old_receipt(self):
         tx = self._expense()
+        old = store_receipt(self.png)
+        self.repo.set_transaction_receipt(tx.id, old)
+
         with mock.patch.object(
             self.repo, "set_transaction_receipt", side_effect=RepositoryError("boom")
         ):
             with self.assertRaises(RepositoryError):
                 self.service.attach_receipt(tx.id, self.png)
-        self.assertEqual(self._receipt_files(), [])
+
+        self.assertEqual(self._receipt_files(), [self._stored(old)])
+        self.assertEqual(self.repo.get_transaction(tx.id).receipt_path, old)
 
     def test_remove_clears_path_and_deletes_file(self):
         tx = self._expense()

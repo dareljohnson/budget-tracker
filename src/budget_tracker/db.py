@@ -190,6 +190,18 @@ MIGRATIONS: list[str] = [
     CREATE INDEX ix_transactions_transfer_account ON transactions(transfer_account_id);
     CREATE INDEX ix_transactions_statement ON transactions(statement_id);
     """,
+    # v5: the minimum payment printed on each credit card statement, one row per card and month.
+    # Paid status is derived from transfers into the card, not stored here.
+    """
+    CREATE TABLE minimum_payments (
+        id           INTEGER PRIMARY KEY,
+        account_id   INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        month        TEXT NOT NULL CHECK (month GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]'),
+        amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
+        UNIQUE (account_id, month)
+    );
+    CREATE INDEX ix_minimum_payments_account ON minimum_payments(account_id, month DESC);
+    """,
 ]
 
 DEFAULT_EXTRA_ACCOUNTS: list[tuple[str, str, str]] = [

@@ -16,6 +16,8 @@ from .models import (
     CategoryTotal,
     DueBill,
     MonthTotal,
+    MinimumPayment,
+    MinimumPaymentStatus,
     Reconciliation,
     Statement,
     Summary,
@@ -117,6 +119,74 @@ class BudgetService:
                 note=note,
             )
         )
+
+    # ---------- credit card minimum payments ----------
+    def record_minimum_payment(self, account_id: int, month: str, amount_cents: int) -> MinimumPayment:
+        """Record or update the minimum printed on one credit card statement."""
+        account = self.repo.get_account(account_id)
+        if account is None:
+            raise RepositoryError("Account not found")
+        if not account.kind.is_liability:
+            raise RepositoryError("Minimum payments apply to credit cards only")
+        try:
+            datetime.strptime(month, "%Y-%m")
+        except ValueError as exc:
+            raise RepositoryError("Choose a valid month") from exc
+        if amount_cents <= 0:
+            raise RepositoryError("Minimum payment must be greater than zero")
+        return self.repo.set_minimum_payment(account_id, month, amount_cents)
+
+    def delete_minimum_payment(self, account_id: int, month: str) -> None:
+        self.repo.delete_minimum_payment(account_id, month)
+
+    def minimum_payment_statuses(self, account_id: int) -> list[MinimumPaymentStatus]:
+        """Every recorded month, newest first, with payments applied oldest-unpaid first.
+
+        A payment in the month after the statement still counts toward that statement's minimum,
+        a payment above a minimum rolls into the next recorded month, and no payment is counted
+        twice. Only transfers into the card count; cash advances (transfers out) do not.
+        """
+        minimums = self.repo.list_minimum_payments(account_id)
+        if not minimums:
+            return []
+        first_month = minimums[0].month
+        payments = [
+            (day, cents)
+            for day, cents in self.repo.card_payments(account_id)
+            if day.strftime("%Y-%m") >= first_month
+        ]
+        paid = {minimum.month: 0 for minimum in minimums}
+        index = 0
+        carried = 0
+        for _day, cents in payments:
+            available = cents + carried
+            while index < len(minimums) and available:
+                minimum = minimums[index]
+                outstanding = minimum.amount_cents - paid[minimum.month]
+                applied = min(available, outstanding)
+                paid[minimum.month] += applied
+                available -= applied
+                if paid[minimum.month] >= minimum.amount_cents:
+                    index += 1
+                else:
+                    break
+            carried = available
+        return [
+            MinimumPaymentStatus(
+                month=minimum.month,
+                amount_cents=minimum.amount_cents,
+                paid_cents=paid[minimum.month],
+            )
+            for minimum in reversed(minimums)
+        ]
+
+    def current_minimum_payment(self, account_id: int) -> MinimumPaymentStatus | None:
+        """The current month's minimum when recorded, otherwise the most recent one."""
+        statuses = self.minimum_payment_statuses(account_id)
+        if not statuses:
+            return None
+        current = self.current_month()
+        return next((status for status in statuses if status.month == current), statuses[0])
 
     def adjust_balance(self, account_id: int, as_of: date, amount_cents: int, note: str = "") -> Transaction:
         """Post a signed correction that moves the account balance only."""

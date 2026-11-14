@@ -4,7 +4,6 @@ from budget_tracker.debt_planner import (
     MAX_MONTHS,
     DebtInput,
     DebtPayoff,
-    DebtPlan,
     DebtStrategy,
     monthly_interest_cents,
     plan_payoff,
@@ -35,7 +34,7 @@ class TestPayoff(unittest.TestCase):
         self.assertEqual(plan.debt_free_month, "2027-10")
         self.assertEqual(plan.total_interest_cents, 5_898)
         self.assertEqual(plan.total_paid_cents, 105_898)
-        self.assertEqual([(d.debt.name, month) for d, month in plan.payoff_order], [("A", 11)])
+        self.assertEqual([(d.name, month) for d, month in plan.payoff_order], [("A", 11)])
         self.assertEqual(plan.schedule[0], DebtPayoff(1, 91_000, 1_000, 10_000))
         self.assertEqual(plan.schedule[-1], DebtPayoff(11, 0, 58, 5_898))
         self.assertEqual(plan.schedule[-1].month, plan.months)
@@ -47,15 +46,15 @@ class TestPayoff(unittest.TestCase):
         snowball = plan_payoff([c, d], extra_cents=5_000, strategy=DebtStrategy.SNOWBALL, start_month="2026-11")
         self.assertEqual((avalanche.months, avalanche.total_interest_cents), (11, 7_304))
         self.assertEqual((snowball.months, snowball.total_interest_cents), (11, 9_151))
-        self.assertEqual([(x.debt.name, m) for x, m in avalanche.payoff_order], [("C", 8), ("D", 11)])
-        self.assertEqual([(x.debt.name, m) for x, m in snowball.payoff_order], [("D", 6), ("C", 11)])
+        self.assertEqual([(x.name, m) for x, m in avalanche.payoff_order], [("C", 8), ("D", 11)])
+        self.assertEqual([(x.name, m) for x, m in snowball.payoff_order], [("D", 6), ("C", 11)])
 
     def test_a_cleared_minimum_rolls_into_the_next_debt(self):
         e = entry("E", 10_000, 0, 2_500)
         f = entry("F", 100_000, 0, 5_000)
         plan = plan_payoff([e, f], extra_cents=0, strategy=DebtStrategy.AVALANCHE, start_month="2026-11")
         self.assertEqual((plan.months, plan.total_paid_cents, plan.total_interest_cents), (15, 110_000, 0))
-        self.assertEqual([(x.debt.name, m) for x, m in plan.payoff_order], [("E", 4), ("F", 15)])
+        self.assertEqual([(x.name, m) for x, m in plan.payoff_order], [("E", 4), ("F", 15)])
 
     def test_zero_minimum_with_extra_pays_off(self):
         h = entry("H", 10_000, 0, 0)

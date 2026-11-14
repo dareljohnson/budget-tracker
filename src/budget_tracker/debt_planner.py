@@ -46,7 +46,7 @@ class DebtPlan:
     total_paid_cents: int
     finished: bool
     schedule: list[DebtPayoff]
-    payoff_order: list[tuple[DebtInput, int]]
+    payoff_order: list[tuple[Debt, int]]
     first_target: Debt | None
 
 
@@ -75,7 +75,7 @@ def plan_payoff(
     month = 0
     total_interest = total_paid = 0
     schedule: list[DebtPayoff] = []
-    payoff_order: list[tuple[DebtInput, int]] = []
+    payoff_order: list[tuple[Debt, int]] = []
     while any(b > 0 for b in balances) and month < max_months:
         month += 1
         interest_this_month = 0
@@ -102,8 +102,8 @@ def plan_payoff(
                 remainder -= amount
         total_paid += paid
         for i in order:
-            if balances[i] == 0 and not any(entry is entries[i] for entry, _ in payoff_order):
-                payoff_order.append((entries[i], month))
+            if balances[i] == 0 and not any(debt is entries[i].debt for debt, _ in payoff_order):
+                payoff_order.append((entries[i].debt, month))
         schedule.append(DebtPayoff(month, sum(balances), interest_this_month, paid))
     finished = all(balance == 0 for balance in balances)
     return DebtPlan(

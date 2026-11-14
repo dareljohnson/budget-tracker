@@ -155,6 +155,7 @@ class DebtsView:
         plans = self.ctx.service.debt_plans(self.extra_cents)
         current = plans[self.strategy]
         self._payoff_months = {debt.id: month for debt, month in current.payoff_order}
+        included = [summary for summary in summaries if summary.balance_cents > 0]
 
         controls: list[ft.Control] = [section_title("Payoff plan")]
         warnings = [
@@ -194,15 +195,21 @@ class DebtsView:
             wrap=True,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
         ))
-        controls.append(self._strategy_cards(plans))
+        controls.append(self._strategy_cards(plans, len(included)))
         controls.append(section_title("What extra buys"))
         controls.append(self._comparison_table())
-        controls.append(section_title("Schedule"))
+        controls.append(self._included_table(included))
+        controls.append(self._payoff_table(included))
+        controls.append(section_title("Combined monthly schedule"))
+        controls.append(ft.Text(
+            "Payments and balances below are the total across every debt listed above.",
+            size=12,
+            color=ft.Colors.ON_SURFACE_VARIANT,
+        ))
         controls.append(self._yearly_table(current))
         controls.append(self._monthly_table(current))
         if self.schedule_limit < len(current.schedule):
             controls.append(ft.TextButton(content="Show all months", on_click=self._show_more))
-        controls.append(self._payoff_list(current))
         self.plan_panel.controls = [card(ft.Column(controls, spacing=GAP), col=12)]
 
     def _extra_selector(self) -> ft.Dropdown:
@@ -223,19 +230,25 @@ class DebtsView:
             on_select=self._extra_selected,
         )
 
-    def _strategy_cards(self, plans: dict[DebtStrategy, DebtPlan]) -> ft.ResponsiveRow:
+    def _strategy_cards(
+        self, plans: dict[DebtStrategy, DebtPlan], debt_count: int
+    ) -> ft.ResponsiveRow:
         savings = savings_cents(plans[DebtStrategy.AVALANCHE], plans[DebtStrategy.SNOWBALL])
         lower = min(plans.values(), key=lambda plan: plan.total_interest_cents)
         return ft.ResponsiveRow(
             [
-                self._strategy_card(plan, savings if plan.strategy == lower.strategy else 0)
+                self._strategy_card(
+                    plan,
+                    savings if plan.strategy == lower.strategy else 0,
+                    debt_count,
+                )
                 for plan in plans.values()
             ],
             spacing=GAP,
             run_spacing=GAP,
         )
 
-    def _strategy_card(self, plan: DebtPlan, savings: int = 0) -> ft.Container:
+    def _strategy_card(self, plan: DebtPlan, savings: int = 0, debt_count: int = 0) -> ft.Container:
         selected = plan.strategy == self.strategy
         debt_free = (
             month_label(plan.debt_free_month) if plan.debt_free_month else "Not within 50 years"
@@ -249,6 +262,11 @@ class DebtsView:
                 color=SEED_COLOR if plan.finished else EXPENSE_COLOR,
             ),
             ft.Text(f"{plan.months} months", size=12, color=ft.Colors.ON_SURFACE_VARIANT),
+            ft.Text(
+                f"Covers {debt_count} debt{'s' if debt_count != 1 else ''}",
+                size=12,
+                color=ft.Colors.ON_SURFACE_VARIANT,
+            ),
             ft.Text(f"Interest {format_money(plan.total_interest_cents)}", size=12),
             ft.Text(f"Paid {format_money(plan.total_paid_cents)}", size=12),
             ft.Text(
@@ -392,22 +410,58 @@ class DebtsView:
             ))
         return ft.Column(rows, spacing=2)
 
-    def _payoff_list(self, plan: DebtPlan) -> ft.Column:
-        controls: list[ft.Control] = [section_title("Debt payoff order")]
-        if not plan.payoff_order:
-            controls.append(ft.Text(
-                "No individual payoff dates — the plan does not finish.",
-                size=12,
+    def _included_table(self, summaries: list[DebtSummary]) -> ft.Column:
+        widths = [200, 130, 90, 120]
+        rows: list[ft.Control] = [
+            self._table_row(["Debt", "Balance", "APR", "Minimum"], widths, header=True)
+        ]
+        for summary in summaries:
+            rows.append(self._table_row(
+                [
+                    summary.debt.name,
+                    format_money(summary.balance_cents),
+                    format_percent(summary.debt.apr_bps),
+                    format_money(summary.effective_minimum_cents),
+                ],
+                widths,
+            ))
+        return ft.Column(
+            [
+                section_title("Included in this plan"),
+                ft.Text(
+                    "The payoff order and combined schedule below cover every debt in this table.",
+                    size=12,
+                    color=ft.Colors.ON_SURFACE_VARIANT,
+                ),
+                *rows,
+            ],
+            spacing=4,
+        )
+
+    def _payoff_table(self, summaries: list[DebtSummary]) -> ft.Column:
+        widths = [200, 130, 120, 150]
+        rows: list[ft.Control] = [
+            self._table_row(["Debt", "Balance", "Minimum", "Payoff"], widths, header=True)
+        ]
+        for summary in summaries:
+            month = self._payoff_months.get(summary.debt.id)
+            payoff = month_label(shift_month(self._start_month, month)) if month else "—"
+            rows.append(self._table_row(
+                [
+                    summary.debt.name,
+                    format_money(summary.balance_cents),
+                    format_money(summary.effective_minimum_cents),
+                    payoff,
+                ],
+                widths,
+            ))
+        if len(self._payoff_months) < len(summaries):
+            rows.append(ft.Text(
+                "— means the plan does not pay this debt off within 50 years.",
+                size=11,
                 color=ft.Colors.ON_SURFACE_VARIANT,
             ))
-        controls.extend(
-            ft.Text(
-                f"{debt.name} — {month_label(shift_month(self._start_month, month))}",
-                size=12,
-            )
-            for debt, month in plan.payoff_order
-        )
-        return ft.Column(controls, spacing=4)
+        return ft.Column([section_title("Debt payoff order"), *rows], spacing=4)
 
     def _debt_card(self, summary: DebtSummary, payoff_month: int | None = None) -> ft.Container:
         debt = summary.debt

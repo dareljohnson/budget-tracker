@@ -16,6 +16,7 @@ from ...repository import RepositoryError
 from ..components import card, confirm_dialog, date_field, empty_state, page_header, transaction_row
 from ..context import AppContext
 from ..theme import EXPENSE_COLOR, GAP, INCOME_COLOR, fs
+from .receipts import ReceiptImportDialog
 from .statement_import import StatementImportDialog, open_imported_statements
 
 ALL = "all"
@@ -50,6 +51,12 @@ class TransactionsView:
         )
         self.list_column = ft.Column(spacing=2)
         self.footer = ft.Row(spacing=24)
+        self.receipt_button = ft.FilledTonalButton(
+            content="Scan receipt",
+            icon=ft.Icons.DOCUMENT_SCANNER,
+            tooltip="Scan or import a paper receipt",
+            on_click=self._scan_receipt,
+        )
         self.import_button = ft.FilledTonalButton(
             content="Import statement",
             icon=ft.Icons.UPLOAD_FILE,
@@ -63,6 +70,7 @@ class TransactionsView:
                     "Transactions",
                     "Track every dollar coming in and going out",
                     [
+                        self.receipt_button,
                         self.import_button,
                         ft.OutlinedButton(
                             content="Imported statements…",
@@ -184,6 +192,17 @@ class TransactionsView:
     def _import_closed(self) -> None:
         self.import_button.disabled = False
         self.import_button.update()
+
+    async def _scan_receipt(self, _: ft.Event) -> None:
+        """Open the capture dialog; the button is re-enabled when that dialog closes."""
+        self.receipt_button.disabled = True
+        self.receipt_button.update()
+        dialog = ReceiptImportDialog(self.ctx, on_close=self._receipt_closed)
+        await dialog.open()
+
+    def _receipt_closed(self) -> None:
+        self.receipt_button.disabled = False
+        self.receipt_button.update()
 
     def _open_receipt(self, tx: Transaction) -> None:
         if not tx.receipt_path:

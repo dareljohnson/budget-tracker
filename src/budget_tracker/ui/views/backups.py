@@ -60,13 +60,15 @@ def _size_label(size_bytes: int) -> str:
 
 
 def _status_line() -> tuple[str, str | None]:
-    """Return the copy and color for the last backup/restore recorded by the core."""
+    """Return the copy and color for the last backup or restore recorded by the core."""
     status = read_status()
     if not status:
         return "No backup has run yet. Back up now to protect your data.", None
     when = _date_label(str(status.get("at") or ""))
-    kind = _kind_label(str(status.get("kind") or ""))
-    prefix = f"Last backup {when} · {kind}" if when else f"Last backup · {kind}"
+    kind = str(status.get("kind") or "")
+    label = "Last restore" if kind == "restore" else "Last backup"
+    detail = _kind_label(kind)
+    prefix = f"{label} {when} · {detail}" if when else f"{label} · {detail}"
     if status.get("ok"):
         return prefix, INCOME_COLOR
     message = str(status.get("message") or "The last backup failed.")
@@ -175,7 +177,6 @@ class BackupsDialog:
 
     # ---------- opening and closing ----------
     def open(self) -> None:
-        self._refresh()
         self.ctx.page.show_dialog(self.dialog)
 
     def _close(self) -> None:
@@ -344,13 +345,12 @@ class BackupsDialog:
             self._show_restart_prompt()
 
     def _show_restart_prompt(self) -> None:
-        def close_and_restart(_: ft.Event) -> None:
+        async def close_and_restart(_: ft.Event) -> None:
             self.ctx.page.pop_dialog()
             self._close()
-            window = getattr(self.ctx.page, "window", None)
-            close = getattr(window, "close", None)
+            close = getattr(getattr(self.ctx.page, "window", None), "close", None)
             if callable(close):
-                close()
+                await close()
 
         self.ctx.page.show_dialog(
             ft.AlertDialog(

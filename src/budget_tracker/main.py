@@ -12,7 +12,11 @@ from pathlib import Path
 import flet as ft
 
 from . import __version__
-from .backups import apply_pending_restore, create_backup_if_due
+from .backups import (
+    RESTORE_APPLIED_MESSAGE,
+    apply_pending_restore,
+    create_backup_if_due,
+)
 from .config import APP_NAME, db_path
 from .db import connect
 from .formatting import format_money
@@ -251,7 +255,7 @@ def main(page: ft.Page) -> None:
     rail = ft.NavigationRail(
         selected_index=0,
         label_type=ft.NavigationRailLabelType.ALL,
-        min_width=96,
+        min_width=120,
         group_alignment=-0.85,
         indicator_color=ft.Colors.PRIMARY_CONTAINER,
         selected_label_text_style=ft.TextStyle(
@@ -351,7 +355,7 @@ def main(page: ft.Page) -> None:
     if restore_message:
         ctx.notify(
             restore_message,
-            error=not restore_message.startswith("Restore applied"),
+            error=restore_message != RESTORE_APPLIED_MESSAGE,
         )
     show_due_bills_alert(ctx, lambda: show_view(BILLS_INDEX))
 

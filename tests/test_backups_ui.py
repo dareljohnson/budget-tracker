@@ -24,7 +24,7 @@ class _PageStub:
     def __init__(self) -> None:
         self.overlay: list = []
         self.added: list[tuple] = []
-        self.window = SimpleNamespace(close=mock.Mock())
+        self.window = SimpleNamespace(close=mock.AsyncMock())
         self.run_task = mock.Mock(return_value=mock.Mock())
 
     def show_dialog(self, control) -> None:
@@ -182,6 +182,22 @@ class TestBackupsDialogList(_BackupTestCase):
 
         self.assertIn("disk full", dialog.status_line.value)
 
+    def test_status_line_reports_the_last_restore(self):
+        backups.write_status("restore", True, backups.RESTORE_APPLIED_MESSAGE)
+
+        dialog = self._dialog()
+
+        self.assertIn("Last restore", dialog.status_line.value)
+        self.assertNotIn("Last backup", dialog.status_line.value)
+
+    def test_status_line_calls_a_pre_migration_copy_a_backup(self):
+        backups.write_status("pre-migration", True, "pre-migration copy")
+
+        dialog = self._dialog()
+
+        self.assertIn("Last backup", dialog.status_line.value)
+        self.assertNotIn("Last restore", dialog.status_line.value)
+
     def test_status_line_invites_a_first_backup(self):
         dialog = self._dialog()
 
@@ -336,9 +352,9 @@ class TestRestore(_BackupTestCase):
         asyncio.run(_find_button(self.page.open_dialogs[-1], "Restore").on_click(None))
 
         restart = self.page.open_dialogs[-1]
-        _find_button(restart, "Close and restart").on_click(None)
+        asyncio.run(_find_button(restart, "Close and restart").on_click(None))
 
-        self.page.window.close.assert_called_once()
+        self.page.window.close.assert_awaited_once_with()
 
 
 class TestDialogFooter(_BackupTestCase):
@@ -397,14 +413,23 @@ class TestMainWiring(unittest.TestCase):
 
     def test_apply_pending_restore_runs_before_connect_and_notifies_after_add(self):
         page = _PageStub()
-        message = "Restore applied; your restored data is in place."
+        message = backups.RESTORE_APPLIED_MESSAGE
 
         order = self._run_main(page, restore_message=message)
 
         self.assertEqual(order[:2], ["apply", "connect"])
         self.assertIn("add", order)
         self.assertIn(message, [bar.content.value for bar in page.snackbars])
+        self.assertNotIn(message, page.errors)
         self.assertLess(order.index("add"), order.index("show"))
+
+    def test_failed_startup_restore_renders_as_an_error(self):
+        page = _PageStub()
+        message = "Restore failed: disk full"
+
+        self._run_main(page, restore_message=message)
+
+        self.assertIn(message, page.errors)
 
     def test_rail_trailing_row_includes_the_backup_button(self):
         page = _PageStub()
@@ -418,6 +443,31 @@ class TestMainWiring(unittest.TestCase):
         backup = next(c for c in row.controls if c.tooltip == "Backups")
         self.assertIsInstance(backup, ft.IconButton)
         self.assertEqual(backup.icon, ft.Icons.BACKUP)
+        self.assertEqual(rail.min_width, 120)
+
+    def test_rail_backup_button_opens_exactly_one_dialog(self):
+        from budget_tracker import main as shell
+
+        page = _PageStub()
+        opened: list = []
+
+        class FakeDialog:
+            def __init__(self, ctx):
+                opened.append(ctx)
+
+            def open(self):
+                pass
+
+        with mock.patch.object(shell, "BackupsDialog", FakeDialog):
+            self._run_main(page)
+            [row] = page.added[0]
+            rail = next(c for c in row.controls if isinstance(c, ft.NavigationRail))
+            backup = next(
+                c for c in rail.trailing.controls[0].controls if c.tooltip == "Backups"
+            )
+            backup.on_click(None)
+
+        self.assertEqual(len(opened), 1)
 
     def test_main_starts_the_auto_backup_task(self):
         from budget_tracker import main as shell

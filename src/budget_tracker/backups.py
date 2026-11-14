@@ -30,6 +30,7 @@ PRE_MIGRATION_KEEP = 3
 REPLACED_KEEP = 2
 DUE_AFTER_SECONDS = 24 * 60 * 60
 DB_FILENAME = "budget_tracker.db"
+RESTORE_APPLIED_MESSAGE = "Restore applied; your restored data is in place."
 
 BACKUP_LOCK = threading.Lock()
 
@@ -597,7 +598,7 @@ def _apply_pending_restore() -> str | None:
 
         _clear_marker()
         _rmtree(staging)
-        message = "Restore applied; your restored data is in place."
+        message = RESTORE_APPLIED_MESSAGE
         write_status("restore", True, message)
         return message
     except Exception as exc:  # noqa: BLE001 - keep the app usable on any failure

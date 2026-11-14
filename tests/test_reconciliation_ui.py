@@ -4,8 +4,9 @@ import asyncio
 import os
 import tempfile
 import unittest
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 import flet as ft
@@ -197,10 +198,11 @@ class TestStrongSingleCandidate(MatchPanelTestCase):
 
         with mock.patch.object(
             self.ctx.service, "attach_receipt", wraps=self.ctx.service.attach_receipt
-        ) as attach:
+        ) as attach, mock.patch.object(self.ctx, "data_changed") as changed:
             dialog._save(None)
 
         attach.assert_called_once_with(candidate.id, self.png)
+        changed.assert_called_once_with()
         self.assertEqual(len(self.repo.list_transactions()), before)
         stored = self.repo.get_transaction(candidate.id).receipt_path
         self.assertTrue(stored.startswith("receipts/"))
@@ -317,7 +319,7 @@ class TestCandidateSearch(MatchPanelTestCase):
         self.assertFalse(dialog.match_panel.visible)
         self.assertFalse(dialog._match_mode)
 
-    def test_changing_the_amount_recomputes_candidates_and_mode(self):
+    def test_editing_the_amount_in_create_mode_stays_in_create_mode(self):
         candidate = self._add_expense(amount_cents=1200, description="Corner Market")
         dialog = self._dialog()
         dialog._source_path = self.png
@@ -327,9 +329,62 @@ class TestCandidateSearch(MatchPanelTestCase):
         dialog.amount.value = "12.00"
         dialog.amount.on_change(None)  # type: ignore[operator]
 
+        # The panel updates, but the owner is still creating: no surprise attach mode.
         self.assertTrue(dialog.match_panel.visible)
-        self.assertEqual(dialog._selected_match.transaction.id, candidate.id)
+        self.assertIsNone(dialog._selected_match)
+        self.assertIsNone(dialog.match_group.value)
+        self.assertFalse(dialog._match_mode)
+        self.assertFalse(dialog.amount.disabled)
+        self.assertEqual(dialog.save_button.content, "Save")
+        self.assertFalse(dialog.save_button.disabled)
+
+    def test_create_new_then_editing_the_amount_stays_in_create_mode(self):
+        self._add_expense()
+        dialog = self._dialog()
+        dialog._source_path = self.png
+        dialog._install(self._draft())
         self.assertTrue(dialog._match_mode)
+
+        dialog.create_new_button.on_click(None)
+        dialog.amount.value = "6.47"
+        dialog.amount.on_change(None)  # type: ignore[operator]
+
+        self.assertTrue(dialog.match_panel.visible)
+        self.assertIsNone(dialog._selected_match)
+        self.assertFalse(dialog._match_mode)
+        self.assertFalse(dialog.amount.disabled)
+        self.assertEqual(dialog.save_button.content, "Save")
+        self.assertFalse(dialog.save_button.disabled)
+
+    def test_calendar_picked_date_refreshes_and_clears_a_stale_match(self):
+        self._add_expense()
+        dialog = self._dialog()
+        dialog._source_path = self.png
+        dialog._install(self._draft())
+        self.assertIsNotNone(dialog._selected_match)
+
+        dialog.date.suffix.on_click(None)  # type: ignore[union-attr]
+        picker = next(c for c in self.page.overlay if isinstance(c, ft.DatePicker))
+        picker.on_change(
+            SimpleNamespace(control=SimpleNamespace(value=datetime(2026, 11, 20)))
+        )
+
+        self.assertEqual(dialog.date.value, "2026-11-20")
+        self.assertIsNone(dialog._selected_match)
+        self.assertFalse(dialog.match_panel.visible)
+        self.assertFalse(dialog._match_mode)
+
+    def test_match_panel_text_uses_explicit_sizes(self):
+        from budget_tracker.ui.theme import fs
+
+        self._add_expense()
+        dialog = self._dialog()
+        dialog._install(self._draft())
+
+        self.assertEqual(dialog.match_title.size, fs(14))
+        self.assertEqual(dialog.match_note.size, fs(12))
+        [radio] = dialog.match_group.content.controls
+        self.assertEqual(radio.label_style.size, fs(13))
 
 
 if __name__ == "__main__":

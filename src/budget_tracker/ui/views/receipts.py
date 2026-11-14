@@ -103,6 +103,7 @@ class ReceiptImportDialog:
         self._source_path: Path | None = None
         self._temp_dir: Path | None = None
         self._match_mode = False
+        self._create_requested = False
         self._selected_match: MatchCandidate | None = None
         self._candidates: list[MatchCandidate] = []
         self._candidate_by_id: dict[str, MatchCandidate] = {}
@@ -139,6 +140,7 @@ class ReceiptImportDialog:
             on_change=self._candidate_selected,
         )
         self.match_note = ft.Text("", size=fs(12), color=ft.Colors.ON_SURFACE_VARIANT)
+        self.match_title = ft.Text(_MATCH_TITLE, size=fs(14), weight=ft.FontWeight.W_600)
         self.use_existing_button = ft.OutlinedButton(
             content=_USE_EXISTING_LABEL,
             on_click=self._use_existing,
@@ -154,7 +156,7 @@ class ReceiptImportDialog:
             border_radius=10,
             content=ft.Column(
                 [
-                    ft.Text(_MATCH_TITLE, weight=ft.FontWeight.W_600),
+                    self.match_title,
                     self.match_group,
                     self.match_note,
                     ft.Row(
@@ -386,6 +388,7 @@ class ReceiptImportDialog:
 
     # ---------- fields ----------
     def _install(self, draft: ReceiptDraft) -> None:
+        self._create_requested = False
         self.merchant.value = draft.merchant
         self.amount.value = "" if draft.total_cents is None else f"{draft.total_cents / 100:.2f}"
         self.amount.error = None
@@ -412,7 +415,7 @@ class ReceiptImportDialog:
             self.note.color = EXPENSE_COLOR
         else:
             self.category.value = str(category_id)
-        self._refresh_candidates(draft)
+        self._refresh_candidates(draft, auto_select=True)
         self._refresh_save()
 
     # ---------- match panel ----------
@@ -433,11 +436,15 @@ class ReceiptImportDialog:
             missing=frozenset(),
         )
 
-    def _refresh_candidates(self, draft: ReceiptDraft | None) -> None:
+    def _refresh_candidates(
+        self, draft: ReceiptDraft | None, *, auto_select: bool = False
+    ) -> None:
         """Recompute every eligible candidate; preselect only a lone strong one.
 
         No total or no account means there is nothing to search by, so the panel disappears.
-        Candidates are never hidden by their score.
+        Candidates are never hidden by their score. ``auto_select`` is reserved for a fresh
+        draft or an account change out of attach mode: a refresh triggered while the owner is
+        in create mode only updates the list and never pulls them back out of it.
         """
         self._candidates = []
         self._candidate_by_id = {}
@@ -459,10 +466,17 @@ class ReceiptImportDialog:
         self._candidates = candidates
         self._candidate_by_id = {str(c.transaction.id): c for c in candidates}
         self.match_group.content.controls = [
-            ft.Radio(value=str(candidate.transaction.id), label=_candidate_label(candidate))
+            ft.Radio(
+                value=str(candidate.transaction.id),
+                label=_candidate_label(candidate),
+                label_style=ft.TextStyle(size=fs(13)),
+            )
             for candidate in candidates
         ]
         self.match_panel.visible = True
+        if not auto_select:
+            self._set_match_mode(False)
+            return
         if len(candidates) == 1 and candidates[0].score >= STRONG_SCORE:
             self._selected_match = candidates[0]
             self.match_group.value = str(candidates[0].transaction.id)
@@ -479,9 +493,12 @@ class ReceiptImportDialog:
     def _use_existing(self, _: ft.Event | None = None) -> None:
         """Make the chosen candidate the footer action again after browsing create-new."""
         if self._candidates:
+            # The owner explicitly chose attach, so a later account change may re-select.
+            self._create_requested = False
             self._set_match_mode(True)
 
     def _create_new(self, _: ft.Event | None = None) -> None:
+        self._create_requested = True
         self._set_match_mode(False)
 
     def _set_match_mode(self, enabled: bool) -> None:
@@ -495,12 +512,20 @@ class ReceiptImportDialog:
         self._refresh_save()
 
     def _value_changed(self, _: ft.Event | None = None) -> None:
-        """Amount or date edits change what can match; recompute from the fields as typed."""
-        self._refresh_candidates(self._draft_from_fields())
+        """Amount or date edits change what can match; recompute from the fields as typed.
+
+        An edit made while creating a new transaction keeps create mode: pulling the owner
+        into attach mode mid-keystroke would disable the field they are typing in.
+        """
+        if not self._match_mode:
+            self._create_requested = True
+        self._refresh_candidates(self._draft_from_fields(), auto_select=False)
 
     def _account_changed(self, _: ft.Event | None = None) -> None:
         self.account.error_text = None
-        self._refresh_candidates(self._draft_from_fields())
+        # Re-select only when the owner is already attaching; otherwise create mode is sticky.
+        auto_select = self._match_mode and not self._create_requested
+        self._refresh_candidates(self._draft_from_fields(), auto_select=auto_select)
 
     def _category_changed(self, _: ft.Event | None = None) -> None:
         self.category.error_text = None

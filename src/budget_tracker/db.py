@@ -220,6 +220,29 @@ MIGRATIONS: list[str] = [
     ALTER TABLE transactions ADD COLUMN goal_id INTEGER REFERENCES savings_goals(id) ON DELETE SET NULL;
     CREATE INDEX ix_transactions_goal ON transactions(goal_id);
     """,
+    # v7: debts and the transaction tag that records a payment to one. A debt linked to a credit
+    # card account tracks that card's balance; the unique partial index allows at most one debt
+    # per linked account. Payments are ordinary transactions carrying debt_id.
+    """
+    CREATE TABLE debts (
+        id                     INTEGER PRIMARY KEY,
+        name                   TEXT NOT NULL,
+        kind                   TEXT NOT NULL CHECK (kind IN ('credit_card','auto','student','personal','mortgage','other')),
+        balance_cents          INTEGER NOT NULL DEFAULT 0 CHECK (balance_cents >= 0),
+        apr_bps                INTEGER NOT NULL CHECK (apr_bps BETWEEN 0 AND 10000),
+        minimum_cents          INTEGER NOT NULL DEFAULT 0 CHECK (minimum_cents >= 0),
+        original_balance_cents INTEGER CHECK (original_balance_cents IS NULL OR original_balance_cents >= 0),
+        account_id             INTEGER REFERENCES accounts(id) ON DELETE SET NULL,
+        created_at             TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE UNIQUE INDEX ux_debts_account ON debts(account_id) WHERE account_id IS NOT NULL;
+
+    ALTER TABLE transactions ADD COLUMN debt_id INTEGER REFERENCES debts(id) ON DELETE SET NULL;
+    CREATE INDEX ix_transactions_debt ON transactions(debt_id);
+
+    INSERT OR IGNORE INTO categories (name, type, color, icon)
+    VALUES ('Debt payments', 'expense', '#546E7A', 'PAYMENTS');
+    """,
 ]
 
 DEFAULT_EXTRA_ACCOUNTS: list[tuple[str, str, str]] = [

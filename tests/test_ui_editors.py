@@ -945,6 +945,144 @@ class TestEditors(unittest.TestCase):
         loaded = self.repo.list_transactions(limit=1)[0]
         self.assertEqual((loaded.amount_cents, loaded.goal_id), (6_000, goal.id))
 
+    def test_debts_view_empty_and_after_adding(self):
+        from budget_tracker.models import DebtKind
+        from budget_tracker.ui.views.debts import DebtsView
+
+        view = DebtsView(self.ctx)
+        self.assertTrue(any("No debts" in text for text in self._texts(view.grid.controls[0])))
+        debt = self.ctx.service.create_debt("Loan", DebtKind.PERSONAL, 100_000, 1200, 2_000)
+        view.refresh()
+        texts = self._texts(view.grid.controls[0])
+        self.assertIn("Loan", texts)
+        self.assertTrue(any("$1,000.00" in text for text in texts))
+
+    def test_debts_grid_is_not_stretch_aligned(self):
+        from budget_tracker.ui.views.debts import DebtsView
+
+        view = DebtsView(self.ctx)
+        self.assertNotEqual(view.grid.vertical_alignment, ft.CrossAxisAlignment.STRETCH)
+
+    def test_debt_editor_creates_and_links(self):
+        from budget_tracker.models import Account, AccountKind, DebtKind
+        from budget_tracker.ui.views.debts import DebtEditor
+
+        card = self.accts["Credit Card"]
+        other = next(c for c in self.repo.list_categories() if c.name == "Other")
+        self.repo.add_transaction(Transaction(
+            40_000, TransactionType.EXPENSE, other.id, date(2026, 11, 1),
+            "Purchase", account_id=card.id,
+        ))
+        editor = DebtEditor(self.ctx, None)
+        editor.name.value = "Visa"
+        editor.kind.value = DebtKind.CREDIT_CARD.value
+        editor.apr.value = "24.99"
+        editor.minimum.value = "105.00"
+        editor.link.value = str(card.id)
+        editor._save(None)
+        debt = self.ctx.repo.list_debts()[0]
+        self.assertEqual((debt.name, debt.balance_cents, debt.apr_bps), ("Visa", 40_000, 2499))
+        self.assertEqual(debt.account_id, card.id)
+
+    def test_debt_editor_rejects_a_bad_apr(self):
+        from budget_tracker.models import DebtKind
+        from budget_tracker.ui.views.debts import DebtEditor
+
+        editor = DebtEditor(self.ctx, None)
+        editor.name.value = "Loan"
+        editor.kind.value = DebtKind.PERSONAL.value
+        editor.balance.value = "500.00"
+        editor.apr.value = "150"
+        editor.minimum.value = "10.00"
+        editor._save(None)
+        self.assertEqual(self.ctx.repo.list_debts(), [])
+        self.assertEqual(editor.apr.error, "Enter a rate between 0 and 100")
+
+    def _statement_driven_debt(self):
+        from budget_tracker.models import DebtKind
+
+        card = self.accts["Credit Card"]
+        other = next(c for c in self.repo.list_categories() if c.name == "Other")
+        self.repo.add_transaction(Transaction(
+            40_000, TransactionType.EXPENSE, other.id, date(2026, 11, 1),
+            "Purchase", account_id=card.id,
+        ))
+        debt = self.ctx.service.create_debt("Visa", DebtKind.CREDIT_CARD, 0, 2499, 10_500,
+                                            account_id=card.id)
+        self.ctx.service.record_minimum_payment(card.id, self.ctx.service.current_month(), 7_500)
+        return debt
+
+    def test_debt_editor_keeps_the_stored_minimum_for_a_statement_driven_card(self):
+        from budget_tracker.ui.views.debts import DebtEditor
+
+        debt = self._statement_driven_debt()
+        editor = DebtEditor(self.ctx, debt)
+        self.assertEqual(editor.minimum.value, "75.00")
+        editor.name.value = "Visa Signature"
+        editor._save(None)
+        stored = self.ctx.repo.get_debt(debt.id)
+        self.assertEqual((stored.name, stored.minimum_cents), ("Visa Signature", 10_500))
+
+    def test_debt_editor_disables_fields_driven_by_the_statement(self):
+        from budget_tracker.ui.views.debts import DebtEditor
+
+        debt = self._statement_driven_debt()
+        editor = DebtEditor(self.ctx, debt)
+        self.assertTrue(editor.balance.disabled)
+        self.assertTrue(editor.minimum.disabled)
+        self.assertEqual(editor.minimum.value, "75.00")
+        self.assertTrue(editor.minimum_note.visible)
+        self.assertIn("statement minimum", editor.minimum_note.value)
+
+    def test_no_payment_warning_when_minimums_and_extra_are_zero(self):
+        from budget_tracker.models import DebtKind
+        from budget_tracker.ui.views.debts import DebtsView
+
+        self.ctx.service.create_debt("Loan", DebtKind.PERSONAL, 100_000, 0, 0)
+        view = DebtsView(self.ctx)
+        self.assertIn("No payment is being made.", self._texts(view.plan_panel))
+
+    def test_paid_off_debt_minimum_does_not_suppress_the_no_payment_warning(self):
+        from budget_tracker.models import DebtKind
+        from budget_tracker.ui.views.debts import DebtsView
+
+        self.ctx.service.create_debt("Paid loan", DebtKind.PERSONAL, 0, 1200, 2_000)
+        self.ctx.service.create_debt("Active loan", DebtKind.PERSONAL, 100_000, 0, 0)
+        view = DebtsView(self.ctx)
+        self.assertIn("No payment is being made.", self._texts(view.plan_panel))
+
+    def test_nav_indices_stay_in_sync_with_debts(self):
+        from budget_tracker import main as shell
+        self.assertEqual(shell.NAV_ITEMS[5][0], "Debts")
+        self.assertEqual(shell.NAV_ITEMS[shell.BILLS_INDEX][0], "Bills")
+
+    def test_percent_parsing_and_formatting(self):
+        from budget_tracker.formatting import format_percent, parse_percent_bps
+        self.assertEqual(parse_percent_bps("24.99"), 2499)
+        self.assertEqual(parse_percent_bps("0"), 0)
+        self.assertEqual(parse_percent_bps("24.99%"), 2499)
+        self.assertEqual(format_percent(2499), "24.99%")
+        with self.assertRaises(ValueError):
+            parse_percent_bps("101")
+
+    def test_editing_a_debt_payment_preserves_the_tag(self):
+        from budget_tracker.models import Debt, DebtKind
+        from budget_tracker.ui.views.transactions import TransactionEditor
+
+        debt = self.repo.add_debt(Debt("Loan", DebtKind.PERSONAL, 100_000, 1200, 2_000))
+        category = next(c for c in self.repo.list_categories() if c.name == "Debt payments")
+        tx = self.repo.add_transaction(Transaction(
+            20_000, TransactionType.EXPENSE, category.id, date.today(), "Payment",
+            account_id=self.accts["Checking"].id, debt_id=debt.id,
+        ))
+        editor = TransactionEditor(self.ctx, tx)
+        editor.amount.value = "300.00"
+        editor._save(None)
+
+        loaded = self.repo.list_transactions(limit=1)[0]
+        self.assertEqual((loaded.debt_id, loaded.amount_cents), (debt.id, 30_000))
+        self.assertEqual(self.repo.get_debt(debt.id).balance_cents, 70_000)
+
     def test_balance_check_records_the_statement_minimum(self):
         from budget_tracker.ui.views.reconcile import BalanceCheckDialog
 
@@ -958,6 +1096,103 @@ class TestEditors(unittest.TestCase):
             [(payment.month, payment.amount_cents) for payment in self.repo.list_minimum_payments(card.id)],
             [("2026-11", 3500)],
         )
+
+    def test_standalone_payment_dialog_moves_money(self):
+        from budget_tracker.models import DebtKind
+        from budget_tracker.ui.views.debts import DebtPaymentDialog
+
+        debt = self.ctx.service.create_debt("Loan", DebtKind.PERSONAL, 100_000, 1200, 2_000)
+        summary = self.ctx.service.debt_summary(debt.id)
+        dialog = DebtPaymentDialog(self.ctx, summary)
+        dialog.amount.value = "200.00"
+        dialog.funding.value = str(self.accts["Checking"].id)
+        dialog._save(None)
+        self.assertEqual(self.ctx.repo.get_debt(debt.id).balance_cents, 80_000)
+        [tx] = self.ctx.repo.list_debt_payments(debt.id)
+        self.assertEqual((tx.type, tx.category_name), (TransactionType.EXPENSE, "Debt payments"))
+
+    def test_linked_payment_dialog_creates_a_transfer(self):
+        from budget_tracker.models import AccountKind, DebtKind, Transaction, TransactionType
+        from budget_tracker.ui.views.debts import DebtPaymentDialog
+
+        card = self.accts["Credit Card"]
+        other = next(c for c in self.repo.list_categories() if c.name == "Other")
+        self.repo.add_transaction(Transaction(
+            40_000, TransactionType.EXPENSE, other.id, date(2026, 11, 1),
+            "Purchase", account_id=card.id,
+        ))
+        debt = self.ctx.service.create_debt("Visa", DebtKind.CREDIT_CARD, 0, 2499, 10_500, account_id=card.id)
+        dialog = DebtPaymentDialog(self.ctx, self.ctx.service.debt_summary(debt.id))
+        dialog.amount.value = "100.00"
+        dialog.funding.value = str(self.accts["Checking"].id)
+        dialog._save(None)
+        [tx] = self.ctx.repo.list_debt_payments(debt.id)
+        self.assertEqual((tx.type, tx.transfer_account_id), (TransactionType.TRANSFER, card.id))
+
+    def test_history_lists_payments_newest_first(self):
+        from budget_tracker.models import DebtKind
+        from budget_tracker.ui.views.debts import DebtHistoryDialog
+
+        debt = self.ctx.service.create_debt("Loan", DebtKind.PERSONAL, 100_000, 1200, 2_000)
+        self.ctx.service.record_debt_payment(debt.id, self.accts["Checking"].id, 10_000,
+                                             date(2026, 11, 1), today=date(2026, 11, 14))
+        self.ctx.service.record_debt_payment(debt.id, self.accts["Checking"].id, 20_000,
+                                             date(2026, 11, 10), today=date(2026, 11, 14))
+        dialog = DebtHistoryDialog(self.ctx, debt)
+        texts = self._texts(dialog.dialog.content)
+        self.assertLess(texts.index("$200.00"), texts.index("$100.00"))
+
+    def test_comparison_amounts(self):
+        from budget_tracker.ui.views.debts import comparison_amounts
+        self.assertEqual(comparison_amounts(""), [0, 5_000, 10_000, 20_000])
+        self.assertEqual(comparison_amounts("50"), [0, 5_000, 10_000, 20_000])
+        self.assertEqual(comparison_amounts("75"), [0, 5_000, 10_000, 20_000, 7_500])
+        self.assertEqual(comparison_amounts("nope"), [0, 5_000, 10_000, 20_000])
+
+    def test_savings_label_requires_both_plans_to_finish(self):
+        from budget_tracker.debt_planner import DebtStrategy, DebtPlan
+        from budget_tracker.ui.views.debts import savings_cents
+
+        def plan(finished, interest):
+            return DebtPlan(DebtStrategy.AVALANCHE, 0, 1, "2026-12", interest, interest, finished, [], [], None)
+
+        self.assertEqual(savings_cents(plan(True, 1_000), plan(True, 1_400)), 400)
+        self.assertIsNone(savings_cents(plan(True, 1_000), plan(True, 1_000)))
+        self.assertIsNone(savings_cents(plan(False, 1_000), plan(True, 1_400)))
+
+    def test_plan_panel_shows_both_strategies_and_chunks_the_schedule(self):
+        from budget_tracker.models import DebtKind
+        from budget_tracker.ui.views.debts import DebtsView
+
+        self.ctx.service.create_debt("Loan", DebtKind.PERSONAL, 100_000, 1200, 10_000)
+        view = DebtsView(self.ctx)
+        view.refresh()
+        texts = self._texts(view.plan_panel)
+        self.assertIn("Avalanche", texts)
+        self.assertIn("Snowball", texts)
+        self.assertEqual(view.schedule_limit, 24)
+        view._show_more(None)
+        self.assertEqual(view.schedule_limit, 48)
+
+    def test_zero_minimum_and_unfinished_plans_warn(self):
+        from budget_tracker.models import DebtKind
+        from budget_tracker.ui.views.debts import DebtsView
+
+        self.ctx.service.create_debt("Loan", DebtKind.PERSONAL, 100_000, 3600, 0)
+        view = DebtsView(self.ctx)
+        view.refresh()
+        texts = " ".join(self._texts(view.plan_panel)).lower()
+        self.assertIn("does not cover", texts)
+        self.assertIn("not paid off within 50 years", texts)
+
+    def test_custom_extra_updates_the_plan(self):
+        from budget_tracker.models import DebtKind
+        from budget_tracker.ui.views.debts import DebtsView
+
+        self.ctx.service.create_debt("Loan", DebtKind.PERSONAL, 100_000, 0, 10_000)
+        view = DebtsView(self.ctx)
+        view._set_custom_extra("200")
+        self.assertEqual(view.extra_cents, 20_000)
 
 
 def _dialog_rule_texts(dialog) -> list:

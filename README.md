@@ -7,6 +7,8 @@ A personal budget tracker desktop app built with **Python 3.13**, **[Flet](https
 - **Dashboard**: net worth across all accounts, monthly income and spending, savings rate, spending by category, a six-month income vs. spending trend, account balances, budget health, and recent activity.
 - **Accounts**: checking, savings, credit card, cash, and other accounts, each with a live balance. Credit cards show the amount owed, and **Pay card** records a payment from your checking account.
 - **Goals**: savings targets with progress, a fixed monthly plan, and contributions recorded as transfers.
+- **Debts**: credit cards, auto, student, personal, mortgage and other debts, with a payoff planner
+  comparing avalanche and snowball strategies at several extra monthly amounts.
 - **Year**: monthly budget versus actual spending, year-to-date totals with the same period last year, a run-rate year-end projection, and cash flow across the year.
 - **Balance checks and adjustments**: check any account against the balance your bank shows and see the difference. If they disagree, record a signed correction that changes the account balance only — adjustments are excluded from income, spending, and budgets. Earlier checks are kept in a history.
 - **Bills and reminders**: recurring bills (one-time, weekly, monthly, yearly) and credit card payments, each with a due date. Overdue and soon-due bills show on the Bills page, on the Dashboard, and in a pop-up when the app starts. **Mark paid** records the payment and moves the bill to its next due date. Windows notifications can also remind you when the app is closed (see below).
@@ -112,6 +114,36 @@ Limits:
 - A goal earmarks money; it does not lock it. You can still spend or move money out of the savings account, but progress is based on the goal's recorded contributions, not the account's current balance.
 - Once a goal has contributions, its destination account cannot be changed. You can still edit its name, target amount, target date, and amount already saved; create a new goal for a different account instead.
 - Deleting a goal removes only the goal. Its contribution transfers stay on the **Transactions** list and in the ledger, and the money stays in the savings account.
+
+## Debts
+
+Use the **Debts** page to track what you owe and see how different monthly payments would pay it down. Credit cards, auto loans, student loans, personal loans, mortgages, and other debts are all supported.
+
+1. Click **Add debt** and enter a name, the **kind** (credit card, auto, student, personal, mortgage, or other), the current **balance**, the **APR**, and the **minimum monthly payment**. You can also enter the **original balance** to see a paid-down bar on the card.
+2. A **standalone debt** keeps its balance in the app: update it yourself, or log payments to move it. A **linked debt** is tied to a credit-card account you already track, and its balance is the card's live amount owed. A card can be linked to only one debt.
+3. For a linked card, the plan minimum follows the **latest statement minimum** recorded for that card — the current month when recorded, otherwise the most recent. The minimum entered on the debt is only a fallback until a statement minimum exists.
+
+### Logging payments
+
+Every payment moves real money and appears on the **Transactions** page.
+
+- A **standalone debt** payment is an **expense** from the funding account you choose, categorized as **Debt payments** by default. It lowers the debt's balance, and the amount cannot exceed the current balance.
+- A **linked card** payment is a **transfer** from the funding account into the card, so the card's amount owed goes down. Paying more than the balance is allowed and leaves a credit on the card, like any other card payment.
+- Payments logged from a debt's **Log payment** dialog are tagged to that debt and listed in its **History**. Card payments made elsewhere (for example **Pay card** on the Accounts page) still change the card's balance but are not listed in the debt's history.
+- The payment date cannot be in the future, and a liability account cannot fund a payment.
+
+### The payoff plan
+
+The plan panel compares two strategies, each with an **extra monthly amount on top of every minimum**:
+
+- **Avalanche** puts the extra toward the highest-APR debt first, which usually costs the least interest.
+- **Snowball** puts it toward the smallest balance first, clearing debts sooner.
+
+For the selected extra amount, the panel shows each strategy's debt-free date, months, total interest, and total paid, and marks the strategy that saves interest when both plans finish. It also compares several extra amounts ($0, $50, $100, $200, and a custom amount) side by side, and shows the month-by-month schedule and the order debts are paid off. A cleared debt's minimum rolls into the next target, so the monthly budget stays fixed until you are debt-free.
+
+A minimum may be **zero** (a deferred student loan, for example). A plan with only a zero minimum and no extra never pays the debt off; the plan says so instead of showing a date. The panel also warns when a minimum does not cover that month's interest.
+
+The projection is an **estimate**: it assumes a fixed APR, monthly compounding, the minimums you record, and constant payments, and it ignores fees, escrow, and rate changes. A mortgage in particular may differ from its real amortization. A plan that cannot finish within **50 years (600 months)** is reported as not paid off rather than given a payoff date.
 
 ## Importing bank statements
 

@@ -44,6 +44,22 @@ def parse_signed_money(text: str) -> int:
     return int((value * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
+def parse_percent_bps(text: str) -> int:
+    """Parse '24.99' or '24.99%' into basis points."""
+    cleaned = (text or "").strip().replace("%", "")
+    try:
+        value = Decimal(cleaned)
+    except InvalidOperation as exc:
+        raise ValueError("Enter a rate like 24.99") from exc
+    if not value.is_finite() or value < 0 or value > 100:
+        raise ValueError("Enter a rate between 0 and 100")
+    return int((value * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
+def format_percent(bps: int) -> str:
+    return f"{bps / 100:.2f}%"
+
+
 def parse_date(text: str) -> date:
     try:
         return datetime.strptime((text or "").strip(), "%Y-%m-%d").date()

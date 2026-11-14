@@ -450,6 +450,7 @@ class TransactionEditor:
             account_id=int(self.account.value),
             transfer_account_id=int(self.to_account.value) if is_transfer else None,
             goal_id=self.tx.goal_id if self.tx else None,
+            debt_id=self.tx.debt_id if self.tx else None,
         )
         try:
             if tx.id:

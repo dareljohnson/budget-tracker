@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 
+from .debt_planner import DebtInput, DebtPlan, DebtStrategy, monthly_interest_cents, plan_payoff
 from .formatting import month_key, shift_month
 from .models import (
     Account,
@@ -15,6 +16,8 @@ from .models import (
     AccountKind,
     BudgetProgress,
     CategoryTotal,
+    Debt,
+    DebtKind,
     DueBill,
     MonthTotal,
     MinimumPayment,
@@ -117,6 +120,18 @@ class SavingsGoalProgress:
     contributed_this_month_cents: int
     state: str  # active | reached | overdue
     plan: list[GoalScheduleMonth]
+
+
+@dataclass(slots=True, frozen=True)
+class DebtSummary:
+    debt: Debt
+    balance_cents: int
+    effective_minimum_cents: int
+    minimum_from_statement: bool
+    statement_month: str | None
+    monthly_interest_cents: int
+    minimum_below_interest: bool
+    account_name: str | None
 
 
 class BudgetService:
@@ -456,6 +471,229 @@ class BudgetService:
     @staticmethod
     def export_xlsx_filename(now: datetime | None = None) -> str:
         return f"budget_tracker_{(now or datetime.now()):%Y%m%d_%H%M%S}.xlsx"
+
+    # ---------- debts ----------
+    def _validate_debt_record(
+        self,
+        name: str,
+        kind: DebtKind,
+        balance_cents: int,
+        apr_bps: int,
+        minimum_cents: int,
+        original_balance_cents: int | None,
+        account_id: int | None,
+        *,
+        debt_id: int | None = None,
+    ) -> None:
+        if not (name or "").strip():
+            raise RepositoryError("Debt name is required")
+        if not isinstance(kind, DebtKind):
+            raise RepositoryError("Choose a debt kind")
+        if balance_cents < 0:
+            raise RepositoryError("Balance cannot be negative")
+        if not (0 <= apr_bps <= 10_000):
+            raise RepositoryError("APR must be between 0 and 100")
+        if minimum_cents < 0:
+            raise RepositoryError("Minimum payment cannot be negative")
+        if original_balance_cents is not None and original_balance_cents < 0:
+            raise RepositoryError("Original balance cannot be negative")
+        if account_id is not None:
+            account = self.repo.get_account(account_id)
+            if account is None or account.kind is not AccountKind.CREDIT_CARD:
+                raise RepositoryError("Link a debt only to a credit-card account")
+            if kind is not DebtKind.CREDIT_CARD:
+                raise RepositoryError("A linked debt must be a credit card")
+            linked = [d for d in self.repo.list_debts() if d.account_id == account_id and d.id != debt_id]
+            if linked:
+                raise RepositoryError("This credit card is already linked to a debt")
+
+    def _card_owed(self, account_id: int) -> int:
+        for balance in self.repo.account_balances():
+            if balance.account.id == account_id:
+                return balance.owed_cents
+        return 0
+
+    def debt_summary(self, debt_id: int) -> DebtSummary:
+        debt = self.repo.get_debt(debt_id)
+        if debt is None:
+            raise RepositoryError("Debt not found")
+        balance = self._card_owed(debt.account_id) if debt.account_id is not None else debt.balance_cents
+        account_name = None
+        minimum = debt.minimum_cents
+        from_statement = False
+        statement_month = None
+        if debt.account_id is not None:
+            account = self.repo.get_account(debt.account_id)
+            account_name = account.name if account else None
+            status = self.current_minimum_payment(debt.account_id)
+            if status is not None:
+                minimum, from_statement, statement_month = status.amount_cents, True, status.month
+        interest = monthly_interest_cents(balance, debt.apr_bps)
+        return DebtSummary(
+            debt=debt,
+            balance_cents=balance,
+            effective_minimum_cents=minimum,
+            minimum_from_statement=from_statement,
+            statement_month=statement_month,
+            monthly_interest_cents=interest,
+            minimum_below_interest=balance > 0 and minimum < interest,
+            account_name=account_name,
+        )
+
+    def list_debt_summaries(self) -> list[DebtSummary]:
+        return [self.debt_summary(debt.id) for debt in self.repo.list_debts()]
+
+    def create_debt(
+        self,
+        name: str,
+        kind: DebtKind,
+        balance_cents: int,
+        apr_bps: int,
+        minimum_cents: int = 0,
+        *,
+        original_balance_cents: int | None = None,
+        account_id: int | None = None,
+    ) -> Debt:
+        balance = self._card_owed(account_id) if account_id is not None else balance_cents
+        self._validate_debt_record(name, kind, balance, apr_bps, minimum_cents,
+                                   original_balance_cents, account_id)
+        return self.repo.add_debt(Debt(
+            name=name.strip(), kind=kind, balance_cents=balance, apr_bps=apr_bps,
+            minimum_cents=minimum_cents, original_balance_cents=original_balance_cents,
+            account_id=account_id,
+        ))
+
+    def update_debt(
+        self,
+        debt_id: int,
+        *,
+        name: str,
+        kind: DebtKind,
+        balance_cents: int,
+        apr_bps: int,
+        minimum_cents: int,
+        original_balance_cents: int | None,
+        account_id: int | None,
+    ) -> None:
+        existing = self.repo.get_debt(debt_id)
+        if existing is None:
+            raise RepositoryError("Debt not found")
+        if account_id is not None:
+            balance = self._card_owed(account_id)
+        elif existing.account_id is not None:
+            balance = self._card_owed(existing.account_id)
+        else:
+            balance = balance_cents
+        self._validate_debt_record(name, kind, balance, apr_bps, minimum_cents,
+                                   original_balance_cents, account_id, debt_id=debt_id)
+        if existing.account_id is None and account_id is not None:
+            # Pre-link payments are superseded by the card's live balance snapshot.
+            self.repo.clear_debt_payments(debt_id)
+        self.repo.update_debt(Debt(
+            id=debt_id, name=name.strip(), kind=kind, balance_cents=balance, apr_bps=apr_bps,
+            minimum_cents=minimum_cents, original_balance_cents=original_balance_cents,
+            account_id=account_id,
+        ))
+
+    def delete_debt(self, debt_id: int) -> None:
+        self.repo.delete_debt(debt_id)
+
+    def _debt_payment_category(self, category_id: int | None) -> int:
+        if category_id is not None:
+            category = self.repo.get_category(category_id)
+            if category is None or category.type is not TransactionType.EXPENSE:
+                raise RepositoryError("Choose an expense category for the payment")
+            return category.id
+        preferred = next(
+            (c for c in self.repo.list_categories() if c.name == "Debt payments" and c.type is TransactionType.EXPENSE),
+            None,
+        )
+        if preferred is None:
+            preferred = next((c for c in self.repo.list_categories() if c.type is TransactionType.EXPENSE), None)
+        if preferred is None:
+            raise RepositoryError("Add an expense category before recording a payment")
+        return preferred.id
+
+    def record_debt_payment(
+        self,
+        debt_id: int,
+        funding_account_id: int,
+        amount_cents: int,
+        on_date: date,
+        category_id: int | None = None,
+        note: str = "",
+        *,
+        today: date | None = None,
+    ) -> Transaction:
+        today = today or date.today()
+        debt = self.repo.get_debt(debt_id)
+        if debt is None:
+            raise RepositoryError("Debt not found")
+        funding = self.repo.get_account(funding_account_id)
+        if funding is None:
+            raise RepositoryError("Select a funding account")
+        if funding.kind.is_liability:
+            raise RepositoryError("Pay from a checking, savings or cash account")
+        if amount_cents <= 0:
+            raise RepositoryError("Amount must be greater than zero")
+        if on_date > today:
+            raise RepositoryError("Payment date cannot be in the future")
+        if debt.account_id is not None and funding.id == debt.account_id:
+            raise RepositoryError("Choose a different account to pay from")
+        description = note.strip() or f"Payment: {debt.name}"
+        if debt.account_id is None:
+            if amount_cents > debt.balance_cents:
+                raise RepositoryError("Payment is more than the remaining balance")
+            return self._describe_transaction(self.repo.add_transaction(Transaction(
+                amount_cents, TransactionType.EXPENSE, self._debt_payment_category(category_id),
+                on_date, description, account_id=funding.id, debt_id=debt.id,
+            )))
+        return self._describe_transaction(self.repo.add_transaction(Transaction(
+            amount_cents, TransactionType.TRANSFER, None, on_date, description,
+            account_id=funding.id, transfer_account_id=debt.account_id, debt_id=debt.id,
+        )))
+
+    def _describe_transaction(self, tx: Transaction) -> Transaction:
+        """Fill the display names a freshly inserted transaction does not carry yet."""
+        if tx.category_id is not None:
+            category = self.repo.get_category(tx.category_id)
+            tx.category_name = category.name if category else None
+        if tx.account_id is not None:
+            account = self.repo.get_account(tx.account_id)
+            tx.account_name = account.name if account else None
+        if tx.transfer_account_id is not None:
+            account = self.repo.get_account(tx.transfer_account_id)
+            tx.transfer_account_name = account.name if account else None
+        return tx
+
+    def debt_payments(self, debt_id: int) -> list[Transaction]:
+        return self.repo.list_debt_payments(debt_id)
+
+    def debt_plan(
+        self,
+        extra_cents: int,
+        strategy: DebtStrategy,
+        *,
+        today: date | None = None,
+    ) -> DebtPlan:
+        if extra_cents < 0:
+            raise RepositoryError("Extra payment cannot be negative")
+        inputs = [
+            DebtInput(summary.debt, summary.balance_cents, summary.effective_minimum_cents)
+            for summary in self.list_debt_summaries()
+            if summary.balance_cents > 0
+        ]
+        return plan_payoff(
+            inputs, extra_cents=extra_cents, strategy=strategy, start_month=self.current_month(today)
+        )
+
+    def debt_plans(self, extra_cents: int, *, today: date | None = None) -> dict[DebtStrategy, DebtPlan]:
+        return {strategy: self.debt_plan(extra_cents, strategy, today=today) for strategy in DebtStrategy}
+
+    def debt_extra_comparison(
+        self, strategy: DebtStrategy, amounts: list[int], *, today: date | None = None
+    ) -> list[DebtPlan]:
+        return [self.debt_plan(amount, strategy, today=today) for amount in amounts]
 
     # ---------- savings goals ----------
     def _validate_goal(

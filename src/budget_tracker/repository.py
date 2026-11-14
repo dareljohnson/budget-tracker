@@ -18,6 +18,8 @@ from .models import (
     Category,
     CategoryRule,
     CategoryTotal,
+    Debt,
+    DebtKind,
     DueBill,
     MonthTotal,
     MinimumPayment,
@@ -191,6 +193,13 @@ class Repository:
             raise RepositoryError(
                 f"Account is used by the savings goal '{goal['name']}'; keep it a savings account"
             )
+        debt = self.conn.execute(
+            "SELECT name FROM debts WHERE account_id = ?", (account.id,)
+        ).fetchone()
+        if debt is not None and account.kind is not AccountKind.CREDIT_CARD:
+            raise RepositoryError(
+                f"Account is linked to the debt '{debt['name']}'; keep it a credit-card account"
+            )
         try:
             with self.conn:
                 self.conn.execute(
@@ -225,6 +234,11 @@ class Repository:
         ).fetchone()
         if goal is not None:
             raise RepositoryError(f"Account is used by the savings goal '{goal['name']}'")
+        debt = self.conn.execute(
+            "SELECT name FROM debts WHERE account_id = ?", (account_id,)
+        ).fetchone()
+        if debt is not None:
+            raise RepositoryError(f"Account is linked to the debt '{debt['name']}'")
         with self.conn:
             self.conn.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
 
@@ -243,7 +257,7 @@ class Repository:
     # ---------- transactions ----------
     _TX_SELECT = (
         "SELECT t.id, t.amount_cents, t.type, t.category_id, t.account_id, t.transfer_account_id, "
-        "t.goal_id, t.occurred_on, t.description, t.statement_id, t.import_ref, c.name AS category_name, "
+        "t.goal_id, t.debt_id, t.occurred_on, t.description, t.statement_id, t.import_ref, c.name AS category_name, "
         "c.color AS category_color, c.icon AS category_icon, a.name AS account_name, "
         "ta.name AS transfer_account_name"
     )
@@ -273,6 +287,7 @@ class Repository:
             statement_id=row["statement_id"],
             import_ref=row["import_ref"],
             goal_id=row["goal_id"],
+            debt_id=row["debt_id"],
         )
 
     def _validate_transaction(self, tx: Transaction) -> None:
@@ -284,6 +299,16 @@ class Repository:
                 or tx.transfer_account_id != goal.account_id
             ):
                 tx.goal_id = None
+        if tx.debt_id is not None:
+            debt = self.get_debt(tx.debt_id)
+            funding = self.get_account(tx.account_id) if tx.account_id is not None else None
+            valid = debt is not None and funding is not None and not funding.kind.is_liability
+            if valid and debt.account_id is not None:
+                valid = tx.type == TransactionType.TRANSFER and tx.transfer_account_id == debt.account_id
+            elif valid:
+                valid = tx.type == TransactionType.EXPENSE and tx.category_id is not None
+            if not valid:
+                tx.debt_id = None
         if tx.type == TransactionType.ADJUSTMENT:
             if tx.amount_cents == 0:
                 raise RepositoryError("Adjustment amount cannot be zero")
@@ -318,9 +343,22 @@ class Repository:
             tx.category_id,
             tx.transfer_account_id,
             tx.goal_id,
+            tx.debt_id,
             tx.occurred_on.isoformat(),
             tx.description.strip(),
         )
+
+    def _payment_debt(self, tx: Transaction) -> Debt | None:
+        """The standalone debt whose stored balance a payment affects."""
+        if tx.debt_id is None or tx.type != TransactionType.EXPENSE:
+            return None
+        debt = self.get_debt(tx.debt_id)
+        return debt if debt is not None and debt.account_id is None else None
+
+    def _tx_debt_row(self, tx_id: int) -> sqlite3.Row | None:
+        return self.conn.execute(
+            "SELECT debt_id, type, amount_cents FROM transactions WHERE id = ?", (tx_id,)
+        ).fetchone()
 
     def add_transaction(
         self,
@@ -337,27 +375,72 @@ class Repository:
         with self.conn:
             cur = self.conn.execute(
                 "INSERT INTO transactions (amount_cents, type, account_id, category_id, transfer_account_id, "
-                "goal_id, occurred_on, description, statement_id, import_ref) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "goal_id, debt_id, occurred_on, description, statement_id, import_ref) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (*self._tx_params(tx), tx.statement_id, tx.import_ref),
             )
+            if (debt := self._payment_debt(tx)) is not None:
+                cur_debt = self.conn.execute(
+                    "UPDATE debts SET balance_cents = balance_cents - ? "
+                    "WHERE id = ? AND account_id IS NULL AND balance_cents >= ?",
+                    (tx.amount_cents, debt.id, tx.amount_cents),
+                )
+                if cur_debt.rowcount == 0:
+                    raise RepositoryError("Payment is more than the remaining balance")
         tx.id = cur.lastrowid
         return tx
 
     def update_transaction(self, tx: Transaction) -> None:
         if tx.id is None:
             raise ValueError("Transaction id is required")
+        old = self._tx_debt_row(tx.id)
         self._validate_transaction(tx)
         with self.conn:
-            self.conn.execute(
+            if old is not None and old["debt_id"] is not None and old["type"] == "expense":
+                old_debt = self.get_debt(old["debt_id"])
+                if old_debt is not None and old_debt.account_id is None:
+                    self.conn.execute(
+                        "UPDATE debts SET balance_cents = balance_cents + ? WHERE id = ?",
+                        (old["amount_cents"], old["debt_id"]),
+                    )
+            updated = self.conn.execute(
                 "UPDATE transactions SET amount_cents = ?, type = ?, account_id = ?, category_id = ?, "
-                "transfer_account_id = ?, goal_id = ?, occurred_on = ?, description = ? WHERE id = ?",
+                "transfer_account_id = ?, goal_id = ?, debt_id = ?, occurred_on = ?, description = ? WHERE id = ?",
                 (*self._tx_params(tx), tx.id),
             )
+            if updated.rowcount != 1:
+                raise RepositoryError("Transaction not found")
+            if (debt := self._payment_debt(tx)) is not None:
+                cur = self.conn.execute(
+                    "UPDATE debts SET balance_cents = balance_cents - ? "
+                    "WHERE id = ? AND account_id IS NULL AND balance_cents >= ?",
+                    (tx.amount_cents, debt.id, tx.amount_cents),
+                )
+                if cur.rowcount == 0:
+                    raise RepositoryError("Payment is more than the remaining balance")
 
     def delete_transaction(self, tx_id: int) -> None:
+        row = self._tx_debt_row(tx_id)
         with self.conn:
+            if row is not None and row["debt_id"] is not None and row["type"] == "expense":
+                debt = self.get_debt(row["debt_id"])
+                if debt is not None and debt.account_id is None:
+                    self.conn.execute(
+                        "UPDATE debts SET balance_cents = balance_cents + ? WHERE id = ?",
+                        (row["amount_cents"], row["debt_id"]),
+                    )
             self.conn.execute("DELETE FROM transactions WHERE id = ?", (tx_id,))
+
+    def list_debt_payments(self, debt_id: int) -> list[Transaction]:
+        rows = self.conn.execute(
+            self._TX_SELECT + self._TX_FROM + " WHERE t.debt_id = ? ORDER BY t.occurred_on DESC, t.id DESC",
+            (debt_id,),
+        )
+        return [self._row_to_transaction(row) for row in rows]
+
+    def clear_debt_payments(self, debt_id: int) -> None:
+        with self.conn:
+            self.conn.execute("UPDATE transactions SET debt_id = NULL WHERE debt_id = ?", (debt_id,))
 
     def list_transactions(
         self,
@@ -647,13 +730,14 @@ class Repository:
                     if not row.include:
                         continue
                     tx = row.transaction
+                    tx.debt_id = None  # imported rows are not debt payments
                     self._validate_transaction(tx)
                     tx.statement_id = statement.id
                     tx.import_ref = f"{statement.file_sha256}:{index}"
                     tx_cur = self.conn.execute(
                         "INSERT INTO transactions (amount_cents, type, account_id, category_id, "
-                        "transfer_account_id, goal_id, occurred_on, description, statement_id, import_ref) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        "transfer_account_id, goal_id, debt_id, occurred_on, description, statement_id, import_ref) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (*self._tx_params(tx), tx.statement_id, tx.import_ref),
                     )
                     tx.id = tx_cur.lastrowid
@@ -742,6 +826,103 @@ class Repository:
             (account_id,),
         )
         return [self._row_to_reconciliation(r) for r in rows]
+
+    # ---------- debts ----------
+    _DEBT_SELECT = (
+        "SELECT id, name, kind, balance_cents, apr_bps, minimum_cents, "
+        "original_balance_cents, account_id FROM debts"
+    )
+
+    def _row_to_debt(self, row: sqlite3.Row) -> Debt:
+        return Debt(
+            id=row["id"],
+            name=row["name"],
+            kind=DebtKind(row["kind"]),
+            balance_cents=row["balance_cents"],
+            apr_bps=row["apr_bps"],
+            minimum_cents=row["minimum_cents"],
+            original_balance_cents=row["original_balance_cents"],
+            account_id=row["account_id"],
+        )
+
+    def list_debts(self) -> list[Debt]:
+        rows = self.conn.execute(self._DEBT_SELECT + " ORDER BY name COLLATE NOCASE")
+        return [self._row_to_debt(row) for row in rows]
+
+    def get_debt(self, debt_id: int) -> Debt | None:
+        row = self.conn.execute(self._DEBT_SELECT + " WHERE id = ?", (debt_id,)).fetchone()
+        return self._row_to_debt(row) if row else None
+
+    def debt_usage(self, account_id: int) -> int:
+        return self.conn.execute(
+            "SELECT COUNT(*) FROM debts WHERE account_id = ?", (account_id,)
+        ).fetchone()[0]
+
+    def add_debt(self, debt: Debt) -> Debt:
+        self._validate_debt(debt)
+        try:
+            with self.conn:
+                cur = self.conn.execute(
+                    "INSERT INTO debts (name, kind, balance_cents, apr_bps, minimum_cents, "
+                    "original_balance_cents, account_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        debt.name.strip(), debt.kind.value, debt.balance_cents, debt.apr_bps,
+                        debt.minimum_cents, debt.original_balance_cents, debt.account_id,
+                    ),
+                )
+        except sqlite3.IntegrityError as exc:
+            raise RepositoryError("This credit card is already linked to a debt") from exc
+        debt.id = cur.lastrowid
+        return debt
+
+    def update_debt(self, debt: Debt) -> None:
+        if debt.id is None:
+            raise ValueError("Debt id is required")
+        self._validate_debt(debt)
+        try:
+            with self.conn:
+                self.conn.execute(
+                    "UPDATE debts SET name = ?, kind = ?, balance_cents = ?, apr_bps = ?, "
+                    "minimum_cents = ?, original_balance_cents = ?, account_id = ? WHERE id = ?",
+                    (
+                        debt.name.strip(), debt.kind.value, debt.balance_cents, debt.apr_bps,
+                        debt.minimum_cents, debt.original_balance_cents, debt.account_id, debt.id,
+                    ),
+                )
+        except sqlite3.IntegrityError as exc:
+            raise RepositoryError("This credit card is already linked to a debt") from exc
+
+    def delete_debt(self, debt_id: int) -> None:
+        with self.conn:
+            self.conn.execute("DELETE FROM debts WHERE id = ?", (debt_id,))
+
+    def _validate_debt(self, debt: Debt) -> None:
+        if not (debt.name or "").strip():
+            raise RepositoryError("Debt name is required")
+        if not isinstance(debt.kind, DebtKind):
+            raise RepositoryError("Choose a debt kind")
+        if debt.balance_cents < 0:
+            raise RepositoryError("Balance cannot be negative")
+        if not (0 <= debt.apr_bps <= 10_000):
+            raise RepositoryError("APR must be between 0 and 100")
+        if debt.minimum_cents < 0:
+            raise RepositoryError("Minimum payment cannot be negative")
+        if debt.original_balance_cents is not None and debt.original_balance_cents < 0:
+            raise RepositoryError("Original balance cannot be negative")
+        if debt.account_id is not None:
+            if debt.kind is not DebtKind.CREDIT_CARD:
+                raise RepositoryError("A linked debt must be a credit card")
+            account = self.get_account(debt.account_id)
+            if account is None:
+                raise RepositoryError("Select a credit-card account")
+            if account.kind is not AccountKind.CREDIT_CARD:
+                raise RepositoryError("Link a debt only to a credit-card account")
+            linked = self.conn.execute(
+                "SELECT id FROM debts WHERE account_id = ? AND id IS NOT ?",
+                (debt.account_id, debt.id),
+            ).fetchone()
+            if linked is not None:
+                raise RepositoryError("This credit card is already linked to a debt")
 
     # ---------- credit card minimum payments ----------
     def list_minimum_payments(self, account_id: int) -> list[MinimumPayment]:
@@ -1136,7 +1317,7 @@ class Repository:
         with self.conn:
             cur = self.conn.execute(
                 "INSERT INTO transactions (amount_cents, type, account_id, category_id, transfer_account_id, "
-                "goal_id, occurred_on, description) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "goal_id, debt_id, occurred_on, description) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 self._tx_params(tx),
             )
             if following is None:

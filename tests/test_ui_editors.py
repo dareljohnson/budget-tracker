@@ -871,6 +871,20 @@ class TestEditors(unittest.TestCase):
         self.assertEqual(view.year.value, str(date.today().year))
         self.assertTrue(view.body.controls)
 
+    def test_nav_indices_stay_in_sync_with_budgets(self):
+        from budget_tracker import main as shell
+
+        self.assertEqual(shell.BUDGETS_INDEX, 7)
+        self.assertEqual(shell.NAV_ITEMS[shell.BUDGETS_INDEX][0], "Budgets")
+
+    def test_year_view_accepts_a_budgets_callback(self):
+        from budget_tracker.ui.views.year import YearView
+
+        calls: list[bool] = []
+        view = YearView(self.ctx, on_view_budgets=lambda: calls.append(True))
+        self.assertIsNotNone(view.control)
+        self.assertTrue(callable(view.on_view_budgets))
+
     def test_year_view_shows_kpis_when_data_exists(self):
         from budget_tracker.models import Budget, Transaction, TransactionType
         from budget_tracker.ui.views.year import YearView

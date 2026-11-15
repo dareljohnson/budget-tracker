@@ -348,6 +348,34 @@ class TestCardBills(unittest.TestCase):
         )
         self.assertEqual([event.amount_cents for event in result.events], [-8_000])
 
+    def test_card_payments_are_allocated_chronologically_across_bills(self):
+        later = bill(
+            name="Later",
+            amount_cents=5_000,
+            frequency=BillFrequency.ONCE,
+            next_due=TODAY + timedelta(days=10),
+            pay_to_account_id=CARD.id,
+        )
+        sooner = bill(
+            name="Sooner",
+            amount_cents=5_000,
+            frequency=BillFrequency.ONCE,
+            next_due=TODAY,
+            pay_to_account_id=CARD.id,
+        )
+        # Input order is deliberately reversed: allocation must follow due dates, not list order.
+        result = run(
+            bills=[ForecastBill(later, 5_000), ForecastBill(sooner, 5_000)],
+            card_owed={CARD.id: 7_000},
+        )
+
+        self.assertEqual(
+            [(event.date, event.description, event.amount_cents) for event in result.events],
+            [(TODAY, "Sooner", -5_000), (TODAY + timedelta(days=10), "Later", -2_000)],
+        )
+        self.assertEqual(result.points[0].balance_cents, 95_000)
+        self.assertEqual(result.points[10].balance_cents, 93_000)
+
 
 class TestCardMinimums(unittest.TestCase):
     def test_minimum_is_due_at_the_end_of_the_following_month(self):
@@ -605,12 +633,88 @@ class TestDeduplication(unittest.TestCase):
             [("transfer_out", -5_000)],
         )
 
+    def test_a_transfer_does_not_cancel_a_regular_bill(self):
+        b = bill(
+            name="Rent",
+            amount_cents=10_000,
+            frequency=BillFrequency.ONCE,
+            next_due=TODAY + timedelta(days=2),
+        )
+        recorded = transaction(
+            amount_cents=10_000,
+            type_=TransactionType.TRANSFER,
+            occurred_on=TODAY + timedelta(days=2),
+            account_id=CHECKING.id,
+            transfer_account_id=SAVINGS.id,
+        )
+        result = run(bills=[ForecastBill(b, 10_000)], transactions=[recorded])
+
+        self.assertEqual([event.kind for event in result.events], ["transfer_in", "bill", "transfer_out"])
+
+    def test_a_refund_does_not_cancel_scheduled_income(self):
+        s = schedule(name="Pay", frequency=IncomeFrequency.MONTHLY, next_date=TODAY + timedelta(days=2))
+        recorded = transaction(
+            amount_cents=100_000,
+            type_=TransactionType.REFUND,
+            occurred_on=TODAY + timedelta(days=2),
+            description="Refund",
+        )
+        result = run(incomes=[s], transactions=[recorded], horizon_days=5)
+
+        self.assertEqual(
+            [(event.kind, event.amount_cents) for event in result.events],
+            [("income", 100_000), ("refund", 100_000)],
+        )
+
+    def test_dedup_before_cap_allocation_keeps_the_still_owed_amount(self):
+        b = bill(amount_cents=5_000, next_due=TODAY, anchor_day=14, pay_to_account_id=CARD.id)
+        recorded = transaction(
+            amount_cents=5_000,
+            type_=TransactionType.TRANSFER,
+            occurred_on=TODAY,
+            account_id=CHECKING.id,
+            transfer_account_id=CARD.id,
+        )
+        result = run(
+            bills=[ForecastBill(b, 5_000)],
+            card_owed={CARD.id: 10_000},
+            transactions=[recorded],
+        )
+
+        # Today's occurrence is already recorded; the cap must not be consumed by it, so both
+        # remaining 5,000 occurrences survive.
+        self.assertEqual(
+            [(event.date, event.amount_cents) for event in result.events],
+            [(date(2026, 12, 14), -5_000), (date(2027, 1, 14), -5_000)],
+        )
+
+    def test_a_transaction_after_the_horizon_does_not_cancel_a_last_day_bill(self):
+        b = bill(
+            name="Last day",
+            amount_cents=10_000,
+            frequency=BillFrequency.ONCE,
+            next_due=TODAY + timedelta(days=90),
+        )
+        recorded = transaction(
+            amount_cents=10_000,
+            type_=TransactionType.EXPENSE,
+            occurred_on=TODAY + timedelta(days=91),
+        )
+        result = run(bills=[ForecastBill(b, 10_000)], transactions=[recorded])
+
+        self.assertEqual(
+            [(event.date, event.kind) for event in result.events],
+            [(TODAY + timedelta(days=90), "bill")],
+        )
+
 
 class TestOrderingAndSummary(unittest.TestCase):
     def test_inflows_sort_before_outflows_within_a_day(self):
-        b = bill(name="Rent", amount_cents=50_000, next_due=TODAY + timedelta(days=1))
+        # The bill name sorts before the income name, so description order alone would put the
+        # outflow first. The assertion fails unless inflow kinds are prioritised.
+        b = bill(name="AAA Rent", amount_cents=50_000, next_due=TODAY + timedelta(days=1))
         s = schedule(
-            name="Pay",
+            name="Zzz Pay",
             frequency=IncomeFrequency.WEEKLY,
             next_date=TODAY + timedelta(days=1),
         )
@@ -651,6 +755,22 @@ class TestOrderingAndSummary(unittest.TestCase):
         )
         self.assertEqual(result.lowest_cents, 110_000)
         self.assertEqual(result.lowest_date, TODAY + timedelta(days=40))
+
+    def test_checkpoints_beyond_the_requested_horizon_are_still_genuine(self):
+        b = bill(
+            name="Day 40",
+            amount_cents=10_000,
+            frequency=BillFrequency.ONCE,
+            next_due=TODAY + timedelta(days=40),
+        )
+        result = run(bills=[ForecastBill(b, 10_000)], horizon_days=30)
+
+        self.assertEqual(len(result.points), 31)
+        self.assertEqual(result.points[-1].date, TODAY + timedelta(days=30))
+        self.assertEqual((result.at_30, result.at_60, result.at_90), (100_000, 90_000, 90_000))
+        self.assertEqual(result.endings_by_account[CHECKING.id], (100_000, 90_000, 90_000))
+        # The day-40 event is outside the requested horizon but still informs the checkpoints.
+        self.assertEqual(result.events, [])
 
 
 if __name__ == "__main__":

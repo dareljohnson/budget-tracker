@@ -27,9 +27,19 @@ LIQUID_KINDS = frozenset({AccountKind.CHECKING, AccountKind.SAVINGS, AccountKind
 INFLOW_KINDS = frozenset({"income", "refund", "transfer_in"})
 OUTFLOW_KINDS = frozenset({"bill", "card_payment", "minimum", "transfer_out"})
 
+# De-duplication is by transaction type, never by direction alone. A transfer is not a bill and a
+# refund is not income, so they must not cancel those scheduled events. Card-payment bills are
+# matched by both expense and transfer rows because either can represent a card payment.
+_INCOME_KINDS = frozenset({"income"})
+_REFUND_KINDS = frozenset({"refund"})
+_EXPENSE_KINDS = frozenset({"bill", "minimum", "card_payment"})
+_TRANSFER_OUT_KINDS = frozenset({"transfer_out", "card_payment"})
+_TRANSFER_IN_KINDS = frozenset({"transfer_in"})
+
 _ONE_DAY = timedelta(days=1)
 _RECHECK_DAYS = (30, 60, 90)
 _MAX_DAY_SPAN = 1
+_FULL_HORIZON = 90
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,6 +83,19 @@ class CashFlowForecast:
     at_90: int
     endings_by_account: dict[int, tuple[int, int, int]]
     has_income: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _CardOccurrence:
+    """A card-payment candidate before the per-card cap is allocated."""
+
+    date: date
+    description: str
+    account_id: int  # paying (liquid) account
+    target_id: int  # card/loan being paid
+    nominal_cents: int
+    is_open: bool
+    order: int
 
 
 def income_dates(schedule: IncomeSchedule, start: date, end: date) -> list[date]:
@@ -168,9 +191,15 @@ def forecast(
     minimums, and income occurrences due today are applied; recorded transactions dated today are
     used only to de-duplicate scheduled events. Recorded transactions after today are applied
     normally, with transfers expanded per liquid account.
+
+    ``at_30``/``at_60``/``at_90`` and ``endings_by_account`` are always taken from a full 90-day
+    projection; ``points``, ``events``, and ``lowest`` are limited to the requested horizon.
     """
     days = max(0, horizon_days)
     end = today + timedelta(days=days)
+    simulation_days = max(days, _FULL_HORIZON)
+    simulation_end = today + timedelta(days=simulation_days)
+
     liquid_ids = [account.id for account in accounts if account.id is not None and account.kind in LIQUID_KINDS]
     liquid_set = set(liquid_ids)
     account_names = {account.id: account.name for account in accounts if account.id is not None}
@@ -178,40 +207,55 @@ def forecast(
     start_balances = {account_id: int(balances.get(account_id, 0)) for account_id in liquid_ids}
     starting_cents = sum(start_balances.values())
 
-    scheduled = _scheduled_events(
+    scheduled, card_occurrences = _scheduled_events(
         today=today,
-        end=end,
+        end=simulation_end,
         bills=bills,
-        card_owed=card_owed,
         card_minimums=card_minimums,
         incomes=incomes,
         liquid_set=liquid_set,
         account_names=account_names,
     )
 
+    # Only transactions inside the requested horizon may cancel scheduled events.
     recorded = [
         transaction
         for transaction in scheduled_transactions
-        if transaction.occurred_on >= today and transaction.type is not TransactionType.ADJUSTMENT
+        if today <= transaction.occurred_on <= end and transaction.type is not TransactionType.ADJUSTMENT
     ]
     consumed = _deduplicate(scheduled, recorded, liquid_set)
-    events = [event for index, event in enumerate(scheduled) if index not in consumed]
-    events.extend(_transaction_events(scheduled_transactions, today, end, liquid_set))
+    card_indexes = set(card_occurrences)
+    events = [
+        event
+        for index, event in enumerate(scheduled)
+        if index not in consumed and index not in card_indexes
+    ]
+    # A recorded future card transfer lowers the card's debt, so it also lowers the cap that
+    # later fixed card payments may use. Payments dated today are already reflected in card_owed.
+    adjusted_owed = _owed_after_future_card_transfers(card_owed, scheduled_transactions, today, simulation_end)
+    events.extend(
+        _allocate_card_payments(
+            [occurrence for index, occurrence in card_occurrences.items() if index not in consumed],
+            adjusted_owed,
+        )
+    )
+    events.extend(_transaction_events(scheduled_transactions, today, simulation_end, liquid_set))
     events.sort(key=_event_sort_key)
 
     by_date: dict[date, list[CashEvent]] = {}
     for event in events:
-        if today <= event.date <= end:
+        if today <= event.date <= simulation_end:
             by_date.setdefault(event.date, []).append(event)
 
     balances_now = dict(start_balances)
     points: list[CashFlowPoint] = []
     snapshots: dict[int, dict[int, int]] = {}
-    for offset in range(days + 1):
+    for offset in range(simulation_days + 1):
         day = today + timedelta(days=offset)
         for event in by_date.get(day, ()):  # order does not change the day-end total
             balances_now[event.account_id] = balances_now.get(event.account_id, 0) + event.amount_cents
-        points.append(CashFlowPoint(day, sum(balances_now.values())))
+        if offset <= days:
+            points.append(CashFlowPoint(day, sum(balances_now.values())))
         if offset in _RECHECK_DAYS:
             snapshots[offset] = dict(balances_now)
 
@@ -222,23 +266,21 @@ def forecast(
         lowest_date, lowest_cents = today, starting_cents
 
     def total_at(offset: int) -> int:
-        snapshot = snapshots.get(offset)
-        if snapshot is not None:
-            return sum(snapshot.values())
-        return points[-1].balance_cents if points else starting_cents
+        return sum(snapshots[offset].values())
 
-    endings_by_account: dict[int, tuple[int, int, int]] = {}
-    final_balances = snapshots.get(days, balances_now) if points else start_balances
-    for account_id in liquid_ids:
-        values: list[int] = []
-        for offset in _RECHECK_DAYS:
-            snapshot = snapshots.get(offset)
-            values.append((snapshot if snapshot is not None else final_balances).get(account_id, 0))
-        endings_by_account[account_id] = (values[0], values[1], values[2])
+    endings_by_account: dict[int, tuple[int, int, int]] = {
+        account_id: (
+            snapshots[30].get(account_id, 0),
+            snapshots[60].get(account_id, 0),
+            snapshots[90].get(account_id, 0),
+        )
+        for account_id in liquid_ids
+    }
+    horizon_events = [event for event in events if event.date <= end]
 
     return CashFlowForecast(
         points=points,
-        events=events,
+        events=horizon_events,
         starting_cents=starting_cents,
         lowest_date=lowest_date,
         lowest_cents=lowest_cents,
@@ -246,7 +288,7 @@ def forecast(
         at_60=total_at(60),
         at_90=total_at(90),
         endings_by_account=endings_by_account,
-        has_income=any(event.kind == "income" for event in events),
+        has_income=any(event.kind == "income" for event in horizon_events),
     )
 
 
@@ -255,16 +297,77 @@ def _scheduled_events(
     today: date,
     end: date,
     bills: Sequence[ForecastBill],
-    card_owed: Mapping[int, int],
     card_minimums: Sequence[CardMinimum],
     incomes: Sequence[IncomeSchedule],
     liquid_set: set[int],
     account_names: Mapping[int, str],
-) -> list[CashEvent]:
+) -> tuple[list[CashEvent], dict[int, _CardOccurrence]]:
+    """Build scheduled events and card-payment candidates, de-duplicating before cap allocation."""
     events: list[CashEvent] = []
-    remaining_owed = {int(account_id): int(cents) for account_id, cents in card_owed.items()}
+    card_occurrences: dict[int, _CardOccurrence] = {}
+    order = 0
     for entry in bills:
-        events.extend(_bill_events(entry, today, end, liquid_set, remaining_owed))
+        bill = entry.bill
+        if not bill.active or bill.account_id not in liquid_set:
+            continue
+        occurrences = _bill_dates(bill, today, end)
+        if not occurrences:
+            continue
+        if not bill.is_card_payment:
+            if entry.amount_cents <= 0:
+                continue
+            for occurrence in occurrences:
+                events.append(
+                    CashEvent(
+                        date=occurrence,
+                        description=bill.name,
+                        account_id=bill.account_id,
+                        amount_cents=-abs(entry.amount_cents),
+                        kind="bill",
+                    )
+                )
+            continue
+        target = bill.pay_to_account_id
+        if target is None:  # defensive: is_card_payment implies a target
+            continue
+        if bill.amount_cents == 0:
+            # Pay-the-full-balance bills are projected once; recurrence is deliberately ignored.
+            if entry.amount_cents <= 0:
+                continue
+            _add_card_occurrence(
+                events,
+                card_occurrences,
+                _CardOccurrence(
+                    date=occurrences[0],
+                    description=bill.name,
+                    account_id=bill.account_id,
+                    target_id=target,
+                    nominal_cents=entry.amount_cents,
+                    is_open=True,
+                    order=order,
+                ),
+            )
+            order += 1
+            continue
+        nominal = abs(entry.amount_cents)
+        if nominal <= 0:
+            continue
+        for occurrence in occurrences:
+            _add_card_occurrence(
+                events,
+                card_occurrences,
+                _CardOccurrence(
+                    date=occurrence,
+                    description=bill.name,
+                    account_id=bill.account_id,
+                    target_id=target,
+                    nominal_cents=nominal,
+                    is_open=False,
+                    order=order,
+                ),
+            )
+            order += 1
+
     events.extend(_minimum_events(card_minimums, today, end, liquid_set, account_names))
     for schedule in incomes:
         if not schedule.active or schedule.account_id not in liquid_set or schedule.amount_cents <= 0:
@@ -279,77 +382,75 @@ def _scheduled_events(
                     kind="income",
                 )
             )
-    events.sort(key=_event_sort_key)
-    return events
+    # Keep insertion order so card-occurrence indexes stay valid; output sorting happens later.
+    return events, card_occurrences
 
 
-def _bill_events(
-    entry: ForecastBill,
+def _add_card_occurrence(
+    events: list[CashEvent],
+    card_occurrences: dict[int, _CardOccurrence],
+    occurrence: _CardOccurrence,
+) -> None:
+    card_occurrences[len(events)] = occurrence
+    events.append(
+        CashEvent(
+            date=occurrence.date,
+            description=occurrence.description,
+            account_id=occurrence.account_id,
+            amount_cents=-occurrence.nominal_cents,
+            kind="card_payment",
+        )
+    )
+
+
+def _owed_after_future_card_transfers(
+    card_owed: Mapping[int, int],
+    transactions: Sequence[Transaction],
     today: date,
     end: date,
-    liquid_set: set[int],
-    remaining_owed: dict[int, int],
+) -> dict[int, int]:
+    """Reduce today's owed by recorded card transfers after today (today's are already included)."""
+    remaining = {int(account_id): int(cents) for account_id, cents in card_owed.items()}
+    for transaction in transactions:
+        if transaction.type is not TransactionType.TRANSFER:
+            continue
+        if transaction.occurred_on <= today or transaction.occurred_on > end:
+            continue
+        target = transaction.transfer_account_id
+        if target is None or target not in remaining:
+            continue
+        remaining[target] = max(0, remaining[target] - abs(transaction.amount_cents))
+    return remaining
+
+
+def _allocate_card_payments(
+    occurrences: Sequence[_CardOccurrence],
+    card_owed: Mapping[int, int],
 ) -> list[CashEvent]:
-    bill = entry.bill
-    if not bill.active or bill.account_id not in liquid_set:
-        return []
-    occurrences = _bill_dates(bill, today, end)
-    if not occurrences:
-        return []
-    if not bill.is_card_payment:
-        return [
-            CashEvent(
-                date=occurrence,
-                description=bill.name,
-                account_id=bill.account_id,
-                amount_cents=-abs(entry.amount_cents),
-                kind="bill",
-            )
-            for occurrence in occurrences
-            if entry.amount_cents > 0
-        ]
-
-    target = bill.pay_to_account_id
-    if target is None:  # defensive: is_card_payment implies a target
-        return []
-    remaining = remaining_owed.get(target)
-    if bill.amount_cents == 0:
-        # Pay-the-full-balance bills are projected once; recurrence is deliberately ignored.
-        available = entry.amount_cents if remaining is None else min(entry.amount_cents, remaining)
-        if available <= 0:
-            return []
-        if remaining is not None:
-            remaining_owed[target] = max(0, remaining - available)
-        return [
-            CashEvent(
-                date=occurrences[0],
-                description=bill.name,
-                account_id=bill.account_id,
-                amount_cents=-available,
-                kind="card_payment",
-            )
-        ]
-
-    if remaining is None or remaining <= 0:
-        return []
+    """Allocate the remaining owed across surviving card-payment occurrences chronologically."""
+    remaining_owed = {int(account_id): int(cents) for account_id, cents in card_owed.items()}
     events: list[CashEvent] = []
-    for occurrence in occurrences:
-        if remaining <= 0:
-            break
-        amount = min(abs(entry.amount_cents), remaining)
+    for occurrence in sorted(occurrences, key=lambda item: (item.date, item.order)):
+        remaining = remaining_owed.get(occurrence.target_id)
+        if occurrence.is_open:
+            amount = occurrence.nominal_cents if remaining is None else min(occurrence.nominal_cents, remaining)
+        else:
+            if remaining is None or remaining <= 0:
+                continue
+            amount = min(occurrence.nominal_cents, remaining)
         if amount <= 0:
-            break
+            continue
+        if remaining is not None:
+            remaining_owed[occurrence.target_id] = remaining - amount
         events.append(
             CashEvent(
-                date=occurrence,
-                description=bill.name,
-                account_id=bill.account_id,
+                date=occurrence.date,
+                description=occurrence.description,
+                account_id=occurrence.account_id,
                 amount_cents=-amount,
                 kind="card_payment",
             )
         )
-        remaining -= amount
-    remaining_owed[target] = remaining
     return events
 
 
@@ -420,26 +521,28 @@ def _deduplicate(
         amount = abs(transaction.amount_cents)
         if amount == 0:
             continue
-        for account_id, inflow in _match_sides(transaction):
+        for account_id, compatible_kinds in _match_sides(transaction):
             if account_id is None or account_id not in liquid_set:
                 continue
-            match = _find_match(scheduled, consumed, transaction.occurred_on, account_id, inflow, amount)
+            match = _find_match(scheduled, consumed, transaction.occurred_on, account_id, compatible_kinds, amount)
             if match is not None:
                 consumed.add(match)
                 break  # a transaction cancels at most one scheduled event
     return consumed
 
 
-def _match_sides(transaction: Transaction) -> list[tuple[int | None, bool]]:
-    """Account/direction pairs a recorded transaction can cancel, most specific first."""
-    if transaction.type in (TransactionType.INCOME, TransactionType.REFUND):
-        return [(transaction.account_id, True)]
+def _match_sides(transaction: Transaction) -> list[tuple[int | None, frozenset[str]]]:
+    """Account/event-kind pairs a recorded transaction can cancel, most specific first."""
+    if transaction.type is TransactionType.INCOME:
+        return [(transaction.account_id, _INCOME_KINDS)]
+    if transaction.type is TransactionType.REFUND:
+        return [(transaction.account_id, _REFUND_KINDS)]
     if transaction.type is TransactionType.EXPENSE:
-        return [(transaction.account_id, False)]
+        return [(transaction.account_id, _EXPENSE_KINDS)]
     if transaction.type is TransactionType.TRANSFER:
         return [
-            (transaction.account_id, False),
-            (transaction.transfer_account_id, True),
+            (transaction.account_id, _TRANSFER_OUT_KINDS),
+            (transaction.transfer_account_id, _TRANSFER_IN_KINDS),
         ]
     return []
 
@@ -449,16 +552,16 @@ def _find_match(
     consumed: set[int],
     occurred_on: date,
     account_id: int,
-    inflow: bool,
+    compatible_kinds: frozenset[str],
     amount: int,
 ) -> int | None:
-    wanted_kinds = INFLOW_KINDS if inflow else OUTFLOW_KINDS
     for index, event in enumerate(scheduled):
         if index in consumed:
             continue
-        if event.account_id != account_id or event.kind not in wanted_kinds:
+        if event.account_id != account_id or event.kind not in compatible_kinds:
             continue
-        if (event.amount_cents > 0) != inflow or abs(event.amount_cents) != amount:
+        expected = amount if event.kind in INFLOW_KINDS else -amount
+        if event.amount_cents != expected:
             continue
         if abs((event.date - occurred_on).days) > _MAX_DAY_SPAN:
             continue

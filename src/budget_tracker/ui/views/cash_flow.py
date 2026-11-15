@@ -617,6 +617,7 @@ class IncomePlanDialog:
         self.on_close = on_close
         self.today = date.today()
         self._closed = False
+        self._saving = False
         self._editing: IncomeSchedule | None = None
         self._anchor_auto = True
         self.preview_dates: list[date] = []
@@ -736,7 +737,10 @@ class IncomePlanDialog:
         )
 
         self.save_button = ft.FilledButton(
-            content="Save income", icon=ft.Icons.CHECK, on_click=self._save
+            content="Save income",
+            icon=ft.Icons.CHECK,
+            on_click=self._save,
+            visible=False,
         )
         self.dialog = ft.AlertDialog(
             modal=True,
@@ -887,6 +891,7 @@ class IncomePlanDialog:
         self._update_visibility()
         self._update_preview()
         self.editor.visible = True
+        self.save_button.visible = True
         self._update_dialog()
 
     def _start_edit(self, schedule: IncomeSchedule) -> None:
@@ -910,6 +915,7 @@ class IncomePlanDialog:
         self._update_visibility()
         self._update_preview()
         self.editor.visible = True
+        self.save_button.visible = True
         self._update_dialog()
 
     # ---------- draft / preview ----------
@@ -1106,16 +1112,28 @@ class IncomePlanDialog:
 
     # ---------- persistence ----------
     def _save(self, _: ft.Event | None = None) -> None:
+        # A hidden editor has nothing to save; a second click must not insert a duplicate, and
+        # a closed dialog must never write again.
+        if self._closed or self._saving or not self.editor.visible:
+            return
         schedule = self._validate()
         if schedule is None:
             return
+        self._saving = True
+        self.save_button.disabled = True
+        failure: str | None = None
         try:
             if self._editing is not None and self._editing.id is not None:
                 self.ctx.service.update_income_schedule(schedule)
             else:
                 self.ctx.service.add_income_schedule(schedule)
         except RepositoryError as exc:
-            self.error.value = str(exc)
+            failure = str(exc)
+        finally:
+            self._saving = False
+            self.save_button.disabled = False
+        if failure is not None:
+            self.error.value = failure
             self.error.visible = True
             self._update_dialog()
             return

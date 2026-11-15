@@ -538,6 +538,7 @@ class TestIncomePlanDialog(_Base):
         computed = income_dates(payroll, self.today + timedelta(days=1), self.today + timedelta(days=365))[0]
         self.assertGreater(computed, self.today)
         joined = " ".join(texts)
+        self.assertIn("into Checking", joined)
         self.assertIn(f"next {computed:%b} {computed.day}", joined)
         self.assertNotIn(f"next {past:%b} {past.day}", joined)
 
@@ -545,15 +546,29 @@ class TestIncomePlanDialog(_Base):
     def test_add_income_resets_the_editor_to_the_documented_defaults(self):
         dialog = self._dialog()
         self.assertFalse(dialog.editor.visible)
+        self.assertFalse(dialog.save_button.visible)
 
         dialog.add_button.on_click(None)
 
         self.assertTrue(dialog.editor.visible)
+        self.assertTrue(dialog.save_button.visible)
         self.assertFalse(dialog.delete_button.visible)
         self.assertEqual(dialog.frequency.value, IncomeFrequency.MONTHLY.value)
         self.assertEqual(dialog.anchor.value, str(self.today.day))
         self.assertEqual(dialog.account.value, str(self.checking_id))
         self.assertTrue(dialog.active.value)
+
+    def test_default_deposit_account_is_first_checking_then_first_liquid(self):
+        dialog = self._dialog()
+        dialog.add_button.on_click(None)
+        self.assertEqual(dialog.account.value, str(self.checking_id))
+
+        cash = self.accounts["Cash"]
+        dialog.accounts = [cash]
+        dialog._account_by_id = {cash.id: cash}
+        dialog._start_add(None)
+
+        self.assertEqual(dialog.account.value, str(cash.id))
 
     def test_frequency_drives_anchor_and_second_day_visibility(self):
         dialog = self._dialog()
@@ -580,7 +595,7 @@ class TestIncomePlanDialog(_Base):
         dialog.add_button.on_click(None)
         self._fill_valid(dialog, name="Salary", amount="1,200.50")
 
-        dialog._save(None)
+        dialog.save_button.on_click(None)
 
         [saved] = self.ctx.service.list_income_schedules()
         self.assertEqual((saved.name, saved.amount_cents), ("Salary", 120_050))
@@ -588,6 +603,38 @@ class TestIncomePlanDialog(_Base):
         self.assertEqual(saved.account_id, self.checking_id)
         self.assertTrue(saved.active)
         self.assertEqual(self.page.overlay, [])
+
+    def test_save_is_inert_while_the_editor_is_hidden(self):
+        dialog = self._dialog()
+        self.assertFalse(dialog.save_button.visible)
+
+        dialog.save_button.on_click(None)
+
+        self.assertEqual(self.ctx.service.list_income_schedules(), [])
+        self.assertIn(dialog.dialog, self.page.overlay)
+        self.assertFalse(dialog.name.error)
+        self.assertFalse(dialog.amount.error)
+        self.assertFalse(dialog.error.visible)
+
+    def test_double_click_save_inserts_exactly_one_schedule(self):
+        dialog = self._dialog()
+        dialog.add_button.on_click(None)
+        self._fill_valid(dialog)
+        calls: list[IncomeSchedule] = []
+        original = self.ctx.service.add_income_schedule
+
+        def record(schedule: IncomeSchedule) -> IncomeSchedule:
+            calls.append(schedule)
+            return original(schedule)
+
+        with mock.patch.object(
+            self.ctx.service, "add_income_schedule", side_effect=record
+        ):
+            dialog.save_button.on_click(None)
+            dialog.save_button.on_click(None)
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(self.ctx.service.list_income_schedules()), 1)
 
     def test_add_validates_each_field_inline_and_keeps_the_dialog_open(self):
         dialog = self._dialog()
@@ -809,6 +856,8 @@ class TestIncomePlanDialog(_Base):
         self.assertIn(dialog.dialog, self.page.overlay)
         self.assertTrue(dialog.error.visible)
         self.assertEqual(dialog.error.value, "boom")
+        self.assertFalse(dialog.save_button.disabled)
+        self.assertTrue(dialog.save_button.visible)
 
     def test_on_close_fires_once(self):
         calls: list[bool] = []

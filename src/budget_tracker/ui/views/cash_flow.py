@@ -124,7 +124,7 @@ class CashFlowPanel:
         )
         self._show_all_button = ft.TextButton("Show all", on_click=lambda _: self._toggle_show_all())
 
-        header = ft.Row(
+        header = ft.ResponsiveRow(
             [
                 ft.Column(
                     [
@@ -132,17 +132,21 @@ class CashFlowPanel:
                         self._subtitle,
                     ],
                     spacing=2,
-                    expand=True,
+                    col={"xs": 12, "md": 7, "lg": 8},
                 ),
-                ft.Row(
-                    [self._horizon_control, self._income_button],
-                    spacing=8,
-                    wrap=True,
-                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                ft.Container(
+                    ft.Row(
+                        [self._horizon_control, self._income_button],
+                        spacing=8,
+                        wrap=True,
+                        alignment=ft.MainAxisAlignment.END,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
+                    col={"xs": 12, "md": 5, "lg": 4},
                 ),
             ],
             spacing=GAP,
-            wrap=True,
+            run_spacing=8,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
         )
         self._content = ft.Column(spacing=GAP)

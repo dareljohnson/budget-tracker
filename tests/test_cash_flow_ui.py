@@ -160,6 +160,12 @@ class _Base(unittest.TestCase):
 
 
 class TestCashFlowPanel(_Base):
+    def test_header_uses_responsive_row_so_it_does_not_render_blank(self):
+        panel = self._panel(_forecast(checking_id=self.checking_id, cash_id=self.cash_id))
+        header = panel.control.controls[0]
+        self.assertIsInstance(header, ft.ResponsiveRow)
+        self.assertFalse(getattr(header.controls[0], "expand", False))
+
     def test_chart_is_a_png_image_at_logical_size(self):
         panel = self._panel(_forecast(checking_id=self.checking_id, cash_id=self.cash_id))
         images = [node for node in _walk(panel.control) if isinstance(node, ft.Image)]

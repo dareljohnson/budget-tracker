@@ -6,7 +6,13 @@ import pytest
 from PIL import Image
 
 from budget_tracker.cashflow import CashFlowPoint
-from budget_tracker.ui.charts import NEGATIVE_COLOR, ChartColors, line_chart_png
+from budget_tracker.ui.charts import (
+    NEGATIVE_COLOR,
+    ChartColors,
+    CumulativeMonth,
+    cumulative_chart_png,
+    line_chart_png,
+)
 
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 COLORS = ChartColors(
@@ -107,3 +113,91 @@ def test_empty_or_invalid_points_return_a_blank_chart(points):
     assert data.startswith(PNG_MAGIC)
     assert image.size == (240, 160)
     assert image.getextrema()[3] == (0, 0)
+
+
+MONTH_LABELS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
+def _months(
+    budgets: list[int],
+    spendings: list[int],
+    *,
+    current: int | None = None,
+) -> list[CumulativeMonth]:
+    return [
+        CumulativeMonth(
+            label=label,
+            budget_cents=budget,
+            spending_cents=spending,
+            is_current=index == current,
+        )
+        for index, (label, budget, spending) in enumerate(zip(MONTH_LABELS, budgets, spendings, strict=True))
+    ]
+
+
+def test_cumulative_png_has_magic_and_renders_at_twice_the_requested_size():
+    months = _months([100_000] * 12, [90_000] * 12, current=10)
+
+    data = cumulative_chart_png(months, width=600, height=200, colors=COLORS)
+
+    assert data.startswith(PNG_MAGIC)
+    assert _image(data).size == (1200, 400)
+
+
+@pytest.mark.parametrize("months", [[], None])
+def test_cumulative_empty_months_return_a_blank_chart(months):
+    data = cumulative_chart_png(months, width=120, height=80, colors=COLORS)
+
+    image = _image(data)
+    assert data.startswith(PNG_MAGIC)
+    assert image.size == (240, 160)
+    assert image.getextrema()[3] == (0, 0)
+
+
+@pytest.mark.parametrize(
+    "budgets, spendings",
+    [
+        ([0] * 12, [0] * 12),
+        ([0] * 10 + [50_000, 0], [0] * 10 + [40_000, 0]),
+        ([120_000] * 12, [100_000] * 12),
+        ([100_000] * 12, [130_000] * 12),
+    ],
+    ids=["all-zero", "one-active-month", "under-budget", "over-budget"],
+)
+def test_cumulative_series_render(budgets, spendings):
+    data = cumulative_chart_png(_months(budgets, spendings, current=10), width=300, height=120, colors=COLORS)
+
+    assert data.startswith(PNG_MAGIC)
+    assert _image(data).size == (600, 240)
+
+
+def test_cumulative_spending_is_red_over_budget_and_amber_under_budget():
+    over = _colors(_image(cumulative_chart_png(_months([100_000] * 12, [130_000] * 12, current=10), colors=COLORS)))
+    under = _colors(_image(cumulative_chart_png(_months([120_000] * 12, [100_000] * 12, current=10), colors=COLORS)))
+
+    assert _rgb(COLORS.primary) in over
+    assert _rgb(NEGATIVE_COLOR) in over
+    assert _rgb(COLORS.lowest) not in over
+    assert _rgb(COLORS.primary) in under
+    assert _rgb(COLORS.lowest) in under
+    assert _rgb(NEGATIVE_COLOR) not in under
+
+
+def test_cumulative_text_scale_changes_the_output():
+    months = _months([120_000] * 12, [100_000] * 12, current=10)
+
+    normal = cumulative_chart_png(months, width=300, height=120, colors=COLORS, text_scale=1.0)
+    large = cumulative_chart_png(months, width=300, height=120, colors=COLORS, text_scale=1.5)
+
+    assert normal != large
+    assert _image(normal).size == _image(large).size
+
+
+@pytest.mark.parametrize("invalid", [0, -1, None, "large", float("nan")])
+def test_cumulative_invalid_text_scale_falls_back_to_the_default(invalid):
+    months = _months([120_000] * 12, [100_000] * 12, current=10)
+
+    normal = cumulative_chart_png(months, width=300, height=120, colors=COLORS, text_scale=1.0)
+    fallback = cumulative_chart_png(months, width=300, height=120, colors=COLORS, text_scale=invalid)
+
+    assert fallback == normal

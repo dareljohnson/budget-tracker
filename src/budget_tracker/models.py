@@ -147,6 +147,35 @@ class Debt:
     id: int | None = None
 
 
+class IncomeFrequency(StrEnum):
+    WEEKLY = "weekly"
+    BIWEEKLY = "biweekly"
+    MONTHLY = "monthly"
+    SEMIMONTHLY = "semimonthly"
+
+    @property
+    def label(self) -> str:
+        return {
+            IncomeFrequency.WEEKLY: "Weekly",
+            IncomeFrequency.BIWEEKLY: "Every 2 weeks",
+            IncomeFrequency.MONTHLY: "Monthly",
+            IncomeFrequency.SEMIMONTHLY: "Twice a month",
+        }[self]
+
+
+@dataclass(slots=True)
+class IncomeSchedule:
+    name: str
+    amount_cents: int
+    frequency: IncomeFrequency
+    next_date: date
+    anchor_day: int
+    account_id: int
+    second_day: int | None = None
+    active: bool = True
+    id: int | None = None
+
+
 @dataclass(slots=True)
 class SavingsGoal:
     name: str

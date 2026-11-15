@@ -291,12 +291,15 @@ class BudgetService:
     def delete_minimum_payment(self, account_id: int, month: str) -> None:
         self.repo.delete_minimum_payment(account_id, month)
 
-    def minimum_payment_statuses(self, account_id: int) -> list[MinimumPaymentStatus]:
+    def minimum_payment_statuses(
+        self, account_id: int, as_of: date | None = None
+    ) -> list[MinimumPaymentStatus]:
         """Every recorded month, newest first, with payments applied oldest-unpaid first.
 
         A payment in the month after the statement still counts toward that statement's minimum,
         a payment above a minimum rolls into the next recorded month, and no payment is counted
         twice. Only transfers into the card count; cash advances (transfers out) do not.
+        Payments after ``as_of`` are ignored so a forecast can use today's status.
         """
         minimums = self.repo.list_minimum_payments(account_id)
         if not minimums:
@@ -304,7 +307,7 @@ class BudgetService:
         first_month = minimums[0].month
         payments = [
             (day, cents)
-            for day, cents in self.repo.card_payments(account_id)
+            for day, cents in self.repo.card_payments(account_id, through=as_of)
             if day.strftime("%Y-%m") >= first_month
         ]
         paid = {minimum.month: 0 for minimum in minimums}
@@ -332,12 +335,15 @@ class BudgetService:
             for minimum in reversed(minimums)
         ]
 
-    def current_minimum_payment(self, account_id: int) -> MinimumPaymentStatus | None:
+    def current_minimum_payment(
+        self, account_id: int, as_of: date | None = None
+    ) -> MinimumPaymentStatus | None:
         """The current month's minimum when recorded, otherwise the most recent one."""
-        statuses = self.minimum_payment_statuses(account_id)
+        today = as_of or date.today()
+        statuses = self.minimum_payment_statuses(account_id, as_of=as_of)
         if not statuses:
             return None
-        current = self.current_month()
+        current = self.current_month(today)
         return next((status for status in statuses if status.month == current), statuses[0])
 
     def adjust_balance(self, account_id: int, as_of: date, amount_cents: int, note: str = "") -> Transaction:

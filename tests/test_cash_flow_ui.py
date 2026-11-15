@@ -166,13 +166,13 @@ class TestCashFlowPanel(_Base):
         self.assertIsInstance(header, ft.ResponsiveRow)
         self.assertFalse(getattr(header.controls[0], "expand", False))
 
-    def test_chart_is_a_png_image_at_logical_size(self):
+    def test_chart_is_a_png_decoration_that_fills_the_card(self):
         panel = self._panel(_forecast(checking_id=self.checking_id, cash_id=self.cash_id))
-        images = [node for node in _walk(panel.control) if isinstance(node, ft.Image)]
-        self.assertEqual(len(images), 1)
-        image = images[0]
-        self.assertTrue(image.src.startswith("data:image/png;base64,"))
-        self.assertEqual((image.width, image.height), (900, 260))
+        chart = panel._chart_image
+        self.assertIsInstance(chart, ft.Container)
+        self.assertIsInstance(chart.image, ft.DecorationImage)
+        self.assertTrue(chart.image.src.startswith("data:image/png;base64,"))
+        self.assertEqual(chart.height, 220)
 
     def test_horizon_changes_kpis_chart_points_events_and_lowest(self):
         first = CashEvent(TODAY + timedelta(days=1), "Payroll", self.checking_id, 50_000, "income")
@@ -199,7 +199,7 @@ class TestCashFlowPanel(_Base):
         for expected in ("In 30 days", "In 60 days", "In 90 days", "Today", "Lowest point", "Next 8 of 12"):
             self.assertIn(expected, labels)
 
-        first_src = panel._chart_image.src
+        first_src = panel._chart_image.image.src
         panel._horizon_control.selected = ["30"]
         panel._horizon_control.on_change(_event(selected=["30"]))
         self.assertEqual(panel.horizon, 30)
@@ -213,7 +213,7 @@ class TestCashFlowPanel(_Base):
         self.assertIn("All 2", labels)
         self.assertEqual(panel._lowest_date, TODAY + timedelta(days=30))
         self.assertIn("$970.00", labels)  # 1000.00 - 30 * 1.00
-        self.assertNotEqual(panel._chart_image.src, first_src)
+        self.assertNotEqual(panel._chart_image.image.src, first_src)
         # Ending balances always keep the full 30/60/90 columns with their real values.
         for header in ("30d", "60d", "90d"):
             self.assertIn(header, labels)
@@ -342,26 +342,26 @@ class TestCashFlowPanel(_Base):
 
     def test_theme_and_text_size_refresh_regenerate_the_chart(self):
         panel = self._panel(_forecast(checking_id=self.checking_id, cash_id=self.cash_id))
-        light_src = panel._chart_image.src
+        light_src = panel._chart_image.image.src
 
         self.page.theme_mode = ft.ThemeMode.DARK
         panel.refresh()
-        dark_src = panel._chart_image.src
+        dark_src = panel._chart_image.image.src
         self.assertNotEqual(dark_src, light_src)
 
         set_text_scale(1.15)
         panel.refresh()
-        large_src = panel._chart_image.src
+        large_src = panel._chart_image.image.src
         self.assertNotEqual(large_src, dark_src)
 
     def test_preset_refresh_regenerates_the_chart(self):
         panel = self._panel(_forecast(checking_id=self.checking_id, cash_id=self.cash_id))
-        indigo_src = panel._chart_image.src
+        indigo_src = panel._chart_image.image.src
 
         self.repo.set_setting("theme_preset", "ocean")
         panel.refresh()
 
-        self.assertNotEqual(panel._chart_image.src, indigo_src)
+        self.assertNotEqual(panel._chart_image.image.src, indigo_src)
 
     def test_no_liquid_accounts_shows_the_empty_state_without_a_chart(self):
         panel = self._panel(
@@ -384,7 +384,7 @@ class TestCashFlowPanel(_Base):
         labels = _texts(panel.control)
         self.assertIn("Add income or a bill to see a forecast.", labels)
         self.assertNotIn("Add income to make this forecast realistic", labels)
-        self.assertIsNotNone(_find(panel.control, lambda node: isinstance(node, ft.Image)))
+        self.assertIsNotNone(panel._chart_image.image)
 
     def test_events_without_income_show_the_income_callout(self):
         bill = CashEvent(TODAY + timedelta(days=1), "Rent", self.checking_id, -30_000, "bill")
@@ -393,7 +393,7 @@ class TestCashFlowPanel(_Base):
         )
         labels = _texts(panel.control)
         self.assertIn("Add income to make this forecast realistic", labels)
-        self.assertIsNotNone(_find(panel.control, lambda node: isinstance(node, ft.Image)))
+        self.assertIsNotNone(panel._chart_image.image)
 
 
 class TestYearCashFlowSwitch(_Base):
@@ -469,12 +469,12 @@ class TestYearCashFlowSwitch(_Base):
         switch = self._switch(view)
         switch.selected = ["cash"]
         switch.on_change(_event(selected=["cash"]))
-        first_src = view.cash_panel._chart_image.src
+        first_src = view.cash_panel._chart_image.image.src
 
         self.page.theme_mode = ft.ThemeMode.DARK
         ctx.data_changed()  # fires the listener registered by YearView
 
-        self.assertNotEqual(view.cash_panel._chart_image.src, first_src)
+        self.assertNotEqual(view.cash_panel._chart_image.image.src, first_src)
         self.assertEqual(view.mode, "cash")
 
     def test_data_change_refreshes_the_cash_panel_only_once(self):

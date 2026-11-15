@@ -1,10 +1,62 @@
 import unittest
 from datetime import date
+from types import SimpleNamespace
+
+try:
+    import flet as ft
+except ImportError:  # pragma: no cover - UI tests need Flet installed
+    ft = None
 
 from budget_tracker.db import connect
 from budget_tracker.models import Budget, Transaction, TransactionType
 from budget_tracker.repository import Repository
 from budget_tracker.services import BudgetService
+from budget_tracker.ui.context import AppContext
+from budget_tracker.ui.theme import set_text_scale
+
+
+class _PageStub:
+    """Minimal stand-in for ``ft.Page`` so views can be built without a running app."""
+
+    def __init__(self) -> None:
+        self.overlay: list = []
+        self.theme_mode = ft.ThemeMode.LIGHT
+        self.updates = 0
+
+    def show_dialog(self, control) -> None:
+        self.overlay.append(control)
+
+    def pop_dialog(self) -> None:
+        if self.overlay:
+            self.overlay.pop()
+
+    def update(self, *_) -> None:
+        self.updates += 1
+
+
+def _walk(control):
+    """Yield a control and everything nested below it."""
+    yield control
+    for attr in ("controls", "content", "actions", "segments", "label"):
+        value = getattr(control, attr, None)
+        if isinstance(value, list):
+            for child in value:
+                if isinstance(child, ft.Control):
+                    yield from _walk(child)
+        elif isinstance(value, ft.Control):
+            yield from _walk(value)
+
+
+def _texts(control) -> list[str]:
+    return [node.value for node in _walk(control) if isinstance(node, ft.Text) and node.value]
+
+
+def _find(control, predicate):
+    return next((node for node in _walk(control) if predicate(node)), None)
+
+
+def _event(*, selected):
+    return SimpleNamespace(control=SimpleNamespace(selected=selected))
 
 
 class Base(unittest.TestCase):
@@ -115,3 +167,319 @@ class TestYearOverview(Base):
         overview = self.service.year_overview(2026, today=date(2026, 2, 15))
         self.assertFalse(overview.has_data)
         self.assertIsNone(overview.forecast_spending_cents)
+
+
+@unittest.skipIf(ft is None, "flet is not installed")
+class TestYearViewComposition(Base):
+    """The redesigned "This year" composition: toolbar, summary, chart, focus and table."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.page = _PageStub()
+        self.ctx = AppContext(page=self.page, repo=self.repo, service=self.service)
+        self.year = date.today().year
+        self.current_month = self.service.current_month()
+        set_text_scale(1.0)
+
+    def tearDown(self) -> None:
+        set_text_scale(1.0)
+        super().tearDown()
+
+    def view(self, **kwargs):
+        from budget_tracker.ui.views.year import YearView
+
+        return YearView(self.ctx, **kwargs)
+
+    def seed_current_month(self) -> None:
+        self.budget(self.current_month, 50_000)
+        self.spend(60_000, date.today())
+
+    # ---------- toolbar ----------
+    def test_header_has_one_toolbar_row_holding_the_year_and_mode_switch(self):
+        view = self.view()
+        header = view.control.controls[0]
+
+        self.assertIsInstance(header, ft.ResponsiveRow)
+        self.assertEqual(len(header.controls), 2)
+        toolbar = _find(
+            header,
+            lambda node: isinstance(node, ft.Container)
+            and isinstance(node.content, ft.Row)
+            and view.year in node.content.controls,
+        )
+        self.assertIsNotNone(toolbar)
+        row = toolbar.content
+        self.assertIn(view.mode_switch, row.controls)
+        self.assertTrue(row.wrap)
+        self.assertEqual(row.alignment, ft.MainAxisAlignment.END)
+
+    # ---------- summary strip ----------
+    def test_summary_strip_has_four_compact_tiles(self):
+        self.seed_current_month()
+        view = self.view()
+        kpis = view.body.controls[0]
+
+        self.assertIsInstance(kpis, ft.ResponsiveRow)
+        self.assertEqual(len(kpis.controls), 4)
+        for tile in kpis.controls:
+            self.assertEqual(tile.col, {"xs": 6, "sm": 4, "lg": 3})
+            self.assertIsNone(_find(tile, lambda node: isinstance(node, ft.Icon)))
+
+        titles = [
+            node.value
+            for tile in kpis.controls
+            for node in _walk(tile)
+            if isinstance(node, ft.Text)
+            and node.value in {"YTD budget", "YTD spending", "Under budget", "Over budget", "Year-end pace"}
+        ]
+        self.assertEqual(
+            titles[:2] + titles[3:],
+            ["YTD budget", "YTD spending", "Year-end pace"],
+        )
+        self.assertIn(titles[2], {"Under budget", "Over budget"})
+        self.assertIn(f"Estimate · {date.today().month} month(s) elapsed", _texts(kpis))
+
+    def test_summary_tile_helper_is_compact(self):
+        from budget_tracker.ui.components import summary_tile
+
+        tile = summary_tile("YTD budget", "$100.00", "3 month(s) budgeted")
+        self.assertEqual(tile.col, {"xs": 6, "sm": 4, "lg": 3})
+        self.assertIsNone(_find(tile, lambda node: isinstance(node, ft.Icon)))
+        self.assertEqual(_texts(tile), ["YTD budget", "$100.00", "3 month(s) budgeted"])
+
+    # ---------- coverage banner ----------
+    def test_coverage_banner_appears_under_three_budgeted_months_and_reviews_budgets(self):
+        self.budget(self.current_month, 50_000)
+        calls: list[bool] = []
+        view = self.view(on_view_budgets=lambda: calls.append(True))
+
+        texts = _texts(view.body)
+        self.assertIn("Only 1 of 12 months has a budget. The year-end pace is an estimate.", texts)
+        button = _find(
+            view.body,
+            lambda node: isinstance(node, ft.TextButton) and node.content == "Review budgets",
+        )
+        self.assertIsNotNone(button)
+        button.on_click(None)
+        self.assertEqual(calls, [True])
+        self.assertEqual(view.body.controls[1].data, "coverage-banner")
+
+    def test_coverage_banner_is_absent_for_a_fully_budgeted_year(self):
+        for month in ("01", "02", "03"):
+            self.budget(f"{self.year}-{month}", 50_000)
+        view = self.view()
+
+        self.assertIsNone(
+            _find(
+                view.body,
+                lambda node: isinstance(node, ft.TextButton) and node.content == "Review budgets",
+            )
+        )
+        self.assertFalse(any("year-end pace is an estimate" in text for text in _texts(view.body)))
+
+    def test_coverage_banner_is_absent_with_three_budgeted_months(self):
+        for month in ("01", "02", "03"):
+            self.budget(f"{self.year}-{month}", 50_000)
+        view = self.view()
+        overview = self.service.year_overview(self.year)
+        self.assertGreaterEqual(overview.budgeted_months, 3)
+        self.assertIsNone(view._coverage_banner(overview))
+
+    # ---------- cumulative chart ----------
+    def test_chart_is_a_decoration_image_that_fills_its_card(self):
+        self.seed_current_month()
+        view = self.view()
+
+        chart = view._chart_image
+        self.assertIsInstance(chart, ft.Container)
+        self.assertIsInstance(chart.image, ft.DecorationImage)
+        self.assertTrue(chart.image.src.startswith("data:image/png;base64,"))
+        self.assertEqual(chart.image.fit, ft.BoxFit.FILL)
+        self.assertEqual(chart.height, 260)
+
+        texts = _texts(view.body)
+        self.assertIn("Budget vs actual, cumulative", texts)
+        self.assertIn("Budget", texts)
+        self.assertIn("Spending", texts)
+        self.assertIn("Only months with activity change the line.", texts)
+
+    def test_cumulative_months_are_running_totals_with_the_current_month_flagged(self):
+        self.budget(f"{self.year}-01", 100_000)
+        self.budget(f"{self.year}-02", 50_000)
+        self.spend(70_000, date(self.year, 1, 10))
+        self.spend(40_000, date(self.year, 2, 10))
+        view = self.view()
+        overview = self.service.year_overview(self.year)
+
+        months = view._cumulative_months(overview)
+        self.assertEqual(len(months), 12)
+        self.assertEqual((months[0].budget_cents, months[0].spending_cents), (100_000, 70_000))
+        self.assertEqual((months[1].budget_cents, months[1].spending_cents), (150_000, 110_000))
+        self.assertEqual(months[-1].budget_cents, 150_000)
+        self.assertTrue(months[int(self.current_month[-2:]) - 1].is_current)
+        self.assertEqual(sum(month.is_current for month in months), 1)
+
+    def test_chart_follows_theme_and_text_scale(self):
+        self.seed_current_month()
+        view = self.view()
+        light_src = view._chart_image.image.src
+
+        self.page.theme_mode = ft.ThemeMode.DARK
+        view.refresh()
+        dark_src = view._chart_image.image.src
+        self.assertNotEqual(dark_src, light_src)
+
+        set_text_scale(1.15)
+        view.refresh()
+        large_src = view._chart_image.image.src
+        self.assertNotEqual(large_src, dark_src)
+
+    # ---------- focus card ----------
+    def test_focus_card_names_the_current_month_and_shows_budget_spent_and_categories(self):
+        self.seed_current_month()
+        view = self.view()
+
+        texts = _texts(view.body)
+        from budget_tracker.formatting import month_label
+
+        self.assertIn(month_label(self.current_month), texts)
+        self.assertIn("$600.00", texts)
+        self.assertIn("$500.00", texts)
+        self.assertIn("$100.00 over budget", texts)
+        self.assertIn("Groceries", texts)
+
+    def test_focus_card_falls_back_to_the_latest_month_with_data(self):
+        self.spend(30_000, date(self.year, 2, 10))
+        view = self.view()
+
+        texts = _texts(view.body)
+        self.assertIn("February 2026", texts)
+        self.assertNotIn(f"November {self.year}", texts)
+
+    def test_focus_card_lists_at_most_three_categories(self):
+        names = ("Groceries", "Dining Out", "Transportation", "Utilities")
+        for index, name in enumerate(names):
+            self.budget(self.current_month, 10_000, category=name)
+            self.spend((index + 1) * 1_000, date.today(), category=name)
+        view = self.view()
+
+        focus = _find(
+            view.body,
+            lambda node: isinstance(node, ft.Column)
+            and any(isinstance(child, ft.Text) and child.value == "Top categories" for child in node.controls),
+        )
+        self.assertIsNotNone(focus)
+        listed = [name for name in names if name in _texts(focus)]
+        self.assertEqual(len(listed), 3)
+        self.assertIn("Utilities", listed)  # largest category is kept
+        self.assertNotIn("Groceries", listed)  # smallest is dropped
+
+    # ---------- table ----------
+    def test_table_defaults_to_active_months_plus_the_current_month_and_ytd(self):
+        self.budget(f"{self.year}-01", 50_000)
+        self.spend(10_000, date(self.year, 2, 10))
+        view = self.view()
+
+        from budget_tracker.formatting import short_month_label
+
+        texts = _texts(view.body)
+        self.assertIn("Jan", texts)
+        self.assertIn("Feb", texts)
+        self.assertIn(short_month_label(self.current_month), texts)  # current month, even without activity
+        self.assertNotIn("Mar", texts)
+        self.assertIn("YTD", texts)
+        self.assertIsNotNone(
+            _find(
+                view.body,
+                lambda node: isinstance(node, ft.TextButton)
+                and node.content == "Show all 12 months",
+            )
+        )
+
+    def test_show_all_twelve_months_toggles_all_columns_and_collapses_again(self):
+        self.budget(f"{self.year}-01", 50_000)
+        view = self.view()
+        self.assertNotIn("Dec", _texts(view.body))
+
+        show_all = _find(
+            view.body,
+            lambda node: isinstance(node, ft.TextButton) and node.content == "Show all 12 months",
+        )
+        show_all.on_click(None)
+
+        texts = _texts(view.body)
+        for label in ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"):
+            self.assertIn(label, texts)
+        collapse = _find(
+            view.body,
+            lambda node: isinstance(node, ft.TextButton) and node.content == "Show active months",
+        )
+        self.assertIsNotNone(collapse)
+        collapse.on_click(None)
+
+        texts = _texts(view.body)
+        self.assertNotIn("Dec", texts)
+        self.assertIsNotNone(
+            _find(
+                view.body,
+                lambda node: isinstance(node, ft.TextButton)
+                and node.content == "Show all 12 months",
+            )
+        )
+        self.assertTrue(view._show_all_months is False)
+
+    def test_table_columns_fit_the_card_at_the_900px_minimum_window(self):
+        self.seed_current_month()
+        view = self.view()
+        table_card = view.body.controls[-1]
+        header = next(
+            control
+            for control in table_card.content.controls
+            if isinstance(control, ft.Row) and len(control.controls) == 6
+        )
+        width = sum(control.width or 0 for control in header.controls) + 8 * (
+            len(header.controls) - 1
+        )
+        # 900px window minus the 120px rail, divider, 64px page padding and 40px card padding.
+        self.assertLessEqual(width, 900 - 120 - 1 - 64 - 40)
+
+    def test_past_year_table_keeps_the_year_total_row(self):
+        from budget_tracker.formatting import short_month_label
+
+        self.spend(10_000, date(self.year - 1, 6, 1))
+        view = self.view()
+        view.year.value = str(self.year - 1)
+        view.refresh()
+
+        texts = _texts(view.body)
+        self.assertIn("Year total", texts)
+        self.assertIn("Jun", texts)
+        self.assertNotIn(short_month_label(self.current_month), texts)  # current month is another year
+
+    # ---------- empty and mode switching ----------
+    def test_empty_year_keeps_the_existing_empty_state(self):
+        view = self.view()
+        texts = _texts(view.body)
+        self.assertIn(f"No data for {self.year}", texts)
+        self.assertIn(
+            "Add transactions and budgets, and this page will show monthly budget "
+            "performance, cash flow and a year-end projection.",
+            texts,
+        )
+
+    def test_switching_to_cash_and_back_restores_the_year_content(self):
+        self.seed_current_month()
+        view = self.view()
+        before = _texts(view.body)
+        self.assertIn("Budget vs actual, cumulative", before)
+
+        view.mode_switch.selected = ["cash"]
+        view.mode_switch.on_change(_event(selected=["cash"]))
+        self.assertEqual(view.mode, "cash")
+        self.assertIs(view.body.controls[0], view.cash_panel.control)
+
+        view.mode_switch.selected = ["year"]
+        view.mode_switch.on_change(_event(selected=["year"]))
+        self.assertEqual(view.mode, "year")
+        self.assertIn("Budget vs actual, cumulative", _texts(view.body))
+        self.assertEqual(len(view.body.controls), 4)

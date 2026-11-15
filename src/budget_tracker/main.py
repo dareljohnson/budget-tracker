@@ -63,6 +63,7 @@ NAV_ITEMS = [
 ]
 TRANSACTIONS_INDEX = 2
 BILLS_INDEX = 6
+BUDGETS_INDEX = 7
 ALERT_MAX_ROWS = 6
 AUTO_BACKUP_INTERVAL_SECONDS = 6 * 60 * 60
 
@@ -160,7 +161,7 @@ def main(page: ft.Page) -> None:
     def build_views() -> list:
         return [
             DashboardView(ctx, on_view_bills=lambda: show_view(BILLS_INDEX)),
-            YearView(ctx),
+            YearView(ctx, on_view_budgets=lambda: show_view(BUDGETS_INDEX)),
             TransactionsView(ctx),
             AccountsView(ctx),
             GoalsView(ctx),

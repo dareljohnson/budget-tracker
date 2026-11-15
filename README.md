@@ -167,7 +167,17 @@ The projection is an **estimate**: it assumes a fixed APR, monthly compounding, 
 
 ## Year and cash flow
 
-The **Year** page has two tabs: **This year** shows the monthly budget-versus-actual view and its year totals, and **Next 90 days** projects your day-to-day cash balance. The switch keeps the navigation rail and the existing Year content unchanged; the year picker is hidden while the forecast is open.
+The **Year** page has two tabs: **This year** shows the budget-versus-actual story and its year totals, and **Next 90 days** projects your day-to-day cash balance. The switch keeps the navigation rail and the existing Year content unchanged; the year picker is hidden while the forecast is open.
+
+### This year
+
+- **One toolbar:** the year picker and the This year / Next 90 days switch sit together, so they do not stack over the page.
+- **Four compact summary tiles:** YTD budget, YTD spending, over/under budget, and year-end pace.
+- **Coverage banner:** when fewer than three months have a budget, the page says how many do and labels the year-end pace as an estimate.
+- **Cumulative chart:** the budget and spending lines accumulate across the year, with a scale and month labels; the current month is emphasized.
+- **Current-month focus:** budget vs spent, the over/under amount, and the top categories for the active month.
+- **Monthly detail:** only months with activity, the current month, and the YTD total are shown by default. **Show all 12 months** reveals the full year.
+
 
 ### Cash flow forecast
 

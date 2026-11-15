@@ -7,9 +7,10 @@ from unittest import mock
 
 import flet as ft
 
-from budget_tracker.cashflow import CashEvent, CashFlowForecast, CashFlowPoint
+from budget_tracker.cashflow import CashEvent, CashFlowForecast, CashFlowPoint, income_dates
 from budget_tracker.db import connect
-from budget_tracker.repository import Repository
+from budget_tracker.models import IncomeFrequency, IncomeSchedule
+from budget_tracker.repository import Repository, RepositoryError
 from budget_tracker.services import BudgetService
 from budget_tracker.ui.context import AppContext
 from budget_tracker.ui.theme import GAP, set_text_scale
@@ -319,13 +320,16 @@ class TestCashFlowPanel(_Base):
         self.assertEqual(calls, [True])
         self.assertEqual(self.page.snackbars, [])
 
-    def test_income_plan_without_a_callback_notifies_that_it_is_unavailable(self):
-        panel = self._panel(_forecast(checking_id=self.checking_id, cash_id=self.cash_id))
+    def test_income_plan_without_a_callback_opens_the_income_dialog(self):
+        from budget_tracker.ui.views.cash_flow import CashFlowPanel
+
+        panel = CashFlowPanel(self._context())
+        panel.refresh()
         panel._income_button.on_click(None)
-        snackbars = self.page.snackbars
-        self.assertEqual(len(snackbars), 1)
-        self.assertIn("Income plan", snackbars[0].content.value)
-        self.assertIn("not available", snackbars[0].content.value)
+        dialogs = [control for control in self.page.overlay if isinstance(control, ft.AlertDialog)]
+        self.assertEqual(len(dialogs), 1)
+        self.assertTrue(dialogs[0].open)
+        self.assertEqual(self.page.snackbars, [])
 
     def test_theme_and_text_size_refresh_regenerate_the_chart(self):
         panel = self._panel(_forecast(checking_id=self.checking_id, cash_id=self.cash_id))
@@ -463,6 +467,383 @@ class TestYearCashFlowSwitch(_Base):
 
         self.assertNotEqual(view.cash_panel._chart_image.src, first_src)
         self.assertEqual(view.mode, "cash")
+
+
+class TestIncomePlanDialog(_Base):
+    """The combined income schedule list and inline editor."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.ctx = self._context()
+        self.today = date.today()
+
+    def _dialog(self, *, on_close=None):
+        from budget_tracker.ui.views.cash_flow import IncomePlanDialog
+
+        dialog = IncomePlanDialog(self.ctx, on_close=on_close)
+        dialog.open()
+        return dialog
+
+    def _schedule(self, **overrides) -> IncomeSchedule:
+        values = {
+            "name": "Payroll",
+            "amount_cents": 241_000,
+            "frequency": IncomeFrequency.BIWEEKLY,
+            "next_date": self.today + timedelta(days=1),
+            "anchor_day": (self.today + timedelta(days=1)).day,
+            "account_id": self.checking_id,
+            "active": True,
+        }
+        values.update(overrides)
+        return self.ctx.service.add_income_schedule(IncomeSchedule(**values))
+
+    def _fill_valid(self, dialog, *, name: str = "Salary", amount: str = "100") -> None:
+        day = self.today.day
+        dialog.name.value = name
+        dialog.amount.value = amount
+        dialog.frequency.value = IncomeFrequency.MONTHLY.value
+        dialog.next_date.value = self.today.isoformat()
+        dialog.anchor.value = str(day)
+        dialog._frequency_changed(None)
+
+    def _edit_row(self, dialog):
+        row = dialog.list_column.controls[0]
+        return row.controls[-1]
+
+    # ---------- list ----------
+    def test_list_shows_amount_active_state_and_the_computed_next_occurrence(self):
+        past = self.today - timedelta(days=1)
+        payroll = self._schedule(next_date=past, anchor_day=past.day)
+        self._schedule(
+            name="Old contract",
+            amount_cents=60_000,
+            frequency=IncomeFrequency.MONTHLY,
+            next_date=date(2025, 1, 1),
+            anchor_day=1,
+            active=False,
+        )
+
+        dialog = self._dialog()
+
+        self.assertEqual(dialog.dialog.content.width, 520)
+        self.assertTrue(dialog.dialog.scrollable)
+        texts = _texts(dialog.list_column)
+        self.assertIn("Payroll", texts)
+        self.assertIn("Old contract", texts)
+        self.assertIn("$2,410.00", texts)
+        self.assertIn("$600.00", texts)
+        self.assertIn("Active", texts)
+        self.assertIn("Inactive", texts)
+
+        computed = income_dates(payroll, self.today + timedelta(days=1), self.today + timedelta(days=365))[0]
+        self.assertGreater(computed, self.today)
+        joined = " ".join(texts)
+        self.assertIn(f"next {computed:%b} {computed.day}", joined)
+        self.assertNotIn(f"next {past:%b} {past.day}", joined)
+
+    # ---------- defaults and visibility ----------
+    def test_add_income_resets_the_editor_to_the_documented_defaults(self):
+        dialog = self._dialog()
+        self.assertFalse(dialog.editor.visible)
+
+        dialog.add_button.on_click(None)
+
+        self.assertTrue(dialog.editor.visible)
+        self.assertFalse(dialog.delete_button.visible)
+        self.assertEqual(dialog.frequency.value, IncomeFrequency.MONTHLY.value)
+        self.assertEqual(dialog.anchor.value, str(self.today.day))
+        self.assertEqual(dialog.account.value, str(self.checking_id))
+        self.assertTrue(dialog.active.value)
+
+    def test_frequency_drives_anchor_and_second_day_visibility(self):
+        dialog = self._dialog()
+        dialog.add_button.on_click(None)
+
+        dialog.frequency.value = IncomeFrequency.WEEKLY.value
+        dialog._frequency_changed(None)
+        self.assertFalse(dialog.anchor.visible)
+        self.assertFalse(dialog.second_day.visible)
+
+        dialog.frequency.value = IncomeFrequency.MONTHLY.value
+        dialog._frequency_changed(None)
+        self.assertTrue(dialog.anchor.visible)
+        self.assertFalse(dialog.second_day.visible)
+
+        dialog.frequency.value = IncomeFrequency.SEMIMONTHLY.value
+        dialog._frequency_changed(None)
+        self.assertTrue(dialog.anchor.visible)
+        self.assertTrue(dialog.second_day.visible)
+
+    # ---------- add + validation ----------
+    def test_add_saves_a_valid_schedule_and_closes_the_dialog(self):
+        dialog = self._dialog()
+        dialog.add_button.on_click(None)
+        self._fill_valid(dialog, name="Salary", amount="1,200.50")
+
+        dialog._save(None)
+
+        [saved] = self.ctx.service.list_income_schedules()
+        self.assertEqual((saved.name, saved.amount_cents), ("Salary", 120_050))
+        self.assertEqual(saved.frequency, IncomeFrequency.MONTHLY)
+        self.assertEqual(saved.account_id, self.checking_id)
+        self.assertTrue(saved.active)
+        self.assertEqual(self.page.overlay, [])
+
+    def test_add_validates_each_field_inline_and_keeps_the_dialog_open(self):
+        dialog = self._dialog()
+        dialog.add_button.on_click(None)
+        card_id = self.accounts["Credit Card"].id
+
+        dialog.name.value = "   "
+        dialog._save(None)
+        self.assertIn("Name is required", dialog.name.error)
+        self.assertIn(dialog.dialog, self.page.overlay)
+
+        dialog.name.value = "x" * 61
+        dialog._save(None)
+        self.assertIn("60", dialog.name.error)
+
+        dialog.name.value = "Salary"
+        dialog.amount.value = "0"
+        dialog._save(None)
+        self.assertTrue(dialog.amount.error)
+
+        dialog.amount.value = "100"
+        dialog.frequency.value = "hourly"
+        dialog._save(None)
+        self.assertTrue(dialog.frequency.error_text)
+
+        dialog.frequency.value = IncomeFrequency.MONTHLY.value
+        dialog.anchor.value = "32"
+        dialog._save(None)
+        self.assertTrue(dialog.anchor.error)
+
+        dialog.anchor.value = str(self.today.day)
+        dialog.next_date.value = "not-a-date"
+        dialog._save(None)
+        self.assertTrue(dialog.next_date.error)
+
+        dialog.next_date.value = self.today.isoformat()
+        dialog.account.value = str(card_id)
+        dialog._save(None)
+        self.assertIn("checking, savings or cash", dialog.account.error_text)
+
+        self.assertEqual(self.ctx.service.list_income_schedules(), [])
+        self.assertIn(dialog.dialog, self.page.overlay)
+
+    def test_monthly_next_date_must_fall_on_the_anchor_day(self):
+        dialog = self._dialog()
+        dialog.add_button.on_click(None)
+        dialog.name.value = "Salary"
+        dialog.amount.value = "100"
+        dialog.frequency.value = IncomeFrequency.MONTHLY.value
+        dialog._frequency_changed(None)
+        dialog.next_date.value = date(self.today.year, self.today.month, 14).isoformat()
+        dialog._next_date_changed(None)
+        dialog.anchor.value = "15"
+        dialog._anchor_changed(None)
+
+        dialog._save(None)
+
+        self.assertIn("anchor day", dialog.next_date.error)
+        self.assertEqual(self.ctx.service.list_income_schedules(), [])
+        self.assertIn(dialog.dialog, self.page.overlay)
+
+        dialog.next_date.value = date(self.today.year, self.today.month, 15).isoformat()
+        dialog._save(None)
+        [saved] = self.ctx.service.list_income_schedules()
+        self.assertEqual((saved.next_date.day, saved.anchor_day), (15, 15))
+
+    def test_semimonthly_requires_a_distinct_second_day_and_a_matching_next_date(self):
+        dialog = self._dialog()
+        dialog.add_button.on_click(None)
+        dialog.name.value = "Consulting"
+        dialog.amount.value = "600"
+        dialog.frequency.value = IncomeFrequency.SEMIMONTHLY.value
+        dialog._frequency_changed(None)
+        dialog.next_date.value = date(self.today.year, self.today.month, 15).isoformat()
+        dialog._next_date_changed(None)
+
+        dialog.anchor.value = "15"
+        dialog.second_day.value = ""
+        dialog._anchor_changed(None)
+        dialog._save(None)
+        self.assertTrue(dialog.second_day.error)
+
+        dialog.second_day.value = "15"
+        dialog._save(None)
+        self.assertIn("different", dialog.second_day.error)
+
+        dialog.second_day.value = "1"
+        dialog.next_date.value = date(self.today.year, self.today.month, 14).isoformat()
+        dialog._save(None)
+        self.assertIn("income days", dialog.next_date.error)
+
+        dialog.next_date.value = date(self.today.year, self.today.month, 1).isoformat()
+        dialog._save(None)
+        [saved] = self.ctx.service.list_income_schedules()
+        self.assertEqual((saved.anchor_day, saved.second_day), (15, 1))
+
+    # ---------- edit / delete ----------
+    def test_edit_fills_the_editor_and_updates_the_active_toggle(self):
+        schedule = self._schedule(
+            name="Payroll",
+            frequency=IncomeFrequency.MONTHLY,
+            next_date=date(self.today.year, self.today.month, 15),
+            anchor_day=15,
+        )
+        dialog = self._dialog()
+
+        self._edit_row(dialog).on_click(None)
+
+        self.assertTrue(dialog.editor.visible)
+        self.assertTrue(dialog.delete_button.visible)
+        self.assertEqual(dialog.name.value, "Payroll")
+        self.assertEqual(dialog.amount.value, "2410.00")
+        self.assertEqual(dialog.frequency.value, IncomeFrequency.MONTHLY.value)
+        self.assertEqual(dialog.anchor.value, "15")
+
+        dialog.name.value = "Payroll (renamed)"
+        dialog.active.value = False
+        dialog._save(None)
+
+        saved = self.ctx.service.get_income_schedule(schedule.id)
+        self.assertEqual(saved.name, "Payroll (renamed)")
+        self.assertFalse(saved.active)
+
+    def test_delete_confirms_then_removes_the_schedule(self):
+        schedule = self._schedule()
+        dialog = self._dialog()
+        self._edit_row(dialog).on_click(None)
+
+        dialog.delete_button.on_click(None)
+        [confirm] = [
+            c
+            for c in self.page.overlay
+            if isinstance(c, ft.AlertDialog) and c is not dialog.dialog
+        ]
+        self.assertEqual(confirm.title.value, "Delete income")
+        confirm.actions[0].on_click(None)
+        self.assertIsNotNone(self.ctx.service.get_income_schedule(schedule.id))
+        self.assertIn(dialog.dialog, self.page.overlay)
+
+        dialog.delete_button.on_click(None)
+        confirm = [c for c in self.page.overlay if isinstance(c, ft.AlertDialog)][-1]
+        confirm.actions[-1].on_click(None)
+
+        self.assertIsNone(self.ctx.service.get_income_schedule(schedule.id))
+        self.assertEqual(self.page.overlay, [])
+
+    def test_delete_confirmation_does_not_touch_recorded_transactions(self):
+        from budget_tracker.models import Transaction, TransactionType
+
+        schedule = self._schedule()
+        self.repo.add_transaction(
+            Transaction(
+                5_000,
+                TransactionType.INCOME,
+                self.repo.list_categories(TransactionType.INCOME)[0].id,
+                self.today,
+                "Real deposit",
+                account_id=self.checking_id,
+            )
+        )
+        dialog = self._dialog()
+        self._edit_row(dialog).on_click(None)
+        dialog.delete_button.on_click(None)
+        confirm = [c for c in self.page.overlay if isinstance(c, ft.AlertDialog)][-1]
+        confirm.actions[-1].on_click(None)
+
+        self.assertIsNone(self.ctx.service.get_income_schedule(schedule.id))
+        transactions = self.repo.list_transactions()
+        self.assertEqual([tx.description for tx in transactions], ["Real deposit"])
+
+    # ---------- preview ----------
+    def test_preview_shows_exactly_three_dates_after_today(self):
+        dialog = self._dialog()
+        dialog.add_button.on_click(None)
+
+        dialog.frequency.value = IncomeFrequency.WEEKLY.value
+        dialog._frequency_changed(None)
+        dialog.next_date.value = self.today.isoformat()
+        dialog._next_date_changed(None)
+
+        expected = [
+            self.today + timedelta(days=7),
+            self.today + timedelta(days=14),
+            self.today + timedelta(days=21),
+        ]
+        self.assertEqual(dialog.preview_dates, expected)
+        self.assertNotIn(self.today, dialog.preview_dates)
+        preview_text = " ".join(_texts(dialog.preview))
+        for day in expected:
+            self.assertIn(f"{day:%b} {day.day}", preview_text)
+        self.assertIn("Forecast only", preview_text)
+
+    def test_preview_follows_a_semimonthly_rule(self):
+        dialog = self._dialog()
+        dialog.add_button.on_click(None)
+        dialog.frequency.value = IncomeFrequency.SEMIMONTHLY.value
+        dialog._frequency_changed(None)
+        dialog.next_date.value = date(self.today.year, self.today.month, 15).isoformat()
+        dialog._next_date_changed(None)
+        dialog.anchor.value = "1"
+        dialog.second_day.value = "15"
+        dialog._anchor_changed(None)
+
+        self.assertEqual(len(dialog.preview_dates), 3)
+        self.assertTrue(all(day > self.today for day in dialog.preview_dates))
+        self.assertTrue(all(day.day in (1, 15) for day in dialog.preview_dates))
+
+    # ---------- wiring and errors ----------
+    def test_service_errors_keep_the_dialog_open_and_show_the_message(self):
+        dialog = self._dialog()
+        dialog.add_button.on_click(None)
+        self._fill_valid(dialog)
+
+        with mock.patch.object(
+            self.ctx.service, "add_income_schedule", side_effect=RepositoryError("boom")
+        ):
+            dialog._save(None)
+
+        self.assertIn(dialog.dialog, self.page.overlay)
+        self.assertTrue(dialog.error.visible)
+        self.assertEqual(dialog.error.value, "boom")
+
+    def test_on_close_fires_once(self):
+        calls: list[bool] = []
+        dialog = self._dialog(on_close=lambda: calls.append(True))
+        dialog.add_button.on_click(None)
+        self._fill_valid(dialog)
+
+        dialog._save(None)
+        self.assertEqual(calls, [True])
+
+        dialog._cancel(None)
+        self.assertEqual(calls, [True])
+
+    def test_default_income_button_opens_the_dialog_and_refreshes_the_panel_on_save_and_delete(self):
+        from budget_tracker.ui.views.cash_flow import CashFlowPanel
+
+        panel = CashFlowPanel(self.ctx)
+        panel.refresh()
+        with mock.patch.object(panel, "refresh", wraps=panel.refresh) as refresh:
+            panel._income_button.on_click(None)
+            dialog = panel.income_dialog
+            dialog.add_button.on_click(None)
+            self._fill_valid(dialog)
+            dialog._save(None)
+            self.assertEqual(refresh.call_count, 1)
+
+            panel._income_button.on_click(None)
+            dialog = panel.income_dialog
+            self._edit_row(dialog).on_click(None)
+            dialog.delete_button.on_click(None)
+            confirm = [c for c in self.page.overlay if isinstance(c, ft.AlertDialog)][-1]
+            confirm.actions[-1].on_click(None)
+
+        self.assertEqual(refresh.call_count, 2)
+        self.assertEqual(self.ctx.service.list_income_schedules(), [])
 
 
 if __name__ == "__main__":

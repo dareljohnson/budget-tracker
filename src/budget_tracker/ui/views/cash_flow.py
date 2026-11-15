@@ -2,7 +2,8 @@
 
 The panel consumes ``BudgetService.cash_flow`` and renders the forecast as KPI tiles, a locally
 drawn Pillow chart, an upcoming-events list, per-account ending balances and an assumptions footer.
-It never writes to the ledger; income planning is delegated to the optional ``on_income`` callback.
+It never writes to the ledger; income planning opens ``IncomePlanDialog`` by default (or delegates
+to an injected ``on_income`` callback).
 """
 
 from __future__ import annotations
@@ -13,10 +14,12 @@ from datetime import date, timedelta
 
 import flet as ft
 
-from ...cashflow import CashEvent, CashFlowForecast, CashFlowPoint
-from ...formatting import format_money
+from ...cashflow import CashEvent, CashFlowForecast, CashFlowPoint, income_dates
+from ...formatting import format_money, parse_date, parse_money
+from ...models import AccountKind, IncomeFrequency, IncomeSchedule
+from ...repository import LIQUID_ACCOUNT_KINDS, RepositoryError
 from ..charts import ChartColors, line_chart_png
-from ..components import card, empty_state, section_title
+from ..components import card, confirm_dialog, date_field, empty_state, section_title
 from ..context import AppContext
 from ..theme import (
     EXPENSE_COLOR,
@@ -35,6 +38,7 @@ CHART_WIDTH = 900
 CHART_HEIGHT = 260
 EVENT_LIMIT = 8
 HORIZONS = (30, 60, 90)
+INCOME_DIALOG_WIDTH = 520
 _INFLOW_KINDS = frozenset({"income", "refund", "transfer_in"})
 
 ASSUMPTIONS = (
@@ -46,6 +50,8 @@ ASSUMPTIONS = (
 NO_INCOME_CALLOUT = "Add income to make this forecast realistic"
 NO_EVENTS_CALLOUT = "Add income or a bill to see a forecast."
 NO_LIQUID_ACCOUNTS = "Add a checking, savings, or cash account to forecast cash flow"
+PREVIEW_NOTE = "Forecast only; record the real deposit when it arrives."
+_PREVIEW_HORIZON = 400  # days: enough to show three occurrences of any supported rule
 
 
 def _event_sort_key(event: CashEvent) -> tuple[date, int, str, int]:
@@ -62,12 +68,22 @@ def _date_label(day: date) -> str:
     return f"{day:%b} {day.day}"
 
 
+def _ordinal(value: int) -> str:
+    if 10 <= value % 100 <= 20:
+        suffix = "th"
+    else:
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(value % 10, "th")
+    return f"{value}{suffix}"
+
+
 class CashFlowPanel:
     """Cash-flow view hosted by the Year page. Call ``refresh`` after mounting."""
 
     def __init__(self, ctx: AppContext, *, on_income: Callable[[], None] | None = None) -> None:
         self.ctx = ctx
-        self.on_income = on_income
+        # Default to the income dialog; callers may inject their own handler.
+        self.on_income = on_income if on_income is not None else self._open_income_dialog
+        self.income_dialog: IncomePlanDialog | None = None
         self.horizon = 90
         self._show_all = False
         self._forecast: CashFlowForecast | None = None
@@ -510,10 +526,16 @@ class CashFlowPanel:
         self.ctx.page.update()
 
     def _open_income(self) -> None:
-        if self.on_income is not None:
-            self.on_income()
-            return
-        self.ctx.notify("Income plan is not available yet.")
+        self.on_income()
+
+    def _open_income_dialog(self) -> None:
+        self.income_dialog = IncomePlanDialog(self.ctx, on_close=self._income_closed)
+        self.income_dialog.open()
+
+    def _income_closed(self) -> None:
+        """Reload the forecast once the income dialog closes."""
+        self.refresh()
+        self.ctx.page.update()
 
     # ---------- helpers ----------
     @staticmethod
@@ -575,3 +597,578 @@ class CashFlowPanel:
     @staticmethod
     def _png_source(png: bytes) -> str:
         return "data:image/png;base64," + base64.b64encode(png).decode("ascii")
+
+
+class IncomePlanDialog:
+    """Combined income schedule list and inline editor, per the cash-flow mockup.
+
+    A schedule is a forecast: saving or deleting one never writes to the ledger. The dialog
+    owns its own list, so it reads the service on construction and closes after a successful
+    change; ``on_close`` fires exactly once so the cash-flow panel can refresh.
+    """
+
+    def __init__(
+        self,
+        ctx: AppContext,
+        *,
+        on_close: Callable[[], None] | None = None,
+    ) -> None:
+        self.ctx = ctx
+        self.on_close = on_close
+        self.today = date.today()
+        self._closed = False
+        self._editing: IncomeSchedule | None = None
+        self._anchor_auto = True
+        self.preview_dates: list[date] = []
+        self.accounts = [
+            account
+            for account in ctx.repo.list_accounts()
+            if account.kind in LIQUID_ACCOUNT_KINDS
+        ]
+        self._account_by_id = {
+            account.id: account for account in self.accounts if account.id is not None
+        }
+        self.schedules = ctx.service.list_income_schedules()
+        default_id = self._default_account_id()
+
+        # ---------- list ----------
+        self.add_button = ft.FilledButton(
+            content="Add income", icon=ft.Icons.ADD, on_click=self._start_add
+        )
+        self.list_column = ft.Column(spacing=4)
+        self._render_list()
+
+        # ---------- inline editor ----------
+        self.editor_title = ft.Text("New income", size=fs(14), weight=ft.FontWeight.W_600)
+        self.name = ft.TextField(
+            label="Name",
+            hint_text="e.g. Payroll",
+            max_length=60,
+            expand=True,
+        )
+        self.amount = ft.TextField(
+            label="Amount",
+            prefix_icon=ft.Icons.ATTACH_MONEY,
+            hint_text="0.00",
+            keyboard_type=ft.KeyboardType.NUMBER,
+            expand=True,
+        )
+        self.frequency = ft.Dropdown(
+            label="Frequency",
+            options=[
+                ft.DropdownOption(key=frequency.value, text=frequency.label)
+                for frequency in IncomeFrequency
+            ],
+            value=IncomeFrequency.MONTHLY.value,
+            on_select=self._frequency_changed,
+            expand=True,
+        )
+        self.next_date = date_field(
+            ctx.page,
+            "Next deposit",
+            self.today,
+            on_change=self._next_date_changed,
+            expand=True,
+        )
+        self.anchor = ft.TextField(
+            label="Anchor day",
+            hint_text="1–31",
+            keyboard_type=ft.KeyboardType.NUMBER,
+            on_change=self._anchor_changed,
+            expand=True,
+        )
+        self.second_day = ft.TextField(
+            label="Second day",
+            hint_text="1–31",
+            keyboard_type=ft.KeyboardType.NUMBER,
+            on_change=lambda _: self._update_preview(),
+            expand=True,
+        )
+        self.account = ft.Dropdown(
+            label="Deposit to",
+            options=[
+                ft.DropdownOption(
+                    key=str(account.id), text=f"{account.name} ({account.kind.label})"
+                )
+                for account in self.accounts
+            ],
+            value=str(default_id) if default_id is not None else None,
+            on_select=lambda _: self._update_preview(),
+        )
+        self.active = ft.Switch(label="Active · include in forecast", value=True)
+        self.delete_button = ft.TextButton(
+            content="Delete",
+            icon=ft.Icons.DELETE_OUTLINE,
+            icon_color=EXPENSE_COLOR,
+            on_click=self._confirm_delete,
+            visible=False,
+        )
+        self.error = ft.Text("", size=fs(12), color=EXPENSE_COLOR, visible=False)
+        self.preview_dates_text = ft.Text("", size=fs(12), color=ft.Colors.ON_SURFACE_VARIANT)
+        self.preview_note = ft.Text(
+            "", size=fs(11), color=ft.Colors.ON_SURFACE_VARIANT
+        )
+        self.preview = ft.Container(
+            content=ft.Column(
+                [self.preview_dates_text, self.preview_note], spacing=2
+            ),
+            padding=ft.Padding.symmetric(horizontal=10, vertical=8),
+            border_radius=RADIUS,
+            bgcolor=ft.Colors.with_opacity(0.08, WARNING_COLOR),
+        )
+        self.editor = ft.Column(
+            [
+                self.editor_title,
+                ft.Row([self.name, self.amount], spacing=12),
+                ft.Row([self.frequency, self.next_date], spacing=12),
+                ft.Row([self.anchor, self.second_day], spacing=12),
+                self.account,
+                ft.Row(
+                    [self.active, self.delete_button],
+                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
+                self.preview,
+                self.error,
+            ],
+            spacing=12,
+            visible=False,
+        )
+
+        self.save_button = ft.FilledButton(
+            content="Save income", icon=ft.Icons.CHECK, on_click=self._save
+        )
+        self.dialog = ft.AlertDialog(
+            modal=True,
+            scrollable=True,
+            title=ft.Row(
+                [
+                    ft.Column(
+                        [
+                            ft.Text("Income plan", size=fs(18), weight=ft.FontWeight.W_600),
+                            ft.Text(
+                                "Planned deposits · used only for forecasts",
+                                size=fs(12),
+                                color=ft.Colors.ON_SURFACE_VARIANT,
+                            ),
+                        ],
+                        spacing=2,
+                        expand=True,
+                    ),
+                    self.add_button,
+                ],
+                spacing=8,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            content=ft.Container(
+                width=INCOME_DIALOG_WIDTH,
+                content=ft.Column(
+                    [
+                        self.list_column,
+                        ft.Divider(height=1),
+                        self.editor,
+                    ],
+                    spacing=12,
+                    tight=True,
+                    scroll=ft.ScrollMode.AUTO,
+                    horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
+                ),
+            ),
+            actions=[
+                ft.TextButton(content="Cancel", on_click=self._cancel),
+                self.save_button,
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+        self._update_visibility()
+
+    # ---------- list ----------
+    def _render_list(self) -> None:
+        if not self.schedules:
+            self.list_column.controls = [
+                ft.Text(
+                    "No income planned yet. Add income to make this forecast realistic.",
+                    size=fs(13),
+                    color=ft.Colors.ON_SURFACE_VARIANT,
+                )
+            ]
+            return
+        self.list_column.controls = [
+            self._schedule_row(schedule) for schedule in self.schedules
+        ]
+
+    def _schedule_row(self, schedule: IncomeSchedule) -> ft.Row:
+        parts = [schedule.frequency.label]
+        if schedule.frequency in (
+            IncomeFrequency.MONTHLY,
+            IncomeFrequency.SEMIMONTHLY,
+        ):
+            parts.append(f"on the {_ordinal(schedule.anchor_day)}")
+            if (
+                schedule.frequency is IncomeFrequency.SEMIMONTHLY
+                and schedule.second_day is not None
+            ):
+                parts.append(f"and the {_ordinal(schedule.second_day)}")
+        account = self._account_by_id.get(schedule.account_id)
+        if account is not None:
+            parts.append(f"into {account.name}")
+        next_day = self._next_occurrence(schedule)
+        parts.append(
+            f"next {_date_label(next_day)}" if next_day is not None else "ended"
+        )
+
+        chip_color = INCOME_COLOR if schedule.active else ft.Colors.ON_SURFACE_VARIANT
+        chip = ft.Container(
+            content=ft.Text(
+                "Active" if schedule.active else "Inactive",
+                size=fs(11),
+                weight=ft.FontWeight.W_600,
+                color=chip_color,
+            ),
+            bgcolor=ft.Colors.with_opacity(0.12, chip_color),
+            border_radius=10,
+            padding=ft.Padding.symmetric(horizontal=8, vertical=2),
+        )
+        return ft.Row(
+            [
+                ft.Column(
+                    [
+                        ft.Text(
+                            schedule.name,
+                            size=fs(14),
+                            weight=ft.FontWeight.W_600,
+                            max_lines=1,
+                            overflow=ft.TextOverflow.ELLIPSIS,
+                        ),
+                        ft.Text(
+                            " · ".join(parts),
+                            size=fs(11),
+                            color=ft.Colors.ON_SURFACE_VARIANT,
+                            max_lines=1,
+                            overflow=ft.TextOverflow.ELLIPSIS,
+                        ),
+                    ],
+                    spacing=0,
+                    expand=True,
+                ),
+                ft.Text(format_money(schedule.amount_cents), size=fs(13)),
+                chip,
+                ft.TextButton(
+                    content="Edit",
+                    on_click=lambda _, current=schedule: self._start_edit(current),
+                ),
+            ],
+            spacing=8,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        )
+
+    def _next_occurrence(self, schedule: IncomeSchedule) -> date | None:
+        start = self.today + timedelta(days=1)
+        end = max(start, schedule.next_date) + timedelta(days=_PREVIEW_HORIZON)
+        dates = income_dates(schedule, start, end)
+        return dates[0] if dates else None
+
+    # ---------- editor lifecycle ----------
+    def _start_add(self, _: ft.Event | None = None) -> None:
+        self._editing = None
+        self.editor_title.value = "New income"
+        self.name.value = ""
+        self.amount.value = ""
+        self.frequency.value = IncomeFrequency.MONTHLY.value
+        self.next_date.value = self.today.isoformat()
+        self.anchor.value = str(self.today.day)
+        self.second_day.value = ""
+        default_id = self._default_account_id()
+        self.account.value = str(default_id) if default_id is not None else None
+        self.active.value = True
+        self.delete_button.visible = False
+        self._anchor_auto = True
+        self._clear_errors()
+        self._update_visibility()
+        self._update_preview()
+        self.editor.visible = True
+        self._update_dialog()
+
+    def _start_edit(self, schedule: IncomeSchedule) -> None:
+        self._editing = schedule
+        self.editor_title.value = f"Edit {schedule.name}"
+        self.name.value = schedule.name
+        self.amount.value = f"{schedule.amount_cents / 100:.2f}"
+        self.frequency.value = schedule.frequency.value
+        self.next_date.value = schedule.next_date.isoformat()
+        self.anchor.value = str(schedule.anchor_day)
+        self.second_day.value = (
+            str(schedule.second_day) if schedule.second_day is not None else ""
+        )
+        self.account.value = (
+            str(schedule.account_id) if schedule.account_id in self._account_by_id else None
+        )
+        self.active.value = schedule.active
+        self.delete_button.visible = True
+        self._anchor_auto = False
+        self._clear_errors()
+        self._update_visibility()
+        self._update_preview()
+        self.editor.visible = True
+        self._update_dialog()
+
+    # ---------- draft / preview ----------
+    def _frequency_value(self) -> IncomeFrequency | None:
+        try:
+            return IncomeFrequency(self.frequency.value)
+        except (TypeError, ValueError):
+            return None
+
+    def _parsed_next_date(self) -> date | None:
+        try:
+            return parse_date(self.next_date.value)
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _parse_int(value) -> int | None:
+        try:
+            return int(str(value).strip())
+        except (TypeError, ValueError):
+            return None
+
+    @classmethod
+    def _parse_day(cls, value) -> int | None:
+        day = cls._parse_int(value)
+        return day if day is not None and 1 <= day <= 31 else None
+
+    def _draft_for_preview(self) -> IncomeSchedule | None:
+        frequency = self._frequency_value()
+        next_date = self._parsed_next_date()
+        if frequency is None or next_date is None:
+            return None
+        anchor = self._parse_day(self.anchor.value) if self.anchor.visible else next_date.day
+        if anchor is None:
+            return None
+        second = None
+        if frequency is IncomeFrequency.SEMIMONTHLY:
+            second = self._parse_day(self.second_day.value)
+            if second is None or second == anchor:
+                return None
+        return IncomeSchedule(
+            name="",
+            amount_cents=1,
+            frequency=frequency,
+            next_date=next_date,
+            anchor_day=anchor,
+            account_id=0,
+            second_day=second,
+        )
+
+    def _update_preview(self) -> None:
+        draft = self._draft_for_preview()
+        self.preview_dates = []
+        if draft is None:
+            self.preview_dates_text.value = "Next dates · complete the schedule to preview."
+        else:
+            start = self.today + timedelta(days=1)
+            end = max(start, draft.next_date) + timedelta(days=_PREVIEW_HORIZON)
+            self.preview_dates = income_dates(draft, start, end)[:3]
+            if self.preview_dates:
+                labels = " · ".join(_date_label(day) for day in self.preview_dates)
+                self.preview_dates_text.value = f"Next dates · {labels}"
+            else:
+                self.preview_dates_text.value = "Next dates · no upcoming deposits"
+        account = self._account_by_id.get(self._parse_int(self.account.value))
+        account_name = account.name if account is not None else "the selected account"
+        self.preview_note.value = f"Deposits into {account_name}. {PREVIEW_NOTE}"
+
+    def _update_visibility(self) -> None:
+        frequency = self._frequency_value()
+        self.anchor.visible = frequency in (
+            IncomeFrequency.MONTHLY,
+            IncomeFrequency.SEMIMONTHLY,
+        )
+        self.second_day.visible = frequency is IncomeFrequency.SEMIMONTHLY
+
+    # ---------- events ----------
+    def _frequency_changed(self, _: ft.Event | None = None) -> None:
+        self._update_visibility()
+        if self._anchor_auto:
+            next_date = self._parsed_next_date()
+            if next_date is not None:
+                self.anchor.value = str(next_date.day)
+        self._update_preview()
+        self._update_dialog()
+
+    def _next_date_changed(self, _: ft.Event | None = None) -> None:
+        if self._anchor_auto:
+            next_date = self._parsed_next_date()
+            if next_date is not None:
+                self.anchor.value = str(next_date.day)
+        self._update_preview()
+
+    def _anchor_changed(self, _: ft.Event | None = None) -> None:
+        self._anchor_auto = False
+        self._update_preview()
+
+    def _clear_errors(self) -> None:
+        for field in (self.name, self.amount, self.anchor, self.second_day, self.next_date):
+            field.error = None
+        for field in (self.frequency, self.account):
+            field.error_text = None
+        self.error.value = ""
+        self.error.visible = False
+
+    def _validate(self) -> IncomeSchedule | None:
+        self._clear_errors()
+        valid = True
+
+        name = (self.name.value or "").strip()
+        if not name:
+            self.name.error = "Name is required"
+            valid = False
+        elif len(name) > 60:
+            self.name.error = "Name must be 60 characters or fewer"
+            valid = False
+
+        try:
+            amount = parse_money(self.amount.value)
+        except ValueError as exc:
+            self.amount.error = str(exc)
+            valid = False
+            amount = 0
+
+        frequency = self._frequency_value()
+        if frequency is None:
+            self.frequency.error_text = "Choose a valid income frequency"
+            valid = False
+
+        try:
+            next_date = parse_date(self.next_date.value)
+        except ValueError as exc:
+            self.next_date.error = str(exc)
+            valid = False
+            next_date = None
+
+        anchor = self._parse_day(self.anchor.value)
+        if self.anchor.visible:
+            if anchor is None:
+                self.anchor.error = "Enter a day between 1 and 31"
+                valid = False
+        elif next_date is not None:
+            # Weekly/biweekly schedules still store an anchor; the next date supplies it.
+            anchor = next_date.day
+        else:
+            anchor = self.today.day
+
+        second = None
+        if frequency is IncomeFrequency.SEMIMONTHLY:
+            second = self._parse_day(self.second_day.value)
+            if second is None:
+                self.second_day.error = "Enter a day between 1 and 31"
+                valid = False
+            elif anchor is not None and second == anchor:
+                self.second_day.error = "The two income days must be different"
+                valid = False
+
+        account_id = self._parse_int(self.account.value)
+        if account_id is None:
+            self.account.error_text = "Select a deposit account"
+            valid = False
+        elif account_id not in self._account_by_id:
+            self.account.error_text = (
+                "Income must be deposited into a checking, savings or cash account"
+            )
+            valid = False
+
+        if frequency is not None and next_date is not None and anchor is not None:
+            if frequency is IncomeFrequency.MONTHLY and next_date.day != anchor:
+                self.next_date.error = "The next date must fall on the anchor day"
+                valid = False
+            elif frequency is IncomeFrequency.SEMIMONTHLY:
+                allowed = {anchor}
+                if second is not None:
+                    allowed.add(second)
+                if next_date.day not in allowed:
+                    self.next_date.error = "The next date must fall on one of the income days"
+                    valid = False
+
+        if not valid:
+            self._update_dialog()
+            return None
+        return IncomeSchedule(
+            name=name,
+            amount_cents=amount,
+            frequency=frequency,
+            next_date=next_date,
+            anchor_day=anchor,
+            account_id=account_id,
+            second_day=second if frequency is IncomeFrequency.SEMIMONTHLY else None,
+            active=bool(self.active.value),
+            id=self._editing.id if self._editing is not None else None,
+        )
+
+    # ---------- persistence ----------
+    def _save(self, _: ft.Event | None = None) -> None:
+        schedule = self._validate()
+        if schedule is None:
+            return
+        try:
+            if self._editing is not None and self._editing.id is not None:
+                self.ctx.service.update_income_schedule(schedule)
+            else:
+                self.ctx.service.add_income_schedule(schedule)
+        except RepositoryError as exc:
+            self.error.value = str(exc)
+            self.error.visible = True
+            self._update_dialog()
+            return
+        self.close()
+
+    def _confirm_delete(self, _: ft.Event | None = None) -> None:
+        schedule = self._editing
+        if schedule is None or schedule.id is None:
+            return
+        confirm_dialog(
+            self.ctx.page,
+            "Delete income",
+            f"Delete '{schedule.name}'? Recorded deposits are not affected.",
+            lambda: self._delete(schedule),
+        )
+
+    def _delete(self, schedule: IncomeSchedule) -> None:
+        try:
+            self.ctx.service.delete_income_schedule(schedule.id)
+        except RepositoryError as exc:
+            self.error.value = str(exc)
+            self.error.visible = True
+            self._update_dialog()
+            return
+        self.close()
+
+    # ---------- lifecycle ----------
+    def open(self) -> None:
+        self.ctx.page.show_dialog(self.dialog)
+
+    def _cancel(self, _: ft.Event | None = None) -> None:
+        self.close()
+
+    def close(self) -> None:
+        """Dismiss the dialog once, then tell the host to refresh."""
+        if self._closed:
+            return
+        self._closed = True
+        self.ctx.page.pop_dialog()
+        if self.on_close is not None:
+            self.on_close()
+
+    def _default_account_id(self) -> int | None:
+        checking = next(
+            (account for account in self.accounts if account.kind is AccountKind.CHECKING),
+            None,
+        )
+        chosen = checking or (self.accounts[0] if self.accounts else None)
+        return chosen.id if chosen is not None else None
+
+    def _update_dialog(self) -> None:
+        try:
+            self.dialog.update()
+        except RuntimeError:
+            # Direct tests build the dialog without a mounted page; the values still apply.
+            pass

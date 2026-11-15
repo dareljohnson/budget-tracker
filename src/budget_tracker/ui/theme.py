@@ -18,6 +18,8 @@ FONT_FAMILY = "Segoe UI"
 RADIUS = 14
 GAP = 16
 
+THEME_PRESET_SETTING = "theme_preset"
+
 _text_scale = 1.0
 
 

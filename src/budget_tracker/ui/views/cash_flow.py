@@ -24,6 +24,7 @@ from ..theme import (
     INCOME_COLOR,
     RADIUS,
     SEED_COLOR,
+    THEME_PRESET_SETTING,
     WARNING_COLOR,
     build_theme,
     fs,
@@ -179,13 +180,11 @@ class CashFlowPanel:
         callout = self._callout_control()
         if callout is not None:
             controls.append(callout)
-        self._events_card_container = card(self._events_card(), col={"xs": 12, "lg": 8})
+        self._events_card_container = card(self._events_card(), col={"xs": 12, "lg": 7})
+        self._ending_card_container = card(self._ending_card(), col={"xs": 12, "lg": 5})
         controls.append(
             ft.ResponsiveRow(
-                [
-                    self._events_card_container,
-                    card(self._ending_card(), col={"xs": 12, "lg": 4}),
-                ],
+                [self._events_card_container, self._ending_card_container],
                 spacing=GAP,
                 run_spacing=GAP,
             )
@@ -193,7 +192,7 @@ class CashFlowPanel:
         controls.append(self._assumptions())
         self._content.controls = controls
 
-    def _kpi_row_control(self) -> ft.Row:
+    def _kpi_row_control(self) -> ft.ResponsiveRow:
         tiles = [
             self._kpi_tile(
                 "Today",
@@ -220,7 +219,7 @@ class CashFlowPanel:
                 color=lowest_color,
             )
         )
-        self._kpi_row = ft.Row(tiles, spacing=GAP)
+        self._kpi_row = ft.ResponsiveRow(tiles, spacing=GAP, run_spacing=GAP)
         return self._kpi_row
 
     def _kpi_tile(
@@ -246,8 +245,6 @@ class CashFlowPanel:
                         size=fs(20),
                         weight=ft.FontWeight.BOLD,
                         color=color,
-                        max_lines=1,
-                        overflow=ft.TextOverflow.ELLIPSIS,
                     ),
                     ft.Text(
                         caption,
@@ -259,7 +256,7 @@ class CashFlowPanel:
                 spacing=2,
             ),
             padding=12,
-            expand=True,
+            col={"xs": 6, "sm": 4, "lg": 2},
         )
 
     def _chart_section(self) -> ft.Column:
@@ -363,7 +360,7 @@ class CashFlowPanel:
                 ft.Text(
                     _date_label(event.date),
                     size=fs(12),
-                    width=62,
+                    width=56,
                     color=ft.Colors.ON_SURFACE_VARIANT,
                 ),
                 ft.Column(
@@ -377,7 +374,7 @@ class CashFlowPanel:
                 ft.Text(
                     format_money(event.amount_cents, signed=True),
                     size=fs(13),
-                    width=96,
+                    width=88,
                     text_align=ft.TextAlign.RIGHT,
                     color=amount_color,
                     weight=ft.FontWeight.W_600,
@@ -385,7 +382,7 @@ class CashFlowPanel:
                 ft.Text(
                     format_money(running),
                     size=fs(12),
-                    width=100,
+                    width=92,
                     text_align=ft.TextAlign.RIGHT,
                     color=ft.Colors.ON_SURFACE_VARIANT,
                 ),
@@ -414,12 +411,12 @@ class CashFlowPanel:
     def _ending_card(self) -> ft.Column:
         header = ft.Row(
             [
-                ft.Text("Account", size=fs(12), width=90, color=ft.Colors.ON_SURFACE_VARIANT),
+                ft.Text("Account", size=fs(12), width=80, color=ft.Colors.ON_SURFACE_VARIANT),
                 *[
                     ft.Text(
                         f"{days}d",
                         size=fs(12),
-                        width=76,
+                        width=68,
                         text_align=ft.TextAlign.RIGHT,
                         color=ft.Colors.ON_SURFACE_VARIANT,
                     )
@@ -428,7 +425,7 @@ class CashFlowPanel:
             ],
             spacing=8,
         )
-        rows: list[ft.Control] = [header]
+        rows: list[ft.Row] = [header]
         endings = self._forecast.endings_by_account if self._forecast else {}
         for account_id, balances in sorted(
             endings.items(), key=lambda item: self._account_names.get(item[0], "")
@@ -439,7 +436,7 @@ class CashFlowPanel:
                         ft.Text(
                             self._account_names.get(account_id, "Account"),
                             size=fs(13),
-                            width=90,
+                            width=80,
                             max_lines=1,
                             overflow=ft.TextOverflow.ELLIPSIS,
                         ),
@@ -447,7 +444,7 @@ class CashFlowPanel:
                             ft.Text(
                                 format_money(balance),
                                 size=fs(12),
-                                width=76,
+                                width=68,
                                 text_align=ft.TextAlign.RIGHT,
                             )
                             for balance in balances
@@ -456,6 +453,7 @@ class CashFlowPanel:
                     spacing=8,
                 )
             )
+        self._ending_rows = rows
         return ft.Column(
             [
                 section_title(
@@ -561,7 +559,7 @@ class CashFlowPanel:
         preset = "indigo"
         if get_setting is not None:
             try:
-                preset = get_setting("theme_preset") or "indigo"
+                preset = get_setting(THEME_PRESET_SETTING) or "indigo"
             except Exception:  # pragma: no cover - a missing setting must not break rendering
                 preset = "indigo"
         scheme = build_theme(dark=dark, preset=preset).color_scheme

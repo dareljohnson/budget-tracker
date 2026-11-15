@@ -12,7 +12,7 @@ from budget_tracker.db import connect
 from budget_tracker.repository import Repository
 from budget_tracker.services import BudgetService
 from budget_tracker.ui.context import AppContext
-from budget_tracker.ui.theme import set_text_scale
+from budget_tracker.ui.theme import GAP, set_text_scale
 
 TODAY = date(2026, 11, 14)
 
@@ -207,9 +207,11 @@ class TestCashFlowPanel(_Base):
         self.assertEqual(panel._lowest_date, TODAY + timedelta(days=30))
         self.assertIn("$970.00", labels)  # 1000.00 - 30 * 1.00
         self.assertNotEqual(panel._chart_image.src, first_src)
-        # Ending balances always keep the full 30/60/90 columns.
+        # Ending balances always keep the full 30/60/90 columns with their real values.
         for header in ("30d", "60d", "90d"):
             self.assertIn(header, labels)
+        for value in ("$600.00", "$500.00", "$400.00"):
+            self.assertEqual(labels.count(value), 1)
 
         panel._horizon_control.selected = ["60"]
         panel._horizon_control.on_change(_event(selected=["60"]))
@@ -218,6 +220,44 @@ class TestCashFlowPanel(_Base):
         self.assertIn("In 60 days", labels)
         self.assertNotIn("In 90 days", labels)
         self.assertIn("All 5", labels)
+
+    def test_kpi_row_wraps_and_does_not_ellipsize_values(self):
+        panel = self._panel(_forecast(checking_id=self.checking_id, cash_id=self.cash_id))
+        self.assertIsInstance(panel._kpi_row, ft.ResponsiveRow)
+        self.assertEqual(len(panel._kpi_row.controls), 5)
+        for tile in panel._kpi_row.controls:
+            self.assertEqual(tile.col, {"xs": 6, "sm": 4, "lg": 2})
+            values = [
+                node
+                for node in _walk(tile)
+                if isinstance(node, ft.Text) and (node.value or "").startswith("$")
+            ]
+            self.assertEqual(len(values), 1)
+            self.assertIsNone(values[0].max_lines)
+            self.assertNotEqual(values[0].overflow, ft.TextOverflow.ELLIPSIS)
+
+    @staticmethod
+    def _card_inner_width(columns: int) -> float:
+        # Smallest ResponsiveRow width that still uses the ``lg`` breakpoint, minus the card padding.
+        return (992 - GAP) * columns / 12 - 40
+
+    def test_ending_columns_fit_inside_the_lg_card(self):
+        panel = self._panel(_forecast(checking_id=self.checking_id, cash_id=self.cash_id))
+        widest = max(
+            sum((control.width or 0) for control in row.controls) + 8 * (len(row.controls) - 1)
+            for row in panel._ending_rows
+        )
+        self.assertLessEqual(widest, self._card_inner_width(5))
+
+    def test_event_columns_fit_inside_the_lg_card(self):
+        bill = CashEvent(TODAY + timedelta(days=1), "Rent", self.checking_id, -30_000, "bill")
+        panel = self._panel(
+            _forecast(checking_id=self.checking_id, cash_id=self.cash_id, events=[bill])
+        )
+        row = panel._event_rows[0]
+        fixed = sum((control.width or 0) for control in row.controls if isinstance(control, ft.Text))
+        fixed += 8 * (len(row.controls) - 1)
+        self.assertLessEqual(fixed, self._card_inner_width(7))
 
     def test_kpi_row_has_today_lowest_and_only_in_horizon_checkpoints(self):
         panel = self._panel(_forecast(checking_id=self.checking_id, cash_id=self.cash_id))
@@ -411,14 +451,15 @@ class TestYearCashFlowSwitch(_Base):
     def test_data_change_while_viewing_cash_flow_refreshes_the_panel(self):
         from budget_tracker.ui.views.year import YearView
 
-        view = YearView(self._context())
+        ctx = self._context()
+        view = YearView(ctx)
         switch = self._switch(view)
         switch.selected = ["cash"]
         switch.on_change(_event(selected=["cash"]))
         first_src = view.cash_panel._chart_image.src
 
         self.page.theme_mode = ft.ThemeMode.DARK
-        view.refresh()
+        ctx.data_changed()  # fires the listener registered by YearView
 
         self.assertNotEqual(view.cash_panel._chart_image.src, first_src)
         self.assertEqual(view.mode, "cash")

@@ -27,6 +27,7 @@ from .ui.theme import (
     EXPENSE_COLOR,
     PRESETS,
     SEED_COLOR,
+    THEME_PRESET_SETTING,
     WARNING_COLOR,
     build_theme,
     fs,
@@ -47,7 +48,6 @@ from .ui.views.year import YearView
 log = logging.getLogger(__name__)
 
 THEME_SETTING = "theme_mode"
-THEME_PRESET_SETTING = "theme_preset"
 TEXT_SIZE_SETTING = "text_scale"
 
 NAV_ITEMS = [

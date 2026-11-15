@@ -32,8 +32,9 @@ COVERAGE_MIN_MONTHS = 3
 FOCUS_CATEGORY_LIMIT = 3
 
 # The chart is rendered at the card's logical width so BoxFit.CONTAIN neither stretches nor
-# letterboxes the baked labels. The page content width is the window minus the navigation rail,
-# the divider and the page padding; the chart card is full width below ``lg`` and 8/12 above it.
+# letterboxes the baked labels. Flet resolves ``lg`` from the *page* width (992px), so the span
+# switch follows the page width even though the card lives inside the narrower content area. The
+# page content width is the window minus the navigation rail, the divider and the page padding.
 DEFAULT_PAGE_WIDTH = 1320
 RAIL_WIDTH = 120
 PAGE_PADDING = 64
@@ -102,11 +103,14 @@ class YearView:
                 alignment=ft.MainAxisAlignment.END,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
-            col={"xs": 12, "md": 6, "lg": 5},
+            col={"xs": 12, "sm": 12, "md": 12, "lg": 6},
         )
         self._header = ft.ResponsiveRow(
             [
-                ft.Container(self._title_block, col={"xs": 12, "md": 6, "lg": 7}),
+                ft.Container(
+                    self._title_block,
+                    col={"xs": 12, "sm": 12, "md": 12, "lg": 6},
+                ),
                 self._toolbar,
             ],
             spacing=GAP,
@@ -631,9 +635,14 @@ class YearView:
         return DEFAULT_PAGE_WIDTH
 
     def _chart_width(self) -> int:
-        """The chart card's inner width at the current page width, in logical pixels."""
-        content = max(1.0, self._page_width() - RAIL_WIDTH - DIVIDER_WIDTH - PAGE_PADDING)
-        if content >= LG_BREAKPOINT:
+        """The chart card's inner width at the current page width, in logical pixels.
+
+        Flet picks the responsive breakpoint from the page width, so ``lg`` starts at a 992px
+        window even though the content area itself is only about 807px there.
+        """
+        page_width = self._page_width()
+        content = max(1.0, page_width - RAIL_WIDTH - DIVIDER_WIDTH - PAGE_PADDING)
+        if page_width >= LG_BREAKPOINT:
             card_width = (content - GAP) * CHART_WIDE_COLUMNS / 12
         else:
             card_width = content

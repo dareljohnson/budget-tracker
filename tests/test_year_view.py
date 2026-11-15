@@ -241,17 +241,24 @@ class TestYearViewComposition(Base):
         self.assertEqual(row.alignment, ft.MainAxisAlignment.END)
 
     def test_toolbar_keeps_the_year_and_switch_on_one_row_at_1024(self):
-        from budget_tracker.ui.theme import GAP, fs
+        from budget_tracker.ui.theme import GAP, fs, set_text_scale
 
         view = self.view()
-        self.assertEqual(view._toolbar.col, {"xs": 12, "md": 6, "lg": 5})
+        self.assertEqual(
+            view._toolbar.col,
+            {"xs": 12, "sm": 12, "md": 12, "lg": 6},
+        )
 
-        # 1024px window minus the 120px rail, divider and 64px page padding, halved at md.
+        # Flet resolves ``lg`` from the page width, so a 1024px window uses the lg 6/12 span
+        # (not the md 12/12 stack). Content is 1024 - 120 rail - 1 divider - 64 page padding.
         available = (1024 - 120 - 1 - 64 - GAP) * 6 / 12
-        # The dropdown plus two segment labels (six characters at the 14px size) and their
-        # horizontal padding; deliberately conservative so this fails before the row wraps.
-        required = view.year.width + 8 + 2 * (fs(14) * 6 + 24)
-        self.assertGreaterEqual(available, required)
+        for scale in (1.0, 1.15):
+            with self.subTest(scale=scale):
+                set_text_scale(scale)
+                # Dropdown plus two segment labels (six characters at 14px) and their padding;
+                # conservative so the test fails before Flet wraps the controls.
+                required = view.year.width + 8 + 2 * (fs(14) * 6 + 24)
+                self.assertGreaterEqual(available, required)
 
     # ---------- summary strip ----------
     def test_summary_strip_has_four_compact_tiles(self):
@@ -403,7 +410,8 @@ class TestYearViewComposition(Base):
 
         self.seed_current_month()
         view = self.view()
-        for page_width, columns in ((900, 12), (1176, 12), (1320, 8)):
+        # Flet resolves ``lg`` from the page width: 991 stays full-width, 992 switches to 8/12.
+        for page_width, columns in ((900, 12), (991, 12), (992, 8), (1176, 8), (1320, 8)):
             with self.subTest(page_width=page_width):
                 self.page.width = page_width
                 view.refresh()

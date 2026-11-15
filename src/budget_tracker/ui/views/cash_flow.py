@@ -40,8 +40,7 @@ from ..theme import (
     text_scale,
 )
 
-CHART_WIDTH = 900
-CHART_HEIGHT = 260
+CHART_HEIGHT = 220
 EVENT_LIMIT = 8
 HORIZONS = (30, 60, 90)
 INCOME_DIALOG_WIDTH = 520
@@ -126,14 +125,7 @@ class CashFlowPanel:
 
         header = ft.ResponsiveRow(
             [
-                ft.Column(
-                    [
-                        ft.Text("Cash flow", size=fs(18), weight=ft.FontWeight.W_600),
-                        self._subtitle,
-                    ],
-                    spacing=2,
-                    col={"xs": 12, "md": 7, "lg": 8},
-                ),
+                ft.Container(self._subtitle, col={"xs": 12, "md": 5}),
                 ft.Container(
                     ft.Row(
                         [self._horizon_control, self._income_button],
@@ -142,7 +134,7 @@ class CashFlowPanel:
                         alignment=ft.MainAxisAlignment.END,
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     ),
-                    col={"xs": 12, "md": 5, "lg": 4},
+                    col={"xs": 12, "md": 7},
                 ),
             ],
             spacing=GAP,
@@ -287,15 +279,17 @@ class CashFlowPanel:
 
     def _chart_section(self) -> ft.Column:
         colors = self._chart_colors()
-        image = ft.Image(
-            src=self._png_source(
-                line_chart_png(self._points, colors=colors, text_scale=text_scale())
-            ),
-            width=CHART_WIDTH,
+        chart = ft.Container(
             height=CHART_HEIGHT,
-            fit=ft.BoxFit.CONTAIN,
+            expand=True,
+            image=ft.DecorationImage(
+                src=self._png_source(
+                    line_chart_png(self._points, colors=colors, text_scale=text_scale())
+                ),
+                fit=ft.BoxFit.FILL,
+            ),
         )
-        self._chart_image = image
+        self._chart_image = chart
         labels = [self._today] + [
             self._today + timedelta(days=days) for days in HORIZONS if days <= self.horizon
         ]
@@ -310,7 +304,7 @@ class CashFlowPanel:
                         color=ft.Colors.ON_SURFACE_VARIANT,
                     ),
                 ),
-                ft.Container(content=image, alignment=ft.Alignment.CENTER),
+                ft.Row([chart], spacing=0),
                 ft.Row(
                     [
                         ft.Text(_date_label(day), size=fs(12), color=ft.Colors.ON_SURFACE_VARIANT)
@@ -325,6 +319,7 @@ class CashFlowPanel:
                 ),
             ],
             spacing=8,
+            horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
         )
 
     def _callout_control(self) -> ft.Control | None:
@@ -386,13 +381,26 @@ class CashFlowPanel:
                 ft.Text(
                     _date_label(event.date),
                     size=fs(12),
-                    width=56,
+                    width=52,
                     color=ft.Colors.ON_SURFACE_VARIANT,
                 ),
                 ft.Column(
                     [
-                        ft.Text(event.description, size=fs(13), max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
-                        ft.Text(account, size=fs(11), color=ft.Colors.ON_SURFACE_VARIANT, max_lines=1),
+                        ft.Text(
+                            event.description,
+                            size=fs(13),
+                            max_lines=2,
+                            overflow=ft.TextOverflow.ELLIPSIS,
+                            tooltip=event.description,
+                        ),
+                        ft.Text(
+                            account,
+                            size=fs(11),
+                            color=ft.Colors.ON_SURFACE_VARIANT,
+                            max_lines=1,
+                            overflow=ft.TextOverflow.ELLIPSIS,
+                            tooltip=account,
+                        ),
                     ],
                     spacing=0,
                     expand=True,
@@ -400,7 +408,7 @@ class CashFlowPanel:
                 ft.Text(
                     format_money(event.amount_cents, signed=True),
                     size=fs(13),
-                    width=88,
+                    width=86,
                     text_align=ft.TextAlign.RIGHT,
                     color=amount_color,
                     weight=ft.FontWeight.W_600,
@@ -408,7 +416,7 @@ class CashFlowPanel:
                 ft.Text(
                     format_money(running),
                     size=fs(12),
-                    width=92,
+                    width=90,
                     text_align=ft.TextAlign.RIGHT,
                     color=ft.Colors.ON_SURFACE_VARIANT,
                 ),
@@ -437,12 +445,12 @@ class CashFlowPanel:
     def _ending_card(self) -> ft.Column:
         header = ft.Row(
             [
-                ft.Text("Account", size=fs(12), width=80, color=ft.Colors.ON_SURFACE_VARIANT),
+                ft.Text("Account", size=fs(12), expand=True, color=ft.Colors.ON_SURFACE_VARIANT),
                 *[
                     ft.Text(
                         f"{days}d",
                         size=fs(12),
-                        width=68,
+                        width=82,
                         text_align=ft.TextAlign.RIGHT,
                         color=ft.Colors.ON_SURFACE_VARIANT,
                     )
@@ -456,21 +464,23 @@ class CashFlowPanel:
         for account_id, balances in sorted(
             endings.items(), key=lambda item: self._account_names.get(item[0], "")
         ):
+            name = self._account_names.get(account_id, "Account")
             rows.append(
                 ft.Row(
                     [
                         ft.Text(
-                            self._account_names.get(account_id, "Account"),
+                            name,
                             size=fs(13),
-                            width=80,
-                            max_lines=1,
+                            expand=True,
+                            max_lines=2,
                             overflow=ft.TextOverflow.ELLIPSIS,
+                            tooltip=name,
                         ),
                         *[
                             ft.Text(
                                 format_money(balance),
                                 size=fs(12),
-                                width=68,
+                                width=82,
                                 text_align=ft.TextAlign.RIGHT,
                             )
                             for balance in balances

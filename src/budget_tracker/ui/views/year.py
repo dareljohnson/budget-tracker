@@ -29,11 +29,23 @@ from .cash_flow import CashFlowPanel
 
 CHART_HEIGHT = 260
 COVERAGE_MIN_MONTHS = 3
+FOCUS_CATEGORY_LIMIT = 3
+
+# The chart is rendered at the card's logical width so BoxFit.CONTAIN neither stretches nor
+# letterboxes the baked labels. The page content width is the window minus the navigation rail,
+# the divider and the page padding; the chart card is full width below ``lg`` and 8/12 above it.
+DEFAULT_PAGE_WIDTH = 1320
+RAIL_WIDTH = 120
+PAGE_PADDING = 64
+DIVIDER_WIDTH = 1
+CARD_PADDING = 40
+LG_BREAKPOINT = 992
+CHART_WIDE_COLUMNS = 8
+MIN_CHART_WIDTH = 420
 
 
 def _months_label(count: int) -> str:
     return "1 month" if count == 1 else f"{count} months"
-FOCUS_CATEGORY_LIMIT = 3
 
 
 class YearView:
@@ -263,20 +275,19 @@ class YearView:
 
     # ---------- chart ----------
     def _chart(self, overview: YearOverview) -> ft.Column:
-        cumulative = self._cumulative_months(overview)
+        months = self._cumulative_months(overview)
         colors = self._chart_colors()
-        over_budget = any(month.spending_cents > month.budget_cents for month in cumulative)
+        # Match the renderer exactly: it uses the cumulative comparison, not each month's.
+        over_budget = self._cumulative_over_budget(months)
         spending_color = colors.negative if over_budget else colors.lowest
-        page_width = getattr(self.ctx.page, "width", None) or 1320
-        chart_width = max(420, int((page_width - 200) * 8 / 12) - 40)
         self._chart_image = ft.Container(
             height=CHART_HEIGHT,
             expand=True,
             image=ft.DecorationImage(
                 src=self._png_source(
                     cumulative_chart_png(
-                        cumulative,
-                        width=chart_width,
+                        months,
+                        width=self._chart_width(),
                         height=CHART_HEIGHT,
                         colors=colors,
                         text_scale=text_scale(),
@@ -329,6 +340,18 @@ class YearView:
             )
         return months
 
+    @staticmethod
+    def _cumulative_over_budget(months: list[CumulativeMonth]) -> bool:
+        """The renderer's own rule: any cumulative spending point above cumulative budget."""
+        running_budget = 0
+        running_spending = 0
+        for month in months:
+            running_budget += month.budget_cents
+            running_spending += month.spending_cents
+            if running_spending > running_budget:
+                return True
+        return False
+
     # ---------- focus card ----------
     @staticmethod
     def _has_activity(month: YearMonth) -> bool:
@@ -336,11 +359,17 @@ class YearView:
 
     def _focus_month(self, overview: YearOverview) -> YearMonth | None:
         current_key = self.ctx.service.current_month()
-        current = next((month for month in overview.months if month.month == current_key), None)
+        # Only months that have already happened (or are happening) can be "latest activity".
+        eligible = [month for month in overview.months if month.month <= current_key]
+        current = next((month for month in eligible if month.month == current_key), None)
         if current is not None and self._has_activity(current):
             return current
-        for month in reversed(overview.months):
-            if self._has_activity(month):
+        # Real spending or income is activity; a budget-only month is only a last resort.
+        for month in reversed(eligible):
+            if month.spending_cents or month.income_cents:
+                return month
+        for month in reversed(eligible):
+            if month.has_budget:
                 return month
         return None
 
@@ -360,6 +389,12 @@ class YearView:
             )
 
         current = self.ctx.service.current_month()
+        if month.month == current:
+            chip = "This month"
+        elif month.spending_cents or month.income_cents:
+            chip = "Latest activity"
+        else:
+            chip = "Latest budget"
         budget = month.budget_cents
         spent = month.spending_cents
         difference = month.difference_cents
@@ -383,11 +418,7 @@ class YearView:
             ft.Row(
                 [
                     ft.Text(month_label(month.month), size=fs(18), weight=ft.FontWeight.BOLD),
-                    ft.Text(
-                        "This month" if month.month == current else "Latest activity",
-                        size=fs(12),
-                        color=ft.Colors.ON_SURFACE_VARIANT,
-                    ),
+                    ft.Text(chip, size=fs(12), color=ft.Colors.ON_SURFACE_VARIANT),
                 ],
                 spacing=8,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
@@ -422,23 +453,50 @@ class YearView:
             )
         return ft.Column(controls, spacing=8)
 
-    def _focus_categories(self, month: YearMonth) -> list[tuple[str, int, str]]:
-        progress = self.ctx.repo.budget_progress(month.month)
-        if progress:
-            rows = [
-                (entry.category_name, entry.spent_cents, entry.category_color)
-                for entry in progress
-            ]
-        else:
-            rows = [
-                (entry.name, entry.total_cents, entry.color)
-                for entry in self.ctx.repo.totals_by_category(month.month)
-            ]
-        rows.sort(key=lambda row: row[1], reverse=True)
-        return rows[:FOCUS_CATEGORY_LIMIT]
+    def _focus_categories(self, month: YearMonth) -> list[tuple[str, int, int | None, str]]:
+        """Merge budgeted and unbudgeted spend, so the largest category always appears."""
+        entries: dict[int, dict[str, object]] = {}
+        for total in self.ctx.repo.totals_by_category(month.month):
+            entries[total.category_id] = {
+                "name": total.name,
+                "spent": total.total_cents,
+                "limit": None,
+                "color": total.color,
+            }
+        for progress in self.ctx.repo.budget_progress(month.month):
+            entry = entries.setdefault(
+                progress.category_id,
+                {
+                    "name": progress.category_name,
+                    "spent": progress.spent_cents,
+                    "limit": progress.limit_cents,
+                    "color": progress.category_color,
+                },
+            )
+            entry.update(
+                name=progress.category_name,
+                spent=progress.spent_cents,
+                limit=progress.limit_cents,
+                color=progress.category_color,
+            )
+        ranked = sorted(entries.values(), key=lambda entry: entry["spent"], reverse=True)
+        return [
+            (
+                str(entry["name"]),
+                int(entry["spent"]),
+                int(entry["limit"]) if entry["limit"] is not None else None,
+                str(entry["color"]),
+            )
+            for entry in ranked[:FOCUS_CATEGORY_LIMIT]
+        ]
 
     @staticmethod
-    def _category_row(name: str, amount_cents: int, color: str) -> ft.Row:
+    def _category_row(name: str, spent_cents: int, limit_cents: int | None, color: str) -> ft.Row:
+        amount = (
+            f"{format_money(spent_cents)} of {format_money(limit_cents)}"
+            if limit_cents is not None
+            else format_money(spent_cents)
+        )
         return ft.Row(
             [
                 ft.Container(
@@ -454,7 +512,7 @@ class YearView:
                     max_lines=1,
                     overflow=ft.TextOverflow.ELLIPSIS,
                 ),
-                ft.Text(format_money(amount_cents), size=fs(13), text_align=ft.TextAlign.RIGHT),
+                ft.Text(amount, size=fs(13), text_align=ft.TextAlign.RIGHT),
             ],
             spacing=8,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
@@ -557,6 +615,30 @@ class YearView:
         )
 
     # ---------- helpers ----------
+    def _page_width(self) -> float:
+        page = self.ctx.page
+        candidates = [getattr(page, "width", None)]
+        window = getattr(page, "window", None)
+        if window is not None:
+            candidates.append(getattr(window, "width", None))
+        for candidate in candidates:
+            try:
+                width = float(candidate)
+            except (TypeError, ValueError):
+                continue
+            if width > 0:
+                return width
+        return DEFAULT_PAGE_WIDTH
+
+    def _chart_width(self) -> int:
+        """The chart card's inner width at the current page width, in logical pixels."""
+        content = max(1.0, self._page_width() - RAIL_WIDTH - DIVIDER_WIDTH - PAGE_PADDING)
+        if content >= LG_BREAKPOINT:
+            card_width = (content - GAP) * CHART_WIDE_COLUMNS / 12
+        else:
+            card_width = content
+        return max(MIN_CHART_WIDTH, round(card_width - CARD_PADDING))
+
     def _chart_colors(self) -> ChartColors:
         mode = getattr(self.ctx.page, "theme_mode", None)
         dark = mode.lower().endswith("dark") if isinstance(mode, str) else mode == ft.ThemeMode.DARK

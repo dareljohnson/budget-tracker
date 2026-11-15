@@ -173,7 +173,7 @@ The **Year** page has two tabs: **This year** shows the budget-versus-actual sto
 
 - **One toolbar:** the year picker and the This year / Next 90 days switch sit together, so they do not stack over the page.
 - **Four compact summary tiles:** YTD budget, YTD spending, over/under budget, and year-end pace.
-- **Coverage banner:** when fewer than three months have a budget, the page says how many do and labels the year-end pace as an estimate.
+- **Coverage banner:** when fewer than three months have a budget, the page says how many do, and labels the year-end pace as an estimate only when a pace projection applies.
 - **Cumulative chart:** the budget and spending lines accumulate across the year, with a scale and month labels; the current month is emphasized.
 - **Current-month focus:** budget vs spent, the over/under amount, and the top categories for the active month.
 - **Monthly detail:** only months with activity, the current month, and the YTD total are shown by default. **Show all 12 months** reveals the full year.

@@ -22,6 +22,7 @@ class _PageStub:
         self.overlay: list = []
         self.theme_mode = ft.ThemeMode.LIGHT
         self.updates = 0
+        self.width: float | None = None
 
     def show_dialog(self, control) -> None:
         self.overlay.append(control)
@@ -57,6 +58,32 @@ def _find(control, predicate):
 
 def _event(*, selected):
     return SimpleNamespace(control=SimpleNamespace(selected=selected))
+
+
+def _legend_color(control, label: str):
+    """The swatch color of the chart legend row for ``label``."""
+    for node in _walk(control):
+        if isinstance(node, ft.Row) and len(node.controls) == 2:
+            swatch, text = node.controls
+            if (
+                isinstance(swatch, ft.Container)
+                and isinstance(text, ft.Text)
+                and text.value == label
+            ):
+                return swatch.bgcolor
+    return None
+
+
+def _chart_pixel_size(view) -> tuple[int, int]:
+    """Decode the chart data URI so geometry assertions check the real rendered bitmap."""
+    import base64
+    from io import BytesIO
+
+    from PIL import Image
+
+    payload = view._chart_image.image.src.split(",", 1)[1]
+    with Image.open(BytesIO(base64.b64decode(payload))) as image:
+        return image.size
 
 
 class Base(unittest.TestCase):
@@ -371,6 +398,52 @@ class TestYearViewComposition(Base):
         self.assertTrue(months[int(self.current_month[-2:]) - 1].is_current)
         self.assertEqual(sum(month.is_current for month in months), 1)
 
+    def test_chart_geometry_matches_the_card_span(self):
+        from budget_tracker.ui.theme import GAP
+
+        self.seed_current_month()
+        view = self.view()
+        for page_width, columns in ((900, 12), (1176, 12), (1320, 8)):
+            with self.subTest(page_width=page_width):
+                self.page.width = page_width
+                view.refresh()
+                content = page_width - 120 - 1 - 64
+                card = content if columns == 12 else (content - GAP) * columns / 12
+                expected = max(420, round(card - 40))
+                self.assertEqual(view._chart_width(), expected)
+                # The bitmap is drawn at 2x, so its logical width matches the card and its
+                # height matches the image container: CONTAIN has nothing to letterbox.
+                self.assertEqual(_chart_pixel_size(view), (expected * 2, 260 * 2))
+
+    def test_spending_legend_matches_the_cumulative_chart_comparison(self):
+        past = self.year - 1
+        # February is over its own (zero) budget, but the year is still under budget.
+        self.budget(f"{past}-01", 100_000)
+        self.spend(50_000, date(past, 2, 10))
+        view = self.view()
+        view.year.value = str(past)
+        view.refresh()
+
+        colors = view._chart_colors()
+        self.assertFalse(
+            view._cumulative_over_budget(
+                view._cumulative_months(self.service.year_overview(past))
+            )
+        )
+        self.assertEqual(_legend_color(view.body, "Spending"), colors.lowest)
+        self.assertNotEqual(_legend_color(view.body, "Spending"), colors.negative)
+
+        # Once cumulative spending overtakes cumulative budget, the legend matches the red line.
+        self.budget(f"{past}-03", 10_000)
+        self.spend(80_000, date(past, 3, 10))
+        view.refresh()
+        self.assertTrue(
+            view._cumulative_over_budget(
+                view._cumulative_months(self.service.year_overview(past))
+            )
+        )
+        self.assertEqual(_legend_color(view.body, "Spending"), colors.negative)
+
     def test_chart_follows_theme_and_text_scale(self):
         self.seed_current_month()
         view = self.view()
@@ -401,15 +474,39 @@ class TestYearViewComposition(Base):
         self.assertIn("Groceries", texts)
 
     def test_focus_card_falls_back_to_the_latest_month_with_data(self):
-        from budget_tracker.formatting import month_label
-
-        self.spend(30_000, date(self.year, 2, 10))
+        past = self.year - 1
+        self.spend(30_000, date(past, 2, 10))
         view = self.view()
+        view.year.value = str(past)
+        view.refresh()
 
         texts = _texts(view.body)
-        self.assertIn(f"February {self.year}", texts)
-        if self.current_month != f"{self.year}-02":
-            self.assertNotIn(month_label(self.current_month), texts)
+        self.assertIn(f"February {past}", texts)
+        self.assertIn("Latest activity", texts)
+
+    def test_focus_fallback_prefers_activity_over_a_later_budget_only_month(self):
+        past = self.year - 1
+        self.spend(25_000, date(past, 6, 10))
+        self.budget(f"{past}-09", 50_000)
+        view = self.view()
+        view.year.value = str(past)
+        view.refresh()
+
+        texts = _texts(view.body)
+        self.assertIn(f"June {past}", texts)
+        self.assertNotIn(f"September {past}", texts)
+        self.assertIn("Latest activity", texts)
+
+    def test_future_budget_only_month_is_not_labelled_latest_activity(self):
+        future = self.year + 1
+        self.budget(f"{future}-06", 50_000)
+        view = self.view()
+        view.year.value = str(future)
+        view.refresh()
+
+        texts = _texts(view.body)
+        self.assertNotIn("Latest activity", texts)
+        self.assertIn("No activity yet in this year.", texts)
 
     def test_focus_card_selects_the_current_month_with_only_income(self):
         from budget_tracker.formatting import month_label
@@ -440,19 +537,47 @@ class TestYearViewComposition(Base):
         self.assertIn("Utilities", listed)  # largest category is kept
         self.assertNotIn("Groceries", listed)  # smallest is dropped
 
-    # ---------- table ----------
-    def test_table_defaults_to_active_months_plus_the_current_month_and_ytd(self):
-        self.budget(f"{self.year}-01", 50_000)
-        self.spend(10_000, date(self.year, 2, 10))
+    def test_top_categories_merge_unbudgeted_spend_and_show_limits_only_for_budgets(self):
+        self.budget(self.current_month, 10_000, category="Groceries")
+        self.spend(5_000, date.today(), category="Groceries")
+        self.spend(20_000, date.today(), category="Dining Out")
         view = self.view()
 
+        focus = _find(
+            view.body,
+            lambda node: isinstance(node, ft.Column)
+            and any(isinstance(child, ft.Text) and child.value == "Top categories" for child in node.controls),
+        )
+        self.assertIsNotNone(focus)
+        rows = [
+            child
+            for child in focus.controls
+            if isinstance(child, ft.Row) and len(child.controls) == 3
+        ]
+        by_name = {row.controls[1].value: row for row in rows}
+        # The largest unbudgeted spend is ranked, and only the budgeted row shows its limit.
+        self.assertEqual([row.controls[1].value for row in rows], ["Dining Out", "Groceries"])
+        self.assertEqual(by_name["Dining Out"].controls[2].value, "$200.00")
+        self.assertEqual(by_name["Groceries"].controls[2].value, "$50.00 of $100.00")
+
+    # ---------- table ----------
+    def test_table_defaults_to_active_months_plus_the_current_month_and_ytd(self):
         from budget_tracker.formatting import short_month_label
 
+        # Pick months that are neither the current month nor each other, so the fixture does
+        # not change meaning in March, June or December.
+        current_number = int(self.current_month[-2:])
+        candidates = [month for month in range(1, 13) if month != current_number]
+        active, spent_month, hidden = candidates[0], candidates[1], candidates[2]
+        self.budget(f"{self.year}-{active:02d}", 50_000)
+        self.spend(10_000, date(self.year, spent_month, 10))
+        view = self.view()
+
         texts = _texts(view.body)
-        self.assertIn("Jan", texts)
-        self.assertIn("Feb", texts)
-        self.assertIn(short_month_label(self.current_month), texts)  # current month, even without activity
-        self.assertNotIn("Mar", texts)
+        self.assertIn(short_month_label(f"{self.year}-{active:02d}"), texts)
+        self.assertIn(short_month_label(f"{self.year}-{spent_month:02d}"), texts)
+        self.assertIn(short_month_label(self.current_month), texts)  # current month, no activity
+        self.assertNotIn(short_month_label(f"{self.year}-{hidden:02d}"), texts)
         self.assertIn("YTD", texts)
         self.assertIsNotNone(
             _find(
@@ -463,9 +588,17 @@ class TestYearViewComposition(Base):
         )
 
     def test_show_all_twelve_months_toggles_all_columns_and_collapses_again(self):
-        self.budget(f"{self.year}-01", 50_000)
+        from budget_tracker.formatting import short_month_label
+
+        current_number = int(self.current_month[-2:])
+        active = next(month for month in range(1, 13) if month != current_number)
+        hidden = next(
+            month for month in range(1, 13) if month not in {current_number, active}
+        )
+        self.budget(f"{self.year}-{active:02d}", 50_000)
         view = self.view()
-        self.assertNotIn("Dec", _texts(view.body))
+        hidden_label = short_month_label(f"{self.year}-{hidden:02d}")
+        self.assertNotIn(hidden_label, _texts(view.body))
 
         show_all = _find(
             view.body,
@@ -474,8 +607,8 @@ class TestYearViewComposition(Base):
         show_all.on_click(None)
 
         texts = _texts(view.body)
-        for label in ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"):
-            self.assertIn(label, texts)
+        for month in range(1, 13):
+            self.assertIn(short_month_label(f"{self.year}-{month:02d}"), texts)
         collapse = _find(
             view.body,
             lambda node: isinstance(node, ft.TextButton) and node.content == "Show active months",
@@ -483,8 +616,7 @@ class TestYearViewComposition(Base):
         self.assertIsNotNone(collapse)
         collapse.on_click(None)
 
-        texts = _texts(view.body)
-        self.assertNotIn("Dec", texts)
+        self.assertNotIn(hidden_label, _texts(view.body))
         self.assertIsNotNone(
             _find(
                 view.body,
@@ -512,15 +644,22 @@ class TestYearViewComposition(Base):
     def test_past_year_table_keeps_the_year_total_row(self):
         from budget_tracker.formatting import short_month_label
 
-        self.spend(10_000, date(self.year - 1, 6, 1))
+        past = self.year - 1
+        current_number = int(self.current_month[-2:])
+        data_month = 1 if current_number != 1 else 2
+        self.spend(10_000, date(past, data_month, 1))
         view = self.view()
-        view.year.value = str(self.year - 1)
+        view.year.value = str(past)
         view.refresh()
+        overview = self.service.year_overview(past)
 
         texts = _texts(view.body)
         self.assertIn("Year total", texts)
-        self.assertIn("Jun", texts)
-        self.assertNotIn(short_month_label(self.current_month), texts)  # current month is another year
+        self.assertIn(short_month_label(f"{past}-{data_month:02d}"), texts)
+        # The current month belongs to another year, so no row can carry its key.
+        self.assertTrue(
+            all(month.month != self.current_month for month in view._visible_months(overview))
+        )
 
     # ---------- empty and mode switching ----------
     def test_empty_year_keeps_the_existing_empty_state(self):

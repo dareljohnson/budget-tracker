@@ -9,7 +9,7 @@ A personal budget tracker desktop app built with **Python 3.13**, **[Flet](https
 - **Goals**: savings targets with progress, a fixed monthly plan, and contributions recorded as transfers.
 - **Debts**: credit cards, auto, student, personal, mortgage and other debts, with a payoff planner
   comparing avalanche and snowball strategies at several extra monthly amounts.
-- **Year**: monthly budget versus actual spending, year-to-date totals with the same period last year, a run-rate year-end projection, and cash flow across the year.
+- **Year**: monthly budget versus actual spending, year-to-date totals with the same period last year, a run-rate year-end projection, and a daily cash-flow forecast for the next 30, 60, or 90 days with an income plan.
 - **Balance checks and adjustments**: check any account against the balance your bank shows and see the difference. If they disagree, record a signed correction that changes the account balance only — adjustments are excluded from income, spending, and budgets. Earlier checks are kept in a history.
 - **Bills and reminders**: recurring bills (one-time, weekly, monthly, yearly) and credit card payments, each with a due date. Overdue and soon-due bills show on the Bills page, on the Dashboard, and in a pop-up when the app starts. **Mark paid** records the payment and moves the bill to its next due date. Windows notifications can also remind you when the app is closed (see below).
 - **Transactions**: five types, each tied to an account:
@@ -164,6 +164,39 @@ For the selected extra amount, the panel shows each strategy's debt-free date, m
 A minimum may be **zero** (a deferred student loan, for example). A plan with only a zero minimum and no extra never pays the debt off; the plan says so instead of showing a date. The panel also warns when a minimum does not cover that month's interest.
 
 The projection is an **estimate**: it assumes a fixed APR, monthly compounding, the minimums you record, and constant payments, and it ignores fees, escrow, and rate changes. A mortgage in particular may differ from its real amortization. A plan that cannot finish within **50 years (600 months)** is reported as not paid off rather than given a payoff date.
+
+## Year and cash flow
+
+The **Year** page has two tabs: **This year** shows the monthly budget-versus-actual view and its year totals, and **Next 90 days** projects your day-to-day cash balance. The switch keeps the navigation rail and the existing Year content unchanged; the year picker is hidden while the forecast is open.
+
+### Cash flow forecast
+
+The forecast answers "will I make it to payday?" with a daily line for the next **30, 60, or 90 days**:
+
+- **Liquid accounts only** — checking, savings, and cash. Starting balances are the balances as of today, so transactions dated today are already included.
+- **Known outflows** — active bills (including card and loan payments), card minimums not already covered by a card-payment bill in the same horizon, and transactions dated after today.
+- **What it shows** — today's starting total, the **lowest projected point** (in red when it goes negative), the balance in 30, 60, and 90 days, per-account ending balances, and the dated events with a running balance.
+- **Local and read-only** — viewing the forecast writes nothing. The chart is drawn with Pillow, which the app already uses for statements and receipts.
+
+### Income plan
+
+A forecast is only useful if money comes in. Click **Income plan** on the cash-flow tab to add a schedule: a name, amount, frequency, next date, and the checking, savings, or cash account where the money is deposited.
+
+- Frequencies are **weekly**, **every 2 weeks**, **monthly**, and **twice a month**.
+- Schedules are **forecasts, not transactions**. The app never creates an income transaction for you; record the real deposit when it arrives.
+- A schedule starts **strictly after today**, so an already-recorded deposit is not counted twice.
+- **Monthly** schedules keep an **anchor day** — the permanent day of the month, such as the 31st. In a short month that day clamps to the last day (Feb 28 or 29), and the following month returns to the 31st. The anchor is stored separately from the next date, so changing the next date does not permanently move it; the editor shows the anchor and lets you change it explicitly.
+- **Twice a month** uses the anchor day plus a second day, both clamped to month end; the two days must differ.
+- The editor previews the next three dates for the rule.
+
+### What the forecast assumes
+
+- Card payments use the amount owed **today**. An open-amount ("pay the full balance", amount `0`) card bill is projected **once**, at its next due date, and is netted against future card payments so the same debt is not subtracted twice.
+- Fixed card payments are **capped** at today's remaining owed across their occurrences, so they cannot overpay a card.
+- Card minimums use the status **as of today**, are due at the end of the month **after** the statement month (or today if that has passed), and are paid from the first checking account, then the first liquid account. When a card-payment bill targets the same card inside the horizon, that bill replaces the card's minimums.
+- An overdue bill is shown once at today, then continues on its normal schedule; there is no backlog of past occurrences.
+- Scheduled bills and income are skipped when a matching transaction dated today or later already covers them (same account, type, amount, and a date within one day).
+- **Budgets and variable spending are not included.** Budget limits are plans, not scheduled cash movements; adding them would double-count bills.
 
 ## Importing bank statements
 

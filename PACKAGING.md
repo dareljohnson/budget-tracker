@@ -114,6 +114,12 @@ models and ONNX Runtime to add **roughly 200 MB** to the installer and portable 
 scripts already pass `--no-compile-packages`: compiling `cv2/config.py` to a `.pyc` breaks the OCR
 import.
 
+The **cash-flow forecast** is computed locally too, and its chart is drawn with **Pillow** — the same
+dependency the statement and receipt features already use. It adds no new dependency and makes no
+network calls; the forecast is derived only from data already in the local database. Theme presets and
+the Large text setting are respected because the chart is re-rendered with the current colors and text
+scale.
+
 Import supports most US checking or savings statements — specifically, those that print a standard
 date / description / amount transaction table — in PDF, PNG, or JPEG form, and is accepted only when
 the parsed rows reconcile to the statement's printed summary. Layouts without a recognizable
@@ -217,7 +223,7 @@ To use it:
 2. **Actions → Build installers → Run workflow** builds the installers and attaches them as artifacts.
 3. Or tag a release to also publish a **GitHub Release** with all installers attached:
    ```bash
-   git tag v1.6.0 && git push origin v1.6.0
+   git tag v1.7.0 && git push origin v1.7.0
    ```
 
 Signing secrets aren't wired in by default. Add them as repository secrets and export `MACOS_SIGN_IDENTITY` /

@@ -80,6 +80,7 @@ class AccountsView:
     def _account_card(self, balance: AccountBalance) -> ft.Container:
         account = balance.account
         usage = self.ctx.repo.account_usage(account.id)
+        transactions = self.ctx.repo.transaction_count(account.id)
         is_liability = account.kind.is_liability
         is_credit_card = account.kind is AccountKind.CREDIT_CARD
         actions: list[ft.Control] = []
@@ -110,7 +111,12 @@ class AccountsView:
             ),
         ]
         caption = "Owed" if is_liability and balance.owed_cents else "Balance"
-        details = f"{account.kind.label}  •  {usage} transaction(s)"
+        if transactions:
+            details = f"{account.kind.label}  •  {transactions} transaction(s)"
+        elif usage:
+            details = f"{account.kind.label}  •  in use by an income schedule"
+        else:
+            details = f"{account.kind.label}  •  0 transaction(s)"
         if account.number_last4:
             details += f"  •  •••• {account.number_last4}"
         heading: list[ft.Control] = [

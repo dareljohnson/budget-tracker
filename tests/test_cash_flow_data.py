@@ -248,16 +248,28 @@ class TestIncomeScheduleCrud(Base):
         created = self.schedule(name="Savings interest", account_id=savings.id)
 
         self.assertEqual(self.repo.account_usage(savings.id), 1)
+        self.assertEqual(self.repo.transaction_count(savings.id), 0)
         with self.assertRaises(RepositoryError) as caught:
             self.repo.delete_account(savings.id)
         self.assertIn("Savings interest", str(caught.exception))
 
         self.repo.delete_income_schedule(created.id)
         self.assertEqual(self.repo.account_usage(savings.id), 0)
+        self.assertEqual(self.repo.transaction_count(savings.id), 0)
         self.repo.delete_account(savings.id)
 
 
 class TestCashFlowQueries(Base):
+    def test_transaction_count_counts_both_sides_of_a_transfer(self):
+        self.add_transaction(1000, TransactionType.INCOME, date(2026, 1, 5), category="Salary")
+        self.add_transaction(
+            400, TransactionType.TRANSFER, date(2026, 1, 6), transfer_account=self.cash
+        )
+
+        self.assertEqual(self.repo.transaction_count(self.checking.id), 2)
+        self.assertEqual(self.repo.transaction_count(self.cash.id), 1)
+        self.assertEqual(self.repo.transaction_count(self.card.id), 0)
+
     def test_scheduled_transactions_bounds_and_adjustments(self):
         first = self.add_transaction(1000, TransactionType.INCOME, date(2026, 1, 1), category="Salary")
         middle = self.add_transaction(2500, TransactionType.EXPENSE, date(2026, 1, 15), category="Groceries")

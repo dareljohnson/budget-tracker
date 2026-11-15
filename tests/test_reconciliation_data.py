@@ -77,7 +77,7 @@ class Base(unittest.TestCase):
         return self.repo.conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0]
 
 
-class TestSchemaV10(Base):
+class TestSchemaV11(Base):
     def test_schema_version_and_source_column(self):
         self.assertEqual(len(MIGRATIONS), 11)
         self.assertEqual(schema_version(self.repo.conn), 11)

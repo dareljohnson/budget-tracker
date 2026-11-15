@@ -220,12 +220,16 @@ class Repository:
         with self.conn:
             self.conn.execute("UPDATE accounts SET number_last4 = ? WHERE id = ?", (digits, account_id))
 
-    def account_usage(self, account_id: int) -> int:
-        """How many things depend on this account; non-zero means the account cannot be deleted."""
-        count = self.conn.execute(
+    def transaction_count(self, account_id: int) -> int:
+        """How many transactions touch this account on either side of a transfer."""
+        return self.conn.execute(
             "SELECT COUNT(*) FROM transactions WHERE account_id = ? OR transfer_account_id = ?",
             (account_id, account_id),
         ).fetchone()[0]
+
+    def account_usage(self, account_id: int) -> int:
+        """How many things depend on this account; non-zero means the account cannot be deleted."""
+        count = self.transaction_count(account_id)
         if count:
             return count
         if self.conn.execute(
@@ -235,10 +239,7 @@ class Repository:
         return 0
 
     def delete_account(self, account_id: int) -> None:
-        count = self.conn.execute(
-            "SELECT COUNT(*) FROM transactions WHERE account_id = ? OR transfer_account_id = ?",
-            (account_id, account_id),
-        ).fetchone()[0]
+        count = self.transaction_count(account_id)
         if count:
             raise RepositoryError(f"Account is used by {count} transaction(s); reassign or delete them first")
         if self.conn.execute(

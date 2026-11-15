@@ -484,6 +484,21 @@ class TestYearCashFlowSwitch(_Base):
 
         self.assertEqual(refresh.call_count, 1)
 
+    def test_data_change_in_year_mode_does_not_rebuild_the_hidden_cash_panel(self):
+        from budget_tracker.ui.views.year import YearView
+
+        ctx = self._context()
+        view = YearView(ctx)
+        self.assertEqual(view.mode, "year")
+
+        with mock.patch.object(
+            view.cash_panel, "refresh", wraps=view.cash_panel.refresh
+        ) as refresh:
+            ctx.data_changed()
+
+        self.assertEqual(refresh.call_count, 0)
+        self.assertEqual(view.mode, "year")
+
 
 class TestIncomePlanDialog(_Base):
     """The combined income schedule list and inline editor."""
@@ -982,10 +997,18 @@ class TestIncomePlanDialog(_Base):
         )
 
     def test_default_income_button_opens_the_dialog_and_refreshes_the_panel_on_save_and_delete(self):
-        from budget_tracker.ui.views.cash_flow import CashFlowPanel
+        from budget_tracker.ui.views.year import YearView
 
-        panel = CashFlowPanel(self.ctx)
-        panel.refresh()
+        view = YearView(self.ctx)
+        switch = _find(
+            view.control,
+            lambda node: isinstance(node, ft.SegmentedButton)
+            and {segment.value for segment in node.segments} == {"year", "cash"},
+        )
+        switch.selected = ["cash"]
+        switch.on_change(_event(selected=["cash"]))
+        panel = view.cash_panel
+
         with mock.patch.object(panel, "refresh", wraps=panel.refresh) as refresh:
             panel._income_button.on_click(None)
             dialog = panel.income_dialog

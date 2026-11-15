@@ -296,8 +296,13 @@ class BudgetService:
             if owed <= 0:
                 continue
             if bill.amount_cents == 0:
-                # Only the earliest open bill per card projects the balance. A later open bill
-                # for the same card would subtract the same full balance a second time.
+                if bill.account_id not in liquid_ids:
+                    # The engine only projects payments made from liquid accounts. A loan- or
+                    # card-funded open bill must not claim the card's one open-bill slot and
+                    # hide a later checking/savings/cash-funded bill.
+                    continue
+                # Only the earliest projectable open bill per card projects the balance. A later
+                # open bill for the same card would subtract the same full balance a second time.
                 if target in open_bill_targets:
                     continue
                 open_bill_targets.add(target)

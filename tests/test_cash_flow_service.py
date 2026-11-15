@@ -277,6 +277,33 @@ class TestBills(Base):
         self.assertEqual(card_events[0].date, TODAY + timedelta(days=5))
         self.assertEqual(card_events[0].amount_cents, -50_000)
 
+    def test_open_bill_from_a_non_liquid_source_does_not_hide_a_liquid_one(self):
+        loan = self.add_account("Loan", AccountKind.LOAN)
+        self.add_card_balance(50_000, TODAY - timedelta(days=2))
+        self.add_bill(
+            "Pay card from loan",
+            0,
+            day=TODAY + timedelta(days=5),
+            frequency=BillFrequency.MONTHLY,
+            account=loan,
+            pay_to=self.card,
+        )
+        self.add_bill(
+            "Pay card from checking",
+            0,
+            day=TODAY + timedelta(days=10),
+            frequency=BillFrequency.MONTHLY,
+            pay_to=self.card,
+        )
+
+        result = self.service.cash_flow(TODAY)
+
+        card_events = [event for event in result.events if event.kind == "card_payment"]
+        self.assertEqual(len(card_events), 1)
+        self.assertEqual(card_events[0].date, TODAY + timedelta(days=10))
+        self.assertEqual(card_events[0].account_id, self.checking.id)
+        self.assertEqual(card_events[0].amount_cents, -50_000)
+
     def test_fixed_card_payment_is_capped_at_today_owed(self):
         self.add_card_balance(10_000, TODAY - timedelta(days=1))
         self.add_bill("Card payment", 15_000, frequency=BillFrequency.MONTHLY, pay_to=self.card)

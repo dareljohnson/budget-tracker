@@ -81,8 +81,9 @@ class YearView:
         if self.mode == "cash":
             self.year.visible = False
             self.body.controls = [self.cash_panel.control]
-            # The panel is its own data listener and has already refreshed; re-attaching it here
-            # avoids a second forecast build on every data change.
+            # Only the visible panel is rebuilt; while the yearly table is shown, a data change
+            # must not run the forecast and Pillow chart for an unmounted panel.
+            self.cash_panel.refresh()
             self.ctx.page.update()
             return
         self.year.visible = True

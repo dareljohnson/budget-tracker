@@ -147,9 +147,6 @@ class CashFlowPanel:
         )
         self._content = ft.Column(spacing=GAP)
         self.control = ft.Column([header, self._content], spacing=GAP)
-        # Register like every other view so a write elsewhere (such as the income dialog)
-        # rebuilds the forecast, including its bitmap chart.
-        ctx.on_data_changed(self._refresh_from_data_change)
 
     # ---------- public refresh ----------
     def refresh(self) -> None:
@@ -538,12 +535,10 @@ class CashFlowPanel:
         self.on_income()
 
     def _open_income_dialog(self) -> None:
+        # The dialog calls ``ctx.data_changed()`` after a successful change; the Year view
+        # refreshes this panel when it is the visible mode.
         self.income_dialog = IncomePlanDialog(self.ctx)
         self.income_dialog.open()
-
-    def _refresh_from_data_change(self) -> None:
-        """Rebuild after a write elsewhere; ``data_changed`` updates the page once afterwards."""
-        self.refresh()
 
     # ---------- helpers ----------
     @staticmethod

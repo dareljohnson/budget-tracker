@@ -233,7 +233,10 @@ class TestCashFlowPanel(_Base):
         self.assertIsInstance(panel._kpi_row, ft.ResponsiveRow)
         self.assertEqual(len(panel._kpi_row.controls), 5)
         for tile in panel._kpi_row.controls:
-            self.assertEqual(tile.col, {"xs": 6, "sm": 4, "lg": 2})
+            self.assertEqual(tile.col, {"xs": 6, "sm": 4, "lg": 4, "xl": 2})
+            # Three tiles per row at the lg breakpoint, so five values never share one row
+            # and wrap mid-number at the app's default width.
+            self.assertEqual(12 // tile.col["lg"], 3)
             values = [
                 node
                 for node in _walk(tile)

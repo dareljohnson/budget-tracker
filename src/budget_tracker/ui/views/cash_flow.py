@@ -282,7 +282,7 @@ class CashFlowPanel:
                 spacing=2,
             ),
             padding=12,
-            col={"xs": 6, "sm": 4, "lg": 2},
+            col={"xs": 6, "sm": 4, "lg": 4, "xl": 2},
         )
 
     def _chart_section(self) -> ft.Column:

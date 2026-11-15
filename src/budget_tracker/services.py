@@ -13,6 +13,7 @@ from .cashflow import (
     CardMinimum,
     CashFlowForecast,
     ForecastBill,
+    clamped_day,
     forecast,
     income_dates,
 )
@@ -279,6 +280,7 @@ class BudgetService:
         bills: list[ForecastBill] = []
         card_owed: dict[int, int] = {}
         card_bill_targets: set[int] = set()
+        open_bill_targets: set[int] = set()
         for bill in self.repo.list_bills(include_inactive=False):
             if not bill.is_card_payment:
                 bills.append(ForecastBill(bill, bill.amount_cents))
@@ -286,12 +288,19 @@ class BudgetService:
             target = bill.pay_to_account_id
             if target is None:  # defensive: is_card_payment implies a target
                 continue
-            if bill.account_id in liquid_ids and bill.next_due <= full_end:
+            if bill.next_due <= full_end:
+                # A card-payment bill replaces that card's minimums whether or not the bill's
+                # own source account is liquid; paying from another card or loan still counts.
                 card_bill_targets.add(target)
             owed = self.repo.amount_owed_as_of(target, today)
             if owed <= 0:
                 continue
             if bill.amount_cents == 0:
+                # Only the earliest open bill per card projects the balance. A later open bill
+                # for the same card would subtract the same full balance a second time.
+                if target in open_bill_targets:
+                    continue
+                open_bill_targets.add(target)
                 # Open bills are fully resolved here. They are deliberately absent from
                 # card_owed so the engine cannot re-cap them against later transfers.
                 paid_before_due = sum(
@@ -380,12 +389,12 @@ class BudgetService:
         if isinstance(schedule.next_date, datetime) or not isinstance(schedule.next_date, date):
             raise RepositoryError("Choose a valid next date")
         if schedule.frequency is IncomeFrequency.MONTHLY:
-            if schedule.next_date.day != schedule.anchor_day:
+            if schedule.next_date.day != clamped_day(schedule.next_date, schedule.anchor_day):
                 raise RepositoryError("The next date must fall on the anchor day")
         elif schedule.frequency is IncomeFrequency.SEMIMONTHLY:
-            days = {schedule.anchor_day}
+            days = {clamped_day(schedule.next_date, schedule.anchor_day)}
             if schedule.second_day is not None:
-                days.add(schedule.second_day)
+                days.add(clamped_day(schedule.next_date, schedule.second_day))
             if schedule.next_date.day not in days:
                 raise RepositoryError("The next date must fall on one of the income days")
 

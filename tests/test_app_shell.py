@@ -1,9 +1,11 @@
 import tomllib
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 import flet as ft
 
-from budget_tracker.main import _pinned_page
+from budget_tracker.main import _pinned_page, apply_preset
 
 
 def test_app_version_matches_pyproject():
@@ -32,6 +34,19 @@ def test_pinned_page_pins_the_header_and_scrolls_the_body():
 def test_pinned_page_leaves_a_non_column_control_alone():
     control = ft.Text("Plain")
     assert _pinned_page(control) is control
+
+
+def test_apply_preset_persists_the_choice_and_notifies_every_view():
+    page = SimpleNamespace(theme=None, dark_theme=None)
+    repo = mock.Mock()
+    ctx = mock.Mock()
+
+    apply_preset(page, repo, ctx, "ocean")
+
+    repo.set_setting.assert_called_once_with("theme_preset", "ocean")
+    ctx.data_changed.assert_called_once_with()
+    assert isinstance(page.theme, ft.Theme)
+    assert isinstance(page.dark_theme, ft.Theme)
 
 
 def test_nav_indices_stay_in_sync_with_the_labels():

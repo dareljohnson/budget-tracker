@@ -81,7 +81,8 @@ class YearView:
         if self.mode == "cash":
             self.year.visible = False
             self.body.controls = [self.cash_panel.control]
-            self.cash_panel.refresh()
+            # The panel is its own data listener and has already refreshed; re-attaching it here
+            # avoids a second forecast build on every data change.
             self.ctx.page.update()
             return
         self.year.visible = True

@@ -14,7 +14,13 @@ from datetime import date, timedelta
 
 import flet as ft
 
-from ...cashflow import CashEvent, CashFlowForecast, CashFlowPoint, income_dates
+from ...cashflow import (
+    CashEvent,
+    CashFlowForecast,
+    CashFlowPoint,
+    clamped_day,
+    income_dates,
+)
 from ...formatting import format_money, parse_date, parse_money
 from ...models import AccountKind, IncomeFrequency, IncomeSchedule
 from ...repository import LIQUID_ACCOUNT_KINDS, RepositoryError
@@ -141,6 +147,9 @@ class CashFlowPanel:
         )
         self._content = ft.Column(spacing=GAP)
         self.control = ft.Column([header, self._content], spacing=GAP)
+        # Register like every other view so a write elsewhere (such as the income dialog)
+        # rebuilds the forecast, including its bitmap chart.
+        ctx.on_data_changed(self._refresh_from_data_change)
 
     # ---------- public refresh ----------
     def refresh(self) -> None:
@@ -529,13 +538,12 @@ class CashFlowPanel:
         self.on_income()
 
     def _open_income_dialog(self) -> None:
-        self.income_dialog = IncomePlanDialog(self.ctx, on_close=self._income_closed)
+        self.income_dialog = IncomePlanDialog(self.ctx)
         self.income_dialog.open()
 
-    def _income_closed(self) -> None:
-        """Reload the forecast once the income dialog closes."""
+    def _refresh_from_data_change(self) -> None:
+        """Rebuild after a write elsewhere; ``data_changed`` updates the page once afterwards."""
         self.refresh()
-        self.ctx.page.update()
 
     # ---------- helpers ----------
     @staticmethod
@@ -682,7 +690,7 @@ class IncomePlanDialog:
             label="Second day",
             hint_text="1–31",
             keyboard_type=ft.KeyboardType.NUMBER,
-            on_change=lambda _: self._update_preview(),
+            on_change=self._second_day_changed,
             expand=True,
         )
         self.account = ft.Dropdown(
@@ -694,7 +702,7 @@ class IncomePlanDialog:
                 for account in self.accounts
             ],
             value=str(default_id) if default_id is not None else None,
-            on_select=lambda _: self._update_preview(),
+            on_select=self._account_changed,
         )
         self.active = ft.Switch(label="Active · include in forecast", value=True)
         self.delete_button = ft.TextButton(
@@ -1008,10 +1016,20 @@ class IncomePlanDialog:
             if next_date is not None:
                 self.anchor.value = str(next_date.day)
         self._update_preview()
+        self._update_dialog()
 
     def _anchor_changed(self, _: ft.Event | None = None) -> None:
         self._anchor_auto = False
         self._update_preview()
+        self._update_dialog()
+
+    def _second_day_changed(self, _: ft.Event | None = None) -> None:
+        self._update_preview()
+        self._update_dialog()
+
+    def _account_changed(self, _: ft.Event | None = None) -> None:
+        self._update_preview()
+        self._update_dialog()
 
     def _clear_errors(self) -> None:
         for field in (self.name, self.amount, self.anchor, self.second_day, self.next_date):
@@ -1084,13 +1102,13 @@ class IncomePlanDialog:
             valid = False
 
         if frequency is not None and next_date is not None and anchor is not None:
-            if frequency is IncomeFrequency.MONTHLY and next_date.day != anchor:
+            if frequency is IncomeFrequency.MONTHLY and next_date.day != clamped_day(next_date, anchor):
                 self.next_date.error = "The next date must fall on the anchor day"
                 valid = False
             elif frequency is IncomeFrequency.SEMIMONTHLY:
-                allowed = {anchor}
+                allowed = {clamped_day(next_date, anchor)}
                 if second is not None:
-                    allowed.add(second)
+                    allowed.add(clamped_day(next_date, second))
                 if next_date.day not in allowed:
                     self.next_date.error = "The next date must fall on one of the income days"
                     valid = False
@@ -1137,7 +1155,7 @@ class IncomePlanDialog:
             self.error.visible = True
             self._update_dialog()
             return
-        self.close()
+        self.close(changed=True)
 
     def _confirm_delete(self, _: ft.Event | None = None) -> None:
         schedule = self._editing
@@ -1158,7 +1176,7 @@ class IncomePlanDialog:
             self.error.visible = True
             self._update_dialog()
             return
-        self.close()
+        self.close(changed=True)
 
     # ---------- lifecycle ----------
     def open(self) -> None:
@@ -1167,14 +1185,22 @@ class IncomePlanDialog:
     def _cancel(self, _: ft.Event | None = None) -> None:
         self.close()
 
-    def close(self) -> None:
-        """Dismiss the dialog once, then tell the host to refresh."""
+    def close(self, *, changed: bool = False) -> None:
+        """Dismiss the dialog once and, after a successful change, notify every view.
+
+        ``data_changed`` refreshes the accounts list (which names the in-use schedule) and the
+        cash-flow panel, and updates the page exactly once.
+        """
         if self._closed:
             return
         self._closed = True
         self.ctx.page.pop_dialog()
         if self.on_close is not None:
             self.on_close()
+        if changed:
+            self.ctx.data_changed()
+        else:
+            self.ctx.page.update()
 
     def _default_account_id(self) -> int | None:
         checking = next(

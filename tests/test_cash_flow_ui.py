@@ -468,6 +468,22 @@ class TestYearCashFlowSwitch(_Base):
         self.assertNotEqual(view.cash_panel._chart_image.src, first_src)
         self.assertEqual(view.mode, "cash")
 
+    def test_data_change_refreshes_the_cash_panel_only_once(self):
+        from budget_tracker.ui.views.year import YearView
+
+        ctx = self._context()
+        view = YearView(ctx)
+        switch = self._switch(view)
+        switch.selected = ["cash"]
+        switch.on_change(_event(selected=["cash"]))
+
+        with mock.patch.object(
+            view.cash_panel, "refresh", wraps=view.cash_panel.refresh
+        ) as refresh:
+            ctx.data_changed()
+
+        self.assertEqual(refresh.call_count, 1)
+
 
 class TestIncomePlanDialog(_Base):
     """The combined income schedule list and inline editor."""
@@ -701,6 +717,49 @@ class TestIncomePlanDialog(_Base):
         [saved] = self.ctx.service.list_income_schedules()
         self.assertEqual((saved.next_date.day, saved.anchor_day), (15, 15))
 
+    def test_monthly_next_date_accepts_a_month_clamped_anchor_day(self):
+        dialog = self._dialog()
+        dialog.add_button.on_click(None)
+        dialog.name.value = "Salary"
+        dialog.amount.value = "100"
+        dialog.frequency.value = IncomeFrequency.MONTHLY.value
+        dialog._frequency_changed(None)
+        dialog.anchor.value = "31"
+        dialog._anchor_changed(None)
+
+        for next_date in (date(2026, 11, 30), date(2027, 2, 28)):
+            with self.subTest(next_date=next_date):
+                dialog.next_date.value = next_date.isoformat()
+                dialog._next_date_changed(None)
+                schedule = dialog._validate()
+                self.assertIsNotNone(schedule)
+                self.assertFalse(dialog.next_date.error)
+                self.assertEqual((schedule.next_date, schedule.anchor_day), (next_date, 31))
+
+    def test_semimonthly_next_date_accepts_a_month_clamped_income_day(self):
+        dialog = self._dialog()
+        dialog.add_button.on_click(None)
+        dialog.name.value = "Consulting"
+        dialog.amount.value = "600"
+        dialog.frequency.value = IncomeFrequency.SEMIMONTHLY.value
+        dialog._frequency_changed(None)
+        dialog.anchor.value = "15"
+        dialog._anchor_changed(None)
+        dialog.second_day.value = "31"
+        dialog._second_day_changed(None)
+
+        for next_date in (date(2026, 11, 30), date(2027, 2, 28)):
+            with self.subTest(next_date=next_date):
+                dialog.next_date.value = next_date.isoformat()
+                dialog._next_date_changed(None)
+                schedule = dialog._validate()
+                self.assertIsNotNone(schedule)
+                self.assertFalse(dialog.next_date.error)
+                self.assertEqual(
+                    (schedule.next_date, schedule.anchor_day, schedule.second_day),
+                    (next_date, 15, 31),
+                )
+
     def test_semimonthly_requires_a_distinct_second_day_and_a_matching_next_date(self):
         dialog = self._dialog()
         dialog.add_button.on_click(None)
@@ -842,6 +901,28 @@ class TestIncomePlanDialog(_Base):
         self.assertTrue(all(day > self.today for day in dialog.preview_dates))
         self.assertTrue(all(day.day in (1, 15) for day in dialog.preview_dates))
 
+    def test_calendar_pick_refreshes_the_preview_and_the_dialog(self):
+        dialog = self._dialog()
+        dialog.add_button.on_click(None)
+        dialog.frequency.value = IncomeFrequency.MONTHLY.value
+        dialog._frequency_changed(None)
+        picked = self.today + timedelta(days=5)
+        dialog.next_date.value = picked.isoformat()
+
+        with mock.patch.object(dialog, "_update_dialog") as update:
+            dialog._next_date_changed(None)
+
+        update.assert_called_once_with()
+        self.assertEqual(dialog.anchor.value, str(picked.day))
+        self.assertEqual(dialog.preview_dates[0], picked)
+
+        with mock.patch.object(dialog, "_update_dialog") as update:
+            dialog._anchor_changed(None)
+            dialog._second_day_changed(None)
+            dialog._account_changed(None)
+
+        self.assertEqual(update.call_count, 3)
+
     # ---------- wiring and errors ----------
     def test_service_errors_keep_the_dialog_open_and_show_the_message(self):
         dialog = self._dialog()
@@ -870,6 +951,35 @@ class TestIncomePlanDialog(_Base):
 
         dialog._cancel(None)
         self.assertEqual(calls, [True])
+
+    def test_successful_add_edit_and_delete_notify_data_changed_once(self):
+        existing = self._schedule(name="Existing")
+        with mock.patch.object(
+            self.ctx, "data_changed", wraps=self.ctx.data_changed
+        ) as changed:
+            dialog = self._dialog()
+            dialog.add_button.on_click(None)
+            self._fill_valid(dialog, name="Added")
+            dialog._save(None)
+            self.assertEqual(changed.call_count, 1)
+
+            dialog = self._dialog()
+            self._edit_row(dialog).on_click(None)
+            dialog.name.value = "Edited"
+            dialog._save(None)
+            self.assertEqual(changed.call_count, 2)
+
+            dialog = self._dialog()
+            self._edit_row(dialog).on_click(None)
+            dialog.delete_button.on_click(None)
+            confirm = [c for c in self.page.overlay if isinstance(c, ft.AlertDialog)][-1]
+            confirm.actions[-1].on_click(None)
+            self.assertEqual(changed.call_count, 3)
+
+        self.assertEqual(
+            [schedule.name for schedule in self.ctx.service.list_income_schedules()],
+            [existing.name],
+        )
 
     def test_default_income_button_opens_the_dialog_and_refreshes_the_panel_on_save_and_delete(self):
         from budget_tracker.ui.views.cash_flow import CashFlowPanel

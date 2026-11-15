@@ -25,7 +25,6 @@ from .models import (
 
 LIQUID_KINDS = frozenset({AccountKind.CHECKING, AccountKind.SAVINGS, AccountKind.CASH})
 INFLOW_KINDS = frozenset({"income", "refund", "transfer_in"})
-OUTFLOW_KINDS = frozenset({"bill", "card_payment", "minimum", "transfer_out"})
 
 # De-duplication is by transaction type and, for transfers, by the target account. A transfer is
 # not a bill, a refund is not income, and an expense is not a card payment. Card-payment and
@@ -135,6 +134,16 @@ def _fixed_interval_dates(
 
 def _month_index(day: date) -> int:
     return day.year * 12 + day.month - 1
+
+
+def clamped_day(day: date, desired_day: int) -> int:
+    """``desired_day`` clamped to the last day of ``day``'s month.
+
+    Monthly and semimonthly rules keep their anchor (for example, the 31st) while occurring on the
+    month's last day in short months. Validation therefore compares the clamped day for the chosen
+    month instead of the raw anchor.
+    """
+    return min(desired_day, calendar.monthrange(day.year, day.month)[1])
 
 
 def _clamped_day(index: int, day: int) -> date:

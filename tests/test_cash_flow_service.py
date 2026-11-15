@@ -253,6 +253,30 @@ class TestBills(Base):
 
         self.assertEqual(result.events, [])
 
+    def test_two_open_card_bills_project_the_balance_only_once(self):
+        self.add_card_balance(50_000, TODAY - timedelta(days=2))
+        self.add_bill(
+            "Pay card first",
+            0,
+            day=TODAY + timedelta(days=5),
+            frequency=BillFrequency.MONTHLY,
+            pay_to=self.card,
+        )
+        self.add_bill(
+            "Pay card second",
+            0,
+            day=TODAY + timedelta(days=20),
+            frequency=BillFrequency.MONTHLY,
+            pay_to=self.card,
+        )
+
+        result = self.service.cash_flow(TODAY)
+
+        card_events = [event for event in result.events if event.kind == "card_payment"]
+        self.assertEqual(len(card_events), 1)
+        self.assertEqual(card_events[0].date, TODAY + timedelta(days=5))
+        self.assertEqual(card_events[0].amount_cents, -50_000)
+
     def test_fixed_card_payment_is_capped_at_today_owed(self):
         self.add_card_balance(10_000, TODAY - timedelta(days=1))
         self.add_bill("Card payment", 15_000, frequency=BillFrequency.MONTHLY, pay_to=self.card)
@@ -347,6 +371,24 @@ class TestCardMinimums(Base):
         card_payments = [event.amount_cents for event in result.events if event.kind == "card_payment"]
         self.assertTrue(card_payments)
         self.assertTrue(all(amount == -5_000 for amount in card_payments))
+
+    def test_card_payment_bill_from_a_non_liquid_account_still_suppresses_minimums(self):
+        loan = self.add_account("Loan", AccountKind.LOAN)
+        self.add_card_balance()
+        self.service.record_minimum_payment(self.card.id, "2026-11", 5_000)
+        self.add_bill(
+            "Card payment",
+            5_000,
+            day=TODAY + timedelta(days=5),
+            frequency=BillFrequency.MONTHLY,
+            account=loan,
+            pay_to=self.card,
+        )
+
+        result = self.service.cash_flow(TODAY)
+
+        self.assertEqual([event for event in result.events if event.kind == "minimum"], [])
+        self.assertEqual([event for event in result.events if event.kind == "card_payment"], [])
 
     def test_card_payment_bill_outside_the_horizon_does_not_suppress_minimums(self):
         self.add_card_balance()
@@ -525,6 +567,32 @@ class TestIncomeScheduleCrud(Base):
                 anchor_day=20,
                 second_day=5,
             )
+
+    def test_monthly_next_date_accepts_a_month_clamped_anchor_day(self):
+        for next_date in (date(2026, 11, 30), date(2027, 2, 28)):
+            with self.subTest(next_date=next_date):
+                created = self.add_income(
+                    name=f"Month end {next_date:%Y-%m}",
+                    frequency=IncomeFrequency.MONTHLY,
+                    next_date=next_date,
+                    anchor_day=31,
+                )
+                self.assertEqual((created.next_date, created.anchor_day), (next_date, 31))
+
+    def test_semimonthly_next_date_accepts_a_month_clamped_income_day(self):
+        for next_date in (date(2026, 11, 30), date(2027, 2, 28)):
+            with self.subTest(next_date=next_date):
+                created = self.add_income(
+                    name=f"Month end {next_date:%Y-%m}",
+                    frequency=IncomeFrequency.SEMIMONTHLY,
+                    next_date=next_date,
+                    anchor_day=15,
+                    second_day=31,
+                )
+                self.assertEqual(
+                    (created.next_date, created.anchor_day, created.second_day),
+                    (next_date, 15, 31),
+                )
 
     def test_crud_does_not_write_to_the_ledger(self):
         savings = self.add_account("Savings", AccountKind.SAVINGS)

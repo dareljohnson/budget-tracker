@@ -216,6 +216,36 @@ class TestBills(Base):
         self.assertEqual(event.counter_account_id, self.card.id)
         self.assertEqual(event.amount_cents, -30_000)
 
+    def test_open_card_bill_ignores_transfers_after_its_due_date(self):
+        self.add_card_balance(50_000, TODAY - timedelta(days=2))
+        self.add_transaction(
+            20_000,
+            TransactionType.TRANSFER,
+            TODAY + timedelta(days=40),
+            transfer_account=self.card,
+            description="Later card payment",
+        )
+        self.add_bill(
+            "Pay card",
+            0,
+            day=TODAY + timedelta(days=10),
+            frequency=BillFrequency.MONTHLY,
+            pay_to=self.card,
+        )
+
+        result = self.service.cash_flow(TODAY)
+
+        # The later transfer is applied on its own date and must not shrink the open bill, which
+        # only nets transfers made before its due date.
+        self.assertEqual(
+            [(event.date, event.amount_cents) for event in result.events if event.kind == "card_payment"],
+            [(TODAY + timedelta(days=10), -50_000)],
+        )
+        self.assertEqual(
+            [(event.date, event.amount_cents) for event in result.events if event.kind == "transfer_out"],
+            [(TODAY + timedelta(days=40), -20_000)],
+        )
+
     def test_open_card_bill_with_nothing_owed_is_skipped(self):
         self.add_bill("Pay card", 0, pay_to=self.card)
 
@@ -456,7 +486,7 @@ class TestIncomeScheduleCrud(Base):
             account=savings,
         )
         self.assertIsNotNone(created.id)
-        self.assertEqual(self.service.get_income_schedule(created.id).name, "Paycheck")
+        self.assertEqual(created.name, "Paycheck")
 
         self.assertEqual([schedule.id for schedule in self.service.list_income_schedules()], [created.id])
         self.assertEqual(self.service.get_income_schedule(created.id).account_id, savings.id)

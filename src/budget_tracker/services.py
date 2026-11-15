@@ -291,10 +291,9 @@ class BudgetService:
             owed = self.repo.amount_owed_as_of(target, today)
             if owed <= 0:
                 continue
-            card_owed[target] = owed
             if bill.amount_cents == 0:
-                # A future transfer into the card before the bill is paid separately, so it must
-                # not also be subtracted from this open bill's amount.
+                # Open bills are fully resolved here. They are deliberately absent from
+                # card_owed so the engine cannot re-cap them against later transfers.
                 paid_before_due = sum(
                     abs(transaction.amount_cents)
                     for transaction in scheduled
@@ -304,6 +303,8 @@ class BudgetService:
                 )
                 amount = max(0, owed - paid_before_due)
             else:
+                # Fixed bills share one remaining-owed cap per card, allocated by the engine.
+                card_owed[target] = owed
                 amount = min(bill.amount_cents, owed)
             bills.append(ForecastBill(bill, amount))
 
@@ -390,7 +391,9 @@ class BudgetService:
 
     def add_income_schedule(self, schedule: IncomeSchedule) -> IncomeSchedule:
         self._validate_income_schedule_dates(schedule)
-        return self.repo.add_income_schedule(schedule)
+        created = self.repo.add_income_schedule(schedule)
+        # Re-read so callers see the stored values (trimmed name, normalized second_day).
+        return self.repo.get_income_schedule(created.id) or created
 
     def update_income_schedule(self, schedule: IncomeSchedule) -> None:
         self._validate_income_schedule_dates(schedule)

@@ -251,7 +251,9 @@ class TestYearViewComposition(Base):
             ["YTD budget", "YTD spending", "Year-end pace"],
         )
         self.assertIn(titles[2], {"Under budget", "Over budget"})
-        self.assertIn(f"Estimate · {date.today().month} month(s) elapsed", _texts(kpis))
+        from budget_tracker.ui.views.year import YearView, _months_label
+
+        self.assertIn(f"Estimate · {_months_label(date.today().month)} elapsed", _texts(kpis))
 
     def test_summary_tile_helper_is_compact(self):
         from budget_tracker.ui.components import summary_tile
@@ -277,6 +279,12 @@ class TestYearViewComposition(Base):
         button.on_click(None)
         self.assertEqual(calls, [True])
         self.assertEqual(view.body.controls[1].data, "coverage-banner")
+        # The banner is a plain Row: a wrapping Row with an expanding child fails to paint in
+        # Flet 1.1.2 and collapses the whole Year body to a gray card.
+        banner_row = view.body.controls[1].content
+        self.assertIsInstance(banner_row, ft.Row)
+        self.assertFalse(banner_row.wrap)
+        self.assertTrue(banner_row.controls[1].expand)
 
     def test_coverage_banner_is_absent_for_a_fully_budgeted_year(self):
         for month in range(1, 13):
@@ -346,7 +354,7 @@ class TestYearViewComposition(Base):
         self.assertIn("Spending", texts)
         self.assertIn("Only months with activity change the line.", texts)
 
-    def test_cumulative_months_are_running_totals_with_the_current_month_flagged(self):
+    def test_cumulative_months_pass_monthly_values_to_the_renderer(self):
         self.budget(f"{self.year}-01", 100_000)
         self.budget(f"{self.year}-02", 50_000)
         self.spend(70_000, date(self.year, 1, 10))
@@ -356,9 +364,10 @@ class TestYearViewComposition(Base):
 
         months = view._cumulative_months(overview)
         self.assertEqual(len(months), 12)
+        # The renderer owns the running total; these are the month's own values.
         self.assertEqual((months[0].budget_cents, months[0].spending_cents), (100_000, 70_000))
-        self.assertEqual((months[1].budget_cents, months[1].spending_cents), (150_000, 110_000))
-        self.assertEqual(months[-1].budget_cents, 150_000)
+        self.assertEqual((months[1].budget_cents, months[1].spending_cents), (50_000, 40_000))
+        self.assertEqual((months[-1].budget_cents, months[-1].spending_cents), (0, 0))
         self.assertTrue(months[int(self.current_month[-2:]) - 1].is_current)
         self.assertEqual(sum(month.is_current for month in months), 1)
 

@@ -29,6 +29,10 @@ from .cash_flow import CashFlowPanel
 
 CHART_HEIGHT = 260
 COVERAGE_MIN_MONTHS = 3
+
+
+def _months_label(count: int) -> str:
+    return "1 month" if count == 1 else f"{count} months"
 FOCUS_CATEGORY_LIMIT = 3
 
 
@@ -186,13 +190,13 @@ class YearView:
         else:
             forecast_title = "Year-end pace"
             forecast_value = format_money(overview.forecast_spending_cents)
-            forecast_caption = f"Estimate · {overview.elapsed_months} month(s) elapsed"
+            forecast_caption = f"Estimate · {_months_label(overview.elapsed_months)} elapsed"
         return ft.ResponsiveRow(
             [
                 summary_tile(
                     "YTD budget",
                     format_money(overview.ytd_budget_cents),
-                    f"{overview.budgeted_months} month(s) budgeted",
+                    f"{_months_label(overview.budgeted_months)} budgeted",
                     SEED_COLOR,
                 ),
                 summary_tile(
@@ -246,7 +250,6 @@ class YearView:
                     ),
                 ],
                 spacing=10,
-                wrap=True,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
             col={"xs": 12},
@@ -264,12 +267,20 @@ class YearView:
         colors = self._chart_colors()
         over_budget = any(month.spending_cents > month.budget_cents for month in cumulative)
         spending_color = colors.negative if over_budget else colors.lowest
+        page_width = getattr(self.ctx.page, "width", None) or 1320
+        chart_width = max(420, int((page_width - 200) * 8 / 12) - 40)
         self._chart_image = ft.Container(
             height=CHART_HEIGHT,
             expand=True,
             image=ft.DecorationImage(
                 src=self._png_source(
-                    cumulative_chart_png(cumulative, colors=colors, text_scale=text_scale())
+                    cumulative_chart_png(
+                        cumulative,
+                        width=chart_width,
+                        height=CHART_HEIGHT,
+                        colors=colors,
+                        text_scale=text_scale(),
+                    )
                 ),
                 fit=ft.BoxFit.CONTAIN,
             ),
@@ -305,17 +316,14 @@ class YearView:
 
     def _cumulative_months(self, overview: YearOverview) -> list[CumulativeMonth]:
         current = self.ctx.service.current_month()
-        running_budget = 0
-        running_spending = 0
         months: list[CumulativeMonth] = []
         for month in overview.months:
-            running_budget += month.budget_cents
-            running_spending += month.spending_cents
+            # The renderer accumulates; pass the month's own values, not a running total.
             months.append(
                 CumulativeMonth(
                     short_month_label(month.month),
-                    running_budget,
-                    running_spending,
+                    month.budget_cents,
+                    month.spending_cents,
                     month.month == current,
                 )
             )

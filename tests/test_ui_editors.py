@@ -976,6 +976,46 @@ class TestEditors(unittest.TestCase):
         self.assertNotIn("Minimum", texts)
         self.assertNotIn("Pay card", button_labels)
 
+    def test_schedule_only_account_card_does_not_claim_a_transaction(self):
+        from budget_tracker.models import IncomeFrequency, IncomeSchedule
+        from budget_tracker.ui.views.accounts import AccountsView
+
+        cash = self.accts["Cash"]
+        self.repo.add_income_schedule(
+            IncomeSchedule(
+                "Paycheck",
+                200_000,
+                IncomeFrequency.MONTHLY,
+                date.today(),
+                1,
+                cash.id,
+            )
+        )
+        view = AccountsView(self.ctx)
+        cash_card = next(
+            card for card in view.grid.controls
+            if any(text == "Cash" for text in self._texts(card))
+        )
+
+        texts = self._texts(cash_card)
+        self.assertNotIn("1 transaction(s)", texts)
+        self.assertTrue(any("in use by an income schedule" in text for text in texts))
+
+        def walk(control):
+            yield control
+            for child in getattr(control, "controls", None) or []:
+                yield from walk(child)
+            content = getattr(control, "content", None)
+            if content is not None and not isinstance(content, str):
+                yield from walk(content)
+
+        delete_button = next(
+            control
+            for control in walk(cash_card)
+            if isinstance(control, ft.IconButton) and control.icon == ft.Icons.DELETE_OUTLINE
+        )
+        self.assertTrue(delete_button.disabled)
+
     def test_account_editor_creates_a_loan_with_owed_opening_balance(self):
         from budget_tracker.models import AccountKind
         from budget_tracker.ui.views.accounts import AccountEditor

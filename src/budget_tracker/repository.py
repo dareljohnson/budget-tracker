@@ -21,6 +21,8 @@ from .models import (
     Debt,
     DebtKind,
     DueBill,
+    IncomeFrequency,
+    IncomeSchedule,
     MonthTotal,
     MinimumPayment,
     Reconciliation,
@@ -37,6 +39,7 @@ if TYPE_CHECKING:
 
 REMINDER_DAYS_SETTING = "reminder_days"
 DEFAULT_REMINDER_DAYS = 3
+LIQUID_ACCOUNT_KINDS = frozenset({AccountKind.CHECKING, AccountKind.SAVINGS, AccountKind.CASH})
 
 # Net spending: expenses minus refunds. Transfers are neither income nor spending.
 _SPEND_SQL = "CASE {t}type WHEN 'expense' THEN {t}amount_cents WHEN 'refund' THEN -{t}amount_cents ELSE 0 END"
@@ -217,14 +220,27 @@ class Repository:
         with self.conn:
             self.conn.execute("UPDATE accounts SET number_last4 = ? WHERE id = ?", (digits, account_id))
 
-    def account_usage(self, account_id: int) -> int:
+    def transaction_count(self, account_id: int) -> int:
+        """How many transactions touch this account on either side of a transfer."""
         return self.conn.execute(
             "SELECT COUNT(*) FROM transactions WHERE account_id = ? OR transfer_account_id = ?",
             (account_id, account_id),
         ).fetchone()[0]
 
+    def account_usage(self, account_id: int) -> int:
+        """How many things depend on this account; non-zero means the account cannot be deleted."""
+        count = self.transaction_count(account_id)
+        if count:
+            return count
+        if self.conn.execute(
+            "SELECT 1 FROM income_schedules WHERE account_id = ?", (account_id,)
+        ).fetchone():
+            return 1
+        return 0
+
     def delete_account(self, account_id: int) -> None:
-        if count := self.account_usage(account_id):
+        count = self.transaction_count(account_id)
+        if count:
             raise RepositoryError(f"Account is used by {count} transaction(s); reassign or delete them first")
         if self.conn.execute(
             "SELECT 1 FROM bills WHERE account_id = ? OR pay_to_account_id = ?", (account_id, account_id)
@@ -240,6 +256,12 @@ class Repository:
         ).fetchone()
         if debt is not None:
             raise RepositoryError(f"Account is linked to the debt '{debt['name']}'")
+        schedule = self.conn.execute(
+            "SELECT name FROM income_schedules WHERE account_id = ? ORDER BY name COLLATE NOCASE LIMIT 1",
+            (account_id,),
+        ).fetchone()
+        if schedule is not None:
+            raise RepositoryError(f"Account is used by the income schedule '{schedule['name']}'")
         with self.conn:
             self.conn.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
 
@@ -497,6 +519,17 @@ class Repository:
             sql += " LIMIT ?"
             params.append(limit)
         return [self._row_to_transaction(r) for r in self.conn.execute(sql, params)]
+
+    def scheduled_transactions(self, start_on: date, end_on: date) -> list[Transaction]:
+        """Non-adjustment transactions in the inclusive date range, oldest first."""
+        rows = self.conn.execute(
+            self._TX_SELECT
+            + self._TX_FROM
+            + " WHERE t.occurred_on >= ? AND t.occurred_on <= ? AND t.type <> 'adjustment'"
+            " ORDER BY t.occurred_on, t.id",
+            (start_on.isoformat(), end_on.isoformat()),
+        )
+        return [self._row_to_transaction(r) for r in rows]
 
     def transaction_months(self) -> list[str]:
         rows = self.conn.execute(
@@ -990,6 +1023,106 @@ class Repository:
             if linked is not None:
                 raise RepositoryError("This account is already linked to a debt")
 
+    # ---------- income schedules ----------
+    _INCOME_SELECT = (
+        "SELECT id, name, amount_cents, frequency, next_date, anchor_day, second_day, account_id, active "
+        "FROM income_schedules"
+    )
+
+    @staticmethod
+    def _row_to_income_schedule(row: sqlite3.Row) -> IncomeSchedule:
+        return IncomeSchedule(
+            id=row["id"],
+            name=row["name"],
+            amount_cents=row["amount_cents"],
+            frequency=IncomeFrequency(row["frequency"]),
+            next_date=date.fromisoformat(row["next_date"]),
+            anchor_day=row["anchor_day"],
+            second_day=row["second_day"],
+            account_id=row["account_id"],
+            active=bool(row["active"]),
+        )
+
+    def list_income_schedules(self, *, active_only: bool = False) -> list[IncomeSchedule]:
+        """Active schedules first, then by name (case-insensitive)."""
+        sql = self._INCOME_SELECT
+        if active_only:
+            sql += " WHERE active = 1"
+        sql += " ORDER BY active DESC, name COLLATE NOCASE"
+        return [self._row_to_income_schedule(row) for row in self.conn.execute(sql)]
+
+    def get_income_schedule(self, schedule_id: int) -> IncomeSchedule | None:
+        row = self.conn.execute(
+            self._INCOME_SELECT + " WHERE id = ?", (schedule_id,)
+        ).fetchone()
+        return self._row_to_income_schedule(row) if row else None
+
+    def _validate_income_schedule(self, schedule: IncomeSchedule) -> None:
+        name = schedule.name.strip()
+        if not name:
+            raise RepositoryError("Income name is required")
+        if len(name) > 60:
+            raise RepositoryError("Income name must be 60 characters or fewer")
+        if not isinstance(schedule.frequency, IncomeFrequency):
+            raise RepositoryError("Choose a valid income frequency")
+        if schedule.amount_cents <= 0:
+            raise RepositoryError("Income amount must be greater than zero")
+        if not 1 <= schedule.anchor_day <= 31:
+            raise RepositoryError("Income day must be between 1 and 31")
+        if schedule.frequency is IncomeFrequency.SEMIMONTHLY:
+            if schedule.second_day is None:
+                raise RepositoryError("Choose a second day for a twice-a-month income")
+            if not 1 <= schedule.second_day <= 31:
+                raise RepositoryError("Second income day must be between 1 and 31")
+            if schedule.second_day == schedule.anchor_day:
+                raise RepositoryError("The two income days must be different")
+        else:
+            schedule.second_day = None
+        account = self.get_account(schedule.account_id)
+        if account is None:
+            raise RepositoryError("Select the account the income is deposited into")
+        if account.kind not in LIQUID_ACCOUNT_KINDS:
+            raise RepositoryError("Income must be deposited into a checking, savings or cash account")
+
+    @staticmethod
+    def _income_params(schedule: IncomeSchedule) -> tuple:
+        return (
+            schedule.name.strip(),
+            schedule.amount_cents,
+            schedule.frequency.value,
+            schedule.next_date.isoformat(),
+            schedule.anchor_day,
+            schedule.second_day,
+            schedule.account_id,
+            int(schedule.active),
+        )
+
+    def add_income_schedule(self, schedule: IncomeSchedule) -> IncomeSchedule:
+        self._validate_income_schedule(schedule)
+        with self.conn:
+            cur = self.conn.execute(
+                "INSERT INTO income_schedules (name, amount_cents, frequency, next_date, anchor_day, "
+                "second_day, account_id, active) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                self._income_params(schedule),
+            )
+        schedule.id = cur.lastrowid
+        return schedule
+
+    def update_income_schedule(self, schedule: IncomeSchedule) -> None:
+        if schedule.id is None:
+            raise ValueError("Income schedule id is required")
+        self._validate_income_schedule(schedule)
+        with self.conn:
+            self.conn.execute(
+                "UPDATE income_schedules SET name = ?, amount_cents = ?, frequency = ?, next_date = ?, "
+                "anchor_day = ?, second_day = ?, account_id = ?, active = ? WHERE id = ?",
+                (*self._income_params(schedule), schedule.id),
+            )
+
+    def delete_income_schedule(self, schedule_id: int) -> None:
+        with self.conn:
+            self.conn.execute("DELETE FROM income_schedules WHERE id = ?", (schedule_id,))
+
     # ---------- credit card minimum payments ----------
     def list_minimum_payments(self, account_id: int) -> list[MinimumPayment]:
         rows = self.conn.execute(
@@ -1036,13 +1169,18 @@ class Repository:
                 (account_id, month),
             )
 
-    def card_payments(self, account_id: int) -> list[tuple[date, int]]:
-        """Transfers into a credit card, oldest first."""
-        rows = self.conn.execute(
+    def card_payments(self, account_id: int, *, through: date | None = None) -> list[tuple[date, int]]:
+        """Transfers into a credit card, oldest first, optionally through an inclusive date."""
+        sql = (
             "SELECT occurred_on, amount_cents FROM transactions "
-            "WHERE type = 'transfer' AND transfer_account_id = ? ORDER BY occurred_on, id",
-            (account_id,),
+            "WHERE type = 'transfer' AND transfer_account_id = ?"
         )
+        params: tuple = (account_id,)
+        if through is not None:
+            sql += " AND occurred_on <= ?"
+            params += (through.isoformat(),)
+        sql += " ORDER BY occurred_on, id"
+        rows = self.conn.execute(sql, params)
         return [(date.fromisoformat(row["occurred_on"]), row["amount_cents"]) for row in rows]
 
     def reconciliation_for_statement(self, statement_id: int) -> Reconciliation | None:
@@ -1070,6 +1208,10 @@ class Repository:
         if row is None:
             raise RepositoryError("Account not found")
         return row[0]
+
+    def amount_owed_as_of(self, account_id: int, as_of: date) -> int:
+        """Positive amount owed on a liability through ``as_of``; 0 for assets or an account in credit."""
+        return max(0, -self.account_balance_as_of(account_id, as_of))
 
     @staticmethod
     def _row_to_category_rule(row: sqlite3.Row) -> CategoryRule:

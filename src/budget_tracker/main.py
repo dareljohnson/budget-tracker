@@ -27,6 +27,7 @@ from .ui.theme import (
     EXPENSE_COLOR,
     PRESETS,
     SEED_COLOR,
+    THEME_PRESET_SETTING,
     WARNING_COLOR,
     build_theme,
     fs,
@@ -47,7 +48,6 @@ from .ui.views.year import YearView
 log = logging.getLogger(__name__)
 
 THEME_SETTING = "theme_mode"
-THEME_PRESET_SETTING = "theme_preset"
 TEXT_SIZE_SETTING = "text_scale"
 
 NAV_ITEMS = [
@@ -117,6 +117,18 @@ def _pinned_page(control: ft.Control) -> ft.Control:
     )
 
 
+def apply_preset(page: ft.Page, repo: Repository, ctx: AppContext, name: str) -> None:
+    """Apply a theme preset and refresh every view, including the bitmap cash-flow chart.
+
+    Role colors elsewhere follow the theme automatically, but the chart is rendered to a PNG, so
+    it must be rebuilt. ``data_changed`` also updates the page once after every listener runs.
+    """
+    page.theme = build_theme(preset=name)
+    page.dark_theme = build_theme(dark=True, preset=name)
+    repo.set_setting(THEME_PRESET_SETTING, name)
+    ctx.data_changed()
+
+
 def main(page: ft.Page) -> None:
     # A staged restore must replace the files before anything opens the database.
     restore_message = apply_pending_restore()
@@ -175,13 +187,10 @@ def main(page: ft.Page) -> None:
         repo.set_setting(THEME_SETTING, "dark" if dark else "light")
         ctx.data_changed()
 
-    def apply_preset(name: str) -> None:
+    def choose_preset(name: str) -> None:
         nonlocal current_preset
         current_preset = name
-        page.theme = build_theme(preset=name)
-        page.dark_theme = build_theme(dark=True, preset=name)
-        repo.set_setting(THEME_PRESET_SETTING, name)
-        page.update()
+        apply_preset(page, repo, ctx, name)
 
     def choose_appearance(_: ft.Event) -> None:
         page.show_dialog(
@@ -214,7 +223,7 @@ def main(page: ft.Page) -> None:
                                     for key, preset in PRESETS.items()
                                 ],
                                 value=current_preset,
-                                on_select=lambda event: apply_preset(event.control.value),
+                                on_select=lambda event: choose_preset(event.control.value),
                             ),
                         ],
                         spacing=12,

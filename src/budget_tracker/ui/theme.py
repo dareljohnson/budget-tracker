@@ -18,12 +18,19 @@ FONT_FAMILY = "Segoe UI"
 RADIUS = 14
 GAP = 16
 
+THEME_PRESET_SETTING = "theme_preset"
+
 _text_scale = 1.0
 
 
 def set_text_scale(scale: float) -> None:
     global _text_scale
     _text_scale = scale
+
+
+def text_scale() -> float:
+    """The current user text-size multiplier (1.0 normal, 1.15 large), for image rendering."""
+    return _text_scale
 
 
 def fs(size: int) -> int:

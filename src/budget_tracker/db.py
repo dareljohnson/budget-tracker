@@ -280,6 +280,23 @@ MIGRATIONS: list[str] = [
     CREATE INDEX idx_transactions_match
         ON transactions (account_id, occurred_on, amount_cents);
     """,
+    # v11: income schedules for the cash-flow forecast. These are plans, never ledger writes;
+    # the account must be liquid (enforced by the repository, not by SQLite).
+    """
+    CREATE TABLE income_schedules (
+        id           INTEGER PRIMARY KEY,
+        name         TEXT NOT NULL,
+        amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
+        frequency    TEXT NOT NULL
+                     CHECK (frequency IN ('weekly', 'biweekly', 'monthly', 'semimonthly')),
+        next_date    TEXT NOT NULL,
+        anchor_day   INTEGER NOT NULL CHECK (anchor_day BETWEEN 1 AND 31),
+        second_day   INTEGER CHECK (second_day BETWEEN 1 AND 31),
+        account_id   INTEGER NOT NULL REFERENCES accounts(id),
+        active       INTEGER NOT NULL DEFAULT 1
+    );
+    CREATE INDEX idx_income_schedules_active ON income_schedules (active, next_date);
+    """,
 ]
 
 FOREIGN_KEYS_OFF_MIGRATIONS = {8}

@@ -8,6 +8,15 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
+from .cashflow import (
+    LIQUID_KINDS,
+    CardMinimum,
+    CashFlowForecast,
+    ForecastBill,
+    clamped_day,
+    forecast,
+    income_dates,
+)
 from .debt_planner import DebtInput, DebtPlan, DebtStrategy, monthly_interest_cents, plan_payoff
 from .formatting import month_key, shift_month
 from .matching import MatchCandidate, match_candidates as _match_candidates
@@ -21,6 +30,8 @@ from .models import (
     Debt,
     DebtKind,
     DueBill,
+    IncomeFrequency,
+    IncomeSchedule,
     MonthTotal,
     MinimumPayment,
     MinimumPaymentStatus,
@@ -232,6 +243,179 @@ class BudgetService:
         """Bills that are overdue or due within the user's reminder window."""
         return self.repo.due_bills(today or date.today(), self.repo.reminder_days())
 
+    # ---------- cash flow and income plan ----------
+    FULL_CASH_FLOW_HORIZON = 90
+
+    def cash_flow(self, today: date | None = None, horizon_days: int = 90) -> CashFlowForecast:
+        """Assemble a daily liquid-balance forecast from bills, minimums, income and transactions.
+
+        The forecast is always projected for the full 90 days; ``points``, ``events`` and
+        ``lowest`` are then limited to ``horizon_days`` while ``at_30``/``at_60``/``at_90`` and
+        ``endings_by_account`` stay full-horizon. Starting balances are as of the end of today.
+        """
+        today = today or date.today()
+        horizon = max(0, horizon_days)
+        full_end = today + timedelta(days=self.FULL_CASH_FLOW_HORIZON)
+        accounts = self.repo.list_accounts()
+        liquid = [account for account in accounts if account.kind in LIQUID_KINDS]
+        if not liquid:
+            return CashFlowForecast(
+                points=[],
+                events=[],
+                starting_cents=0,
+                lowest_date=today,
+                lowest_cents=0,
+                at_30=0,
+                at_60=0,
+                at_90=0,
+                endings_by_account={},
+                has_income=False,
+            )
+
+        liquid_ids = {account.id for account in liquid}
+        balances = {
+            account.id: self.repo.account_balance_as_of(account.id, today) for account in liquid
+        }
+        scheduled = self.repo.scheduled_transactions(today, full_end)
+        bills: list[ForecastBill] = []
+        card_owed: dict[int, int] = {}
+        card_bill_targets: set[int] = set()
+        open_bill_targets: set[int] = set()
+        for bill in self.repo.list_bills(include_inactive=False):
+            if not bill.is_card_payment:
+                bills.append(ForecastBill(bill, bill.amount_cents))
+                continue
+            target = bill.pay_to_account_id
+            if target is None:  # defensive: is_card_payment implies a target
+                continue
+            if bill.next_due <= full_end:
+                # A card-payment bill replaces that card's minimums whether or not the bill's
+                # own source account is liquid; paying from another card or loan still counts.
+                card_bill_targets.add(target)
+            owed = self.repo.amount_owed_as_of(target, today)
+            if owed <= 0:
+                continue
+            if bill.amount_cents == 0:
+                if bill.account_id not in liquid_ids:
+                    # The engine only projects payments made from liquid accounts. A loan- or
+                    # card-funded open bill must not claim the card's one open-bill slot and
+                    # hide a later checking/savings/cash-funded bill.
+                    continue
+                # Only the earliest projectable open bill per card projects the balance. A later
+                # open bill for the same card would subtract the same full balance a second time.
+                if target in open_bill_targets:
+                    continue
+                open_bill_targets.add(target)
+                # Open bills are fully resolved here. They are deliberately absent from
+                # card_owed so the engine cannot re-cap them against later transfers.
+                paid_before_due = sum(
+                    abs(transaction.amount_cents)
+                    for transaction in scheduled
+                    if transaction.type is TransactionType.TRANSFER
+                    and transaction.transfer_account_id == target
+                    and today < transaction.occurred_on <= bill.next_due
+                )
+                amount = max(0, owed - paid_before_due)
+            else:
+                # Fixed bills share one remaining-owed cap per card, allocated by the engine.
+                card_owed[target] = owed
+                amount = min(bill.amount_cents, owed)
+            bills.append(ForecastBill(bill, amount))
+
+        source = next(
+            (account for account in accounts if account.kind is AccountKind.CHECKING), liquid[0]
+        )
+        minimums: list[CardMinimum] = []
+        for account in accounts:
+            if account.kind is not AccountKind.CREDIT_CARD or account.id is None:
+                continue
+            if account.id in card_bill_targets:
+                continue  # the card bill is the planned payment for every month
+            if self.repo.amount_owed_as_of(account.id, today) <= 0:
+                continue
+            for status in self.minimum_payment_statuses(account.id, as_of=today):
+                remaining = status.amount_cents - status.paid_cents
+                if remaining > 0:
+                    minimums.append(
+                        CardMinimum(account.id, status.month, remaining, source.id)
+                    )
+
+        incomes = self.repo.list_income_schedules(active_only=True)
+        result = forecast(
+            today=today,
+            horizon_days=self.FULL_CASH_FLOW_HORIZON,
+            accounts=accounts,
+            balances=balances,
+            bills=bills,
+            card_owed=card_owed,
+            card_minimums=minimums,
+            incomes=incomes,
+            scheduled_transactions=scheduled,
+        )
+
+        slice_end = today + timedelta(days=horizon)
+        points = result.points[: horizon + 1]
+        events = [event for event in result.events if event.date <= slice_end]
+        if points:
+            lowest = min(points, key=lambda point: (point.balance_cents, point.date))
+            lowest_date, lowest_cents = lowest.date, lowest.balance_cents
+        else:
+            lowest_date, lowest_cents = today, result.starting_cents
+        has_income = any(
+            schedule.account_id in liquid_ids
+            and schedule.amount_cents > 0
+            and bool(income_dates(schedule, today + timedelta(days=1), slice_end))
+            for schedule in incomes
+        )
+        return CashFlowForecast(
+            points=points,
+            events=events,
+            starting_cents=result.starting_cents,
+            lowest_date=lowest_date,
+            lowest_cents=lowest_cents,
+            at_30=result.at_30,
+            at_60=result.at_60,
+            at_90=result.at_90,
+            endings_by_account=result.endings_by_account,
+            has_income=has_income,
+        )
+
+    def list_income_schedules(self, *, active_only: bool = False) -> list[IncomeSchedule]:
+        return self.repo.list_income_schedules(active_only=active_only)
+
+    def get_income_schedule(self, schedule_id: int) -> IncomeSchedule | None:
+        return self.repo.get_income_schedule(schedule_id)
+
+    @staticmethod
+    def _validate_income_schedule_dates(schedule: IncomeSchedule) -> None:
+        """Reject a next date that does not agree with the schedule's anchor days."""
+        if not isinstance(schedule.frequency, IncomeFrequency):
+            raise RepositoryError("Choose a valid income frequency")
+        if isinstance(schedule.next_date, datetime) or not isinstance(schedule.next_date, date):
+            raise RepositoryError("Choose a valid next date")
+        if schedule.frequency is IncomeFrequency.MONTHLY:
+            if schedule.next_date.day != clamped_day(schedule.next_date, schedule.anchor_day):
+                raise RepositoryError("The next date must fall on the anchor day")
+        elif schedule.frequency is IncomeFrequency.SEMIMONTHLY:
+            days = {clamped_day(schedule.next_date, schedule.anchor_day)}
+            if schedule.second_day is not None:
+                days.add(clamped_day(schedule.next_date, schedule.second_day))
+            if schedule.next_date.day not in days:
+                raise RepositoryError("The next date must fall on one of the income days")
+
+    def add_income_schedule(self, schedule: IncomeSchedule) -> IncomeSchedule:
+        self._validate_income_schedule_dates(schedule)
+        created = self.repo.add_income_schedule(schedule)
+        # Re-read so callers see the stored values (trimmed name, normalized second_day).
+        return self.repo.get_income_schedule(created.id) or created
+
+    def update_income_schedule(self, schedule: IncomeSchedule) -> None:
+        self._validate_income_schedule_dates(schedule)
+        self.repo.update_income_schedule(schedule)
+
+    def delete_income_schedule(self, schedule_id: int) -> None:
+        self.repo.delete_income_schedule(schedule_id)
+
     def export_csv(self, path: Path, transactions: list[Transaction]) -> Path:
         """Write transactions to CSV. Amounts are signed by cash flow; transfers are unsigned."""
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -291,12 +475,15 @@ class BudgetService:
     def delete_minimum_payment(self, account_id: int, month: str) -> None:
         self.repo.delete_minimum_payment(account_id, month)
 
-    def minimum_payment_statuses(self, account_id: int) -> list[MinimumPaymentStatus]:
+    def minimum_payment_statuses(
+        self, account_id: int, as_of: date | None = None
+    ) -> list[MinimumPaymentStatus]:
         """Every recorded month, newest first, with payments applied oldest-unpaid first.
 
         A payment in the month after the statement still counts toward that statement's minimum,
         a payment above a minimum rolls into the next recorded month, and no payment is counted
         twice. Only transfers into the card count; cash advances (transfers out) do not.
+        Payments after ``as_of`` are ignored so a forecast can use today's status.
         """
         minimums = self.repo.list_minimum_payments(account_id)
         if not minimums:
@@ -304,7 +491,7 @@ class BudgetService:
         first_month = minimums[0].month
         payments = [
             (day, cents)
-            for day, cents in self.repo.card_payments(account_id)
+            for day, cents in self.repo.card_payments(account_id, through=as_of)
             if day.strftime("%Y-%m") >= first_month
         ]
         paid = {minimum.month: 0 for minimum in minimums}
@@ -332,12 +519,15 @@ class BudgetService:
             for minimum in reversed(minimums)
         ]
 
-    def current_minimum_payment(self, account_id: int) -> MinimumPaymentStatus | None:
+    def current_minimum_payment(
+        self, account_id: int, as_of: date | None = None
+    ) -> MinimumPaymentStatus | None:
         """The current month's minimum when recorded, otherwise the most recent one."""
-        statuses = self.minimum_payment_statuses(account_id)
+        today = as_of or date.today()
+        statuses = self.minimum_payment_statuses(account_id, as_of=as_of)
         if not statuses:
             return None
-        current = self.current_month()
+        current = self.current_month(today)
         return next((status for status in statuses if status.month == current), statuses[0])
 
     def adjust_balance(self, account_id: int, as_of: date, amount_cents: int, note: str = "") -> Transaction:

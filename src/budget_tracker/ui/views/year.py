@@ -86,11 +86,11 @@ class YearView:
                 alignment=ft.MainAxisAlignment.END,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
-            col={"xs": 12, "md": 5, "lg": 4},
+            col={"xs": 12, "md": 6, "lg": 5},
         )
         self._header = ft.ResponsiveRow(
             [
-                ft.Container(self._title_block, col={"xs": 12, "md": 7, "lg": 8}),
+                ft.Container(self._title_block, col={"xs": 12, "md": 6, "lg": 7}),
                 self._toolbar,
             ],
             spacing=GAP,
@@ -220,18 +220,20 @@ class YearView:
 
     # ---------- coverage ----------
     def _coverage_banner(self, overview: YearOverview) -> ft.Container | None:
-        if overview.budgeted_months >= COVERAGE_MIN_MONTHS:
+        # Count the whole displayed year, not just the elapsed months: a future year can be
+        # fully budgeted while its YTD figure is zero, and it must not claim "0 of 12".
+        count = sum(1 for month in overview.months if month.has_budget)
+        if count >= COVERAGE_MIN_MONTHS:
             return None
-        count = overview.budgeted_months
         if count == 0:
-            message = "0 of 12 months have a budget. The year-end pace is an estimate."
+            message = "0 of 12 months have a budget."
         elif count == 1:
-            message = "Only 1 of 12 months has a budget. The year-end pace is an estimate."
+            message = "Only 1 of 12 months has a budget."
         else:
-            message = (
-                f"Only {count} of 12 months have a budget. "
-                "The year-end pace is an estimate."
-            )
+            message = f"Only {count} of 12 months have a budget."
+        # Only the run-rate projection is an estimate; a completed or future year has none.
+        if overview.forecast_spending_cents is not None:
+            message += " The year-end pace is an estimate."
         banner = card(
             ft.Row(
                 [
@@ -269,7 +271,7 @@ class YearView:
                 src=self._png_source(
                     cumulative_chart_png(cumulative, colors=colors, text_scale=text_scale())
                 ),
-                fit=ft.BoxFit.FILL,
+                fit=ft.BoxFit.CONTAIN,
             ),
         )
 
@@ -320,13 +322,17 @@ class YearView:
         return months
 
     # ---------- focus card ----------
+    @staticmethod
+    def _has_activity(month: YearMonth) -> bool:
+        return bool(month.has_budget or month.spending_cents or month.income_cents)
+
     def _focus_month(self, overview: YearOverview) -> YearMonth | None:
         current_key = self.ctx.service.current_month()
         current = next((month for month in overview.months if month.month == current_key), None)
-        if current is not None and (current.has_budget or current.spending_cents):
+        if current is not None and self._has_activity(current):
             return current
         for month in reversed(overview.months):
-            if month.has_budget or month.spending_cents:
+            if self._has_activity(month):
                 return month
         return None
 

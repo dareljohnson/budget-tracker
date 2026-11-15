@@ -213,6 +213,19 @@ class TestYearViewComposition(Base):
         self.assertTrue(row.wrap)
         self.assertEqual(row.alignment, ft.MainAxisAlignment.END)
 
+    def test_toolbar_keeps_the_year_and_switch_on_one_row_at_1024(self):
+        from budget_tracker.ui.theme import GAP, fs
+
+        view = self.view()
+        self.assertEqual(view._toolbar.col, {"xs": 12, "md": 6, "lg": 5})
+
+        # 1024px window minus the 120px rail, divider and 64px page padding, halved at md.
+        available = (1024 - 120 - 1 - 64 - GAP) * 6 / 12
+        # The dropdown plus two segment labels (six characters at the 14px size) and their
+        # horizontal padding; deliberately conservative so this fails before the row wraps.
+        required = view.year.width + 8 + 2 * (fs(14) * 6 + 24)
+        self.assertGreaterEqual(available, required)
+
     # ---------- summary strip ----------
     def test_summary_strip_has_four_compact_tiles(self):
         self.seed_current_month()
@@ -222,7 +235,8 @@ class TestYearViewComposition(Base):
         self.assertIsInstance(kpis, ft.ResponsiveRow)
         self.assertEqual(len(kpis.controls), 4)
         for tile in kpis.controls:
-            self.assertEqual(tile.col, {"xs": 6, "sm": 4, "lg": 3})
+            # Four across from ``md`` up, two columns below it: never a lone fourth tile.
+            self.assertEqual(tile.col, {"xs": 6, "sm": 6, "md": 3, "lg": 3})
             self.assertIsNone(_find(tile, lambda node: isinstance(node, ft.Icon)))
 
         titles = [
@@ -243,7 +257,7 @@ class TestYearViewComposition(Base):
         from budget_tracker.ui.components import summary_tile
 
         tile = summary_tile("YTD budget", "$100.00", "3 month(s) budgeted")
-        self.assertEqual(tile.col, {"xs": 6, "sm": 4, "lg": 3})
+        self.assertEqual(tile.col, {"xs": 6, "sm": 6, "md": 3, "lg": 3})
         self.assertIsNone(_find(tile, lambda node: isinstance(node, ft.Icon)))
         self.assertEqual(_texts(tile), ["YTD budget", "$100.00", "3 month(s) budgeted"])
 
@@ -265,8 +279,8 @@ class TestYearViewComposition(Base):
         self.assertEqual(view.body.controls[1].data, "coverage-banner")
 
     def test_coverage_banner_is_absent_for_a_fully_budgeted_year(self):
-        for month in ("01", "02", "03"):
-            self.budget(f"{self.year}-{month}", 50_000)
+        for month in range(1, 13):
+            self.budget(f"{self.year}-{month:02d}", 50_000)
         view = self.view()
 
         self.assertIsNone(
@@ -282,11 +296,36 @@ class TestYearViewComposition(Base):
             self.budget(f"{self.year}-{month}", 50_000)
         view = self.view()
         overview = self.service.year_overview(self.year)
-        self.assertGreaterEqual(overview.budgeted_months, 3)
+        self.assertGreaterEqual(sum(1 for month in overview.months if month.has_budget), 3)
         self.assertIsNone(view._coverage_banner(overview))
 
+    def test_fully_budgeted_future_year_has_no_coverage_banner(self):
+        future = self.year + 1
+        for month in range(1, 13):
+            self.budget(f"{future}-{month:02d}", 10_000)
+        view = self.view()
+        view.year.value = str(future)
+        view.refresh()
+
+        overview = self.service.year_overview(future)
+        self.assertEqual(overview.budgeted_months, 0)  # elapsed-scoped, and why the banner counts the year
+        self.assertIsNone(view._coverage_banner(overview))
+        self.assertFalse(any("of 12 months" in text for text in _texts(view.body)))
+
+    def test_past_year_coverage_banner_omits_the_year_end_pace_estimate(self):
+        past = self.year - 1
+        self.budget(f"{past}-06", 10_000)
+        view = self.view()
+        view.year.value = str(past)
+        view.refresh()
+
+        self.assertIsNone(self.service.year_overview(past).forecast_spending_cents)
+        texts = _texts(view.body)
+        self.assertIn("Only 1 of 12 months has a budget.", texts)
+        self.assertFalse(any("estimate" in text.lower() for text in texts))
+
     # ---------- cumulative chart ----------
-    def test_chart_is_a_decoration_image_that_fills_its_card(self):
+    def test_chart_is_a_contained_decoration_image_inside_its_card(self):
         self.seed_current_month()
         view = self.view()
 
@@ -294,8 +333,12 @@ class TestYearViewComposition(Base):
         self.assertIsInstance(chart, ft.Container)
         self.assertIsInstance(chart.image, ft.DecorationImage)
         self.assertTrue(chart.image.src.startswith("data:image/png;base64,"))
-        self.assertEqual(chart.image.fit, ft.BoxFit.FILL)
+        # CONTAIN keeps the baked-axis labels at their aspect ratio instead of stretching them.
+        self.assertEqual(chart.image.fit, ft.BoxFit.CONTAIN)
         self.assertEqual(chart.height, 260)
+        chart_card = view.body.controls[-2].controls[0]
+        chart_row = chart_card.content.controls[1]
+        self.assertIs(chart_row.controls[0], chart)
 
         texts = _texts(view.body)
         self.assertIn("Budget vs actual, cumulative", texts)
@@ -349,12 +392,26 @@ class TestYearViewComposition(Base):
         self.assertIn("Groceries", texts)
 
     def test_focus_card_falls_back_to_the_latest_month_with_data(self):
+        from budget_tracker.formatting import month_label
+
         self.spend(30_000, date(self.year, 2, 10))
         view = self.view()
 
         texts = _texts(view.body)
-        self.assertIn("February 2026", texts)
-        self.assertNotIn(f"November {self.year}", texts)
+        self.assertIn(f"February {self.year}", texts)
+        if self.current_month != f"{self.year}-02":
+            self.assertNotIn(month_label(self.current_month), texts)
+
+    def test_focus_card_selects_the_current_month_with_only_income(self):
+        from budget_tracker.formatting import month_label
+
+        self.income(400_000, date.today())
+        view = self.view()
+
+        texts = _texts(view.body)
+        self.assertIn(month_label(self.current_month), texts)
+        self.assertIn("Spent $0.00", texts)
+        self.assertIn("This month", texts)
 
     def test_focus_card_lists_at_most_three_categories(self):
         names = ("Groceries", "Dining Out", "Transportation", "Utilities")

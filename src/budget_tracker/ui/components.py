@@ -114,8 +114,9 @@ def stat_card(title: str, value: str, icon: ft.IconData, color: str, caption: st
 def summary_tile(title: str, value: str, caption: str, color: str | None = None) -> ft.Container:
     """A compact summary tile: label, value and caption, with no oversized icon block.
 
-    Four of these fit one row on a desktop page and two columns at narrow widths; ``value`` is
-    intentionally unclamped so a long amount is never ellipsized.
+    Four fit one row at the ``md`` breakpoint and above, and two columns below it, so a 900px
+    window never leaves a lone fourth tile. ``value`` is intentionally unclamped so a long amount
+    is never ellipsized.
     """
     return card(
         ft.Column(
@@ -139,7 +140,7 @@ def summary_tile(title: str, value: str, caption: str, color: str | None = None)
             spacing=2,
         ),
         padding=12,
-        col={"xs": 6, "sm": 4, "lg": 3},
+        col={"xs": 6, "sm": 6, "md": 3, "lg": 3},
     )
 
 

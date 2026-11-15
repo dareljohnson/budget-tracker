@@ -181,7 +181,9 @@ def main(page: ft.Page) -> None:
         page.theme = build_theme(preset=name)
         page.dark_theme = build_theme(dark=True, preset=name)
         repo.set_setting(THEME_PRESET_SETTING, name)
-        page.update()
+        # The cash-flow chart is a bitmap, so a preset change needs a view refresh; role colors
+        # elsewhere follow the theme automatically. ``data_changed`` also updates the page.
+        ctx.data_changed()
 
     def choose_appearance(_: ft.Event) -> None:
         page.show_dialog(

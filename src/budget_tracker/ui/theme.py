@@ -26,6 +26,11 @@ def set_text_scale(scale: float) -> None:
     _text_scale = scale
 
 
+def text_scale() -> float:
+    """The current user text-size multiplier (1.0 normal, 1.15 large), for image rendering."""
+    return _text_scale
+
+
 def fs(size: int) -> int:
     """Scale an explicit font/icon size with the user's text-size setting."""
     return max(1, round(size * _text_scale))

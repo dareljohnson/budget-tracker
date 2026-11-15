@@ -38,6 +38,7 @@ class ChartColors:
     text: str
     zero: str
     lowest: str
+    negative: str = NEGATIVE_COLOR
 
 
 DEFAULT_COLORS = ChartColors(
@@ -165,7 +166,7 @@ def _draw_chart(
     marker_index = _lowest_position(balances, lowest_index)
     marker_x, marker_y = coordinates[marker_index]
     negative = balances[marker_index] < 0
-    marker_color = NEGATIVE_COLOR if negative else colors.lowest
+    marker_color = colors.negative if negative else colors.lowest
     marker_radius = max(1.0, _MARKER_RADIUS * text_scale * SCALE)
     # A translucent halo keeps the marker visible over the line without hiding the series.
     _disc(draw, marker_x, marker_y, marker_radius * 2.0, _rgba(marker_color, 45))

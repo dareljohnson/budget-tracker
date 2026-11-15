@@ -11,6 +11,7 @@ from ...services import YearMonth, YearOverview
 from ..components import card, empty_state, page_header, section_title, stat_card
 from ..context import AppContext
 from ..theme import EXPENSE_COLOR, GAP, INCOME_COLOR, SEED_COLOR, fs
+from .cash_flow import CashFlowPanel
 
 CHART_HEIGHT = 150
 COLUMN_WIDTH = 70
@@ -29,10 +30,26 @@ class YearView:
             value=str(current if current in years else years[-1]),
             on_select=lambda _: self.refresh(),
         )
+        self.mode = "year"
+        self.mode_switch = ft.SegmentedButton(
+            segments=[
+                ft.Segment(value="year", label=ft.Text("This year")),
+                ft.Segment(value="cash", label=ft.Text("Next 90 days")),
+            ],
+            selected=["year"],
+            allow_empty_selection=False,
+            allow_multiple_selection=False,
+            on_change=self._switch_mode,
+        )
+        self.cash_panel = CashFlowPanel(ctx)
         self.body = ft.Column(spacing=GAP)
         self.control = ft.Column(
             [
-                page_header("Year", "Budget performance and cash flow across the year", [self.year]),
+                page_header(
+                    "Year",
+                    "Budget performance and cash flow across the year",
+                    [self.mode_switch, self.year],
+                ),
                 self.body,
             ],
             spacing=GAP,
@@ -42,7 +59,32 @@ class YearView:
         ctx.on_data_changed(self.refresh)
         self.refresh()
 
+    def _switch_mode(self, event: ft.Event[ft.SegmentedButton]) -> None:
+        selected = event.control.selected
+        if isinstance(selected, str):
+            value = selected
+        else:
+            try:
+                value = next(iter(selected or ()))
+            except TypeError:
+                value = None
+        self.mode = "cash" if value == "cash" else "year"
+        if self.mode == "cash":
+            self.year.visible = False
+            self.body.controls = [self.cash_panel.control]
+            self.cash_panel.refresh()
+            self.ctx.page.update()
+            return
+        self.refresh()
+
     def refresh(self) -> None:
+        if self.mode == "cash":
+            self.year.visible = False
+            self.body.controls = [self.cash_panel.control]
+            self.cash_panel.refresh()
+            self.ctx.page.update()
+            return
+        self.year.visible = True
         overview = self.ctx.service.year_overview(int(self.year.value))
         if not overview.has_data:
             self.body.controls = [

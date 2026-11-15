@@ -27,14 +27,12 @@ LIQUID_KINDS = frozenset({AccountKind.CHECKING, AccountKind.SAVINGS, AccountKind
 INFLOW_KINDS = frozenset({"income", "refund", "transfer_in"})
 OUTFLOW_KINDS = frozenset({"bill", "card_payment", "minimum", "transfer_out"})
 
-# De-duplication is by transaction type, never by direction alone. A transfer is not a bill and a
-# refund is not income, so they must not cancel those scheduled events. Card-payment bills are
-# matched by both expense and transfer rows because either can represent a card payment.
+# De-duplication is by transaction type and, for transfers, by the target account. A transfer is
+# not a bill, a refund is not income, and an expense is not a card payment. Card-payment and
+# minimum events carry ``counter_account_id`` so a transfer only cancels the debt it actually pays.
 _INCOME_KINDS = frozenset({"income"})
-_REFUND_KINDS = frozenset({"refund"})
-_EXPENSE_KINDS = frozenset({"bill", "minimum", "card_payment"})
-_TRANSFER_OUT_KINDS = frozenset({"transfer_out", "card_payment"})
-_TRANSFER_IN_KINDS = frozenset({"transfer_in"})
+_EXPENSE_KINDS = frozenset({"bill"})
+_TRANSFER_KINDS = frozenset({"card_payment", "minimum"})
 
 _ONE_DAY = timedelta(days=1)
 _RECHECK_DAYS = (30, 60, 90)
@@ -63,6 +61,7 @@ class CashEvent:
     account_id: int
     amount_cents: int  # signed: in positive, out negative
     kind: str  # income|refund|transfer_in|transfer_out|bill|card_payment|minimum
+    counter_account_id: int | None = None  # card/loan paid by a card_payment or minimum
 
 
 @dataclass(frozen=True, slots=True)
@@ -217,11 +216,13 @@ def forecast(
         account_names=account_names,
     )
 
-    # Only transactions inside the requested horizon may cancel scheduled events.
+    # Transactions through the full simulated horizon can cancel scheduled events; output events
+    # remain limited to the requested horizon.
     recorded = [
         transaction
         for transaction in scheduled_transactions
-        if today <= transaction.occurred_on <= end and transaction.type is not TransactionType.ADJUSTMENT
+        if today <= transaction.occurred_on <= simulation_end
+        and transaction.type is not TransactionType.ADJUSTMENT
     ]
     consumed = _deduplicate(scheduled, recorded, liquid_set)
     card_indexes = set(card_occurrences)
@@ -399,6 +400,7 @@ def _add_card_occurrence(
             account_id=occurrence.account_id,
             amount_cents=-occurrence.nominal_cents,
             kind="card_payment",
+            counter_account_id=occurrence.target_id,
         )
     )
 
@@ -449,6 +451,7 @@ def _allocate_card_payments(
                 account_id=occurrence.account_id,
                 amount_cents=-amount,
                 kind="card_payment",
+                counter_account_id=occurrence.target_id,
             )
         )
     return events
@@ -497,6 +500,7 @@ def _minimum_events(
                 account_id=minimum.source_account_id,
                 amount_cents=-minimum.remaining_cents,
                 kind="minimum",
+                counter_account_id=minimum.account_id,
             )
         )
     return events
@@ -515,50 +519,83 @@ def _deduplicate(
     recorded: Sequence[Transaction],
     liquid_set: set[int],
 ) -> set[int]:
-    """Return indexes of scheduled events cancelled one-to-one by recorded transactions."""
+    """Return indexes of scheduled events cancelled one-to-one by recorded transactions.
+
+    Matching is deliberately strict: income cancels only scheduled income, an expense cancels only
+    a regular bill, and a transfer cancels only a card payment or minimum for the account it pays.
+    A refund cancels nothing scheduled.
+    """
     consumed: set[int] = set()
     for transaction in recorded:
         amount = abs(transaction.amount_cents)
         if amount == 0:
             continue
-        for account_id, compatible_kinds in _match_sides(transaction):
-            if account_id is None or account_id not in liquid_set:
-                continue
-            match = _find_match(scheduled, consumed, transaction.occurred_on, account_id, compatible_kinds, amount)
-            if match is not None:
-                consumed.add(match)
-                break  # a transaction cancels at most one scheduled event
+        match = _find_transaction_match(scheduled, consumed, transaction, liquid_set, amount)
+        if match is not None:
+            consumed.add(match)  # a transaction cancels at most one scheduled event
     return consumed
 
 
-def _match_sides(transaction: Transaction) -> list[tuple[int | None, frozenset[str]]]:
-    """Account/event-kind pairs a recorded transaction can cancel, most specific first."""
+def _find_transaction_match(
+    scheduled: Sequence[CashEvent],
+    consumed: set[int],
+    transaction: Transaction,
+    liquid_set: set[int],
+    amount: int,
+) -> int | None:
     if transaction.type is TransactionType.INCOME:
-        return [(transaction.account_id, _INCOME_KINDS)]
-    if transaction.type is TransactionType.REFUND:
-        return [(transaction.account_id, _REFUND_KINDS)]
+        return _find_match(
+            scheduled,
+            consumed,
+            transaction.occurred_on,
+            transaction.account_id,
+            _INCOME_KINDS,
+            amount,
+            required_counter=None,
+        )
     if transaction.type is TransactionType.EXPENSE:
-        return [(transaction.account_id, _EXPENSE_KINDS)]
+        return _find_match(
+            scheduled,
+            consumed,
+            transaction.occurred_on,
+            transaction.account_id,
+            _EXPENSE_KINDS,
+            amount,
+            required_counter=None,
+        )
     if transaction.type is TransactionType.TRANSFER:
-        return [
-            (transaction.account_id, _TRANSFER_OUT_KINDS),
-            (transaction.transfer_account_id, _TRANSFER_IN_KINDS),
-        ]
-    return []
+        source = transaction.account_id
+        target = transaction.transfer_account_id
+        if source is None or source not in liquid_set or target is None:
+            return None
+        return _find_match(
+            scheduled,
+            consumed,
+            transaction.occurred_on,
+            source,
+            _TRANSFER_KINDS,
+            amount,
+            required_counter=target,
+        )
+    return None  # refunds and adjustments de-duplicate nothing scheduled
 
 
 def _find_match(
     scheduled: Sequence[CashEvent],
     consumed: set[int],
     occurred_on: date,
-    account_id: int,
+    account_id: int | None,
     compatible_kinds: frozenset[str],
     amount: int,
+    *,
+    required_counter: int | None,
 ) -> int | None:
     for index, event in enumerate(scheduled):
         if index in consumed:
             continue
         if event.account_id != account_id or event.kind not in compatible_kinds:
+            continue
+        if required_counter is not None and event.counter_account_id != required_counter:
             continue
         expected = amount if event.kind in INFLOW_KINDS else -amount
         if event.amount_cents != expected:

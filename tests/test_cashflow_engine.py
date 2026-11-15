@@ -28,7 +28,8 @@ SAVINGS = Account("Savings", AccountKind.SAVINGS, id=2)
 CASH = Account("Cash", AccountKind.CASH, id=3)
 CARD = Account("Credit Card", AccountKind.CREDIT_CARD, id=4)
 LOAN = Account("Loan", AccountKind.LOAN, id=5)
-ACCOUNTS = [CHECKING, SAVINGS, CASH, CARD, LOAN]
+CARD_B = Account("Card B", AccountKind.CREDIT_CARD, id=6)
+ACCOUNTS = [CHECKING, SAVINGS, CASH, CARD, LOAN, CARD_B]
 
 
 def schedule(
@@ -300,6 +301,7 @@ class TestCardBills(unittest.TestCase):
         event = result.events[0]
         self.assertEqual((event.date, event.account_id, event.kind), (TODAY, CHECKING.id, "card_payment"))
         self.assertEqual(event.amount_cents, -12_345)
+        self.assertEqual(event.counter_account_id, CARD.id)
         self.assertEqual(result.points[0].balance_cents, 87_655)
 
     def test_open_amount_bill_with_nothing_owed_is_skipped(self):
@@ -376,6 +378,53 @@ class TestCardBills(unittest.TestCase):
         self.assertEqual(result.points[0].balance_cents, 95_000)
         self.assertEqual(result.points[10].balance_cents, 93_000)
 
+    def test_future_card_transfer_reduces_the_cap_without_double_counting(self):
+        b = bill(amount_cents=5_000, next_due=TODAY, anchor_day=14, pay_to_account_id=CARD.id)
+        transfer = transaction(
+            amount_cents=5_000,
+            type_=TransactionType.TRANSFER,
+            occurred_on=date(2026, 12, 14),
+            account_id=CHECKING.id,
+            transfer_account_id=CARD.id,
+        )
+        result = run(
+            bills=[ForecastBill(b, 5_000)],
+            card_owed={CARD.id: 10_000},
+            transactions=[transfer],
+        )
+
+        # The recorded 5,000 pays the December occurrence and lowers the cap to 5,000, so only
+        # today's occurrence is projected; January is not overpaid.
+        self.assertEqual(
+            [
+                (event.date, event.kind, event.amount_cents, event.counter_account_id)
+                for event in result.events
+            ],
+            [
+                (TODAY, "card_payment", -5_000, CARD.id),
+                (date(2026, 12, 14), "transfer_out", -5_000, None),
+            ],
+        )
+        self.assertEqual(sum(event.amount_cents for event in result.events), -10_000)
+
+    def test_future_card_expense_does_not_reduce_the_cap(self):
+        b = bill(amount_cents=10_000, frequency=BillFrequency.ONCE, next_due=TODAY, pay_to_account_id=CARD.id)
+        purchase = transaction(
+            amount_cents=5_000,
+            type_=TransactionType.EXPENSE,
+            occurred_on=TODAY + timedelta(days=5),
+            account_id=CARD.id,
+            description="New charge",
+        )
+        result = run(
+            bills=[ForecastBill(b, 10_000)],
+            card_owed={CARD.id: 10_000},
+            transactions=[purchase],
+        )
+
+        # A card purchase is not a payment and must not lower the payment cap.
+        self.assertEqual([event.amount_cents for event in result.events if event.kind == "card_payment"], [-10_000])
+
 
 class TestCardMinimums(unittest.TestCase):
     def test_minimum_is_due_at_the_end_of_the_following_month(self):
@@ -391,6 +440,7 @@ class TestCardMinimums(unittest.TestCase):
         event = result.events[0]
         self.assertEqual((event.date, event.account_id, event.kind), (date(2026, 12, 31), CHECKING.id, "minimum"))
         self.assertEqual(event.amount_cents, -5_000)
+        self.assertEqual(event.counter_account_id, CARD.id)
 
     def test_past_due_minimum_is_projected_today(self):
         minimum = CardMinimum(
@@ -665,6 +715,150 @@ class TestDeduplication(unittest.TestCase):
             [(event.kind, event.amount_cents) for event in result.events],
             [("income", 100_000), ("refund", 100_000)],
         )
+
+    def test_card_payment_dedup_uses_the_transfer_target_not_list_order(self):
+        bill_a = bill(
+            name="Card A payment",
+            amount_cents=5_000,
+            frequency=BillFrequency.ONCE,
+            next_due=TODAY + timedelta(days=2),
+            pay_to_account_id=CARD.id,
+        )
+        bill_b = bill(
+            name="Card B payment",
+            amount_cents=5_000,
+            frequency=BillFrequency.ONCE,
+            next_due=TODAY + timedelta(days=2),
+            pay_to_account_id=CARD_B.id,
+        )
+        transfer_to_b = transaction(
+            amount_cents=5_000,
+            type_=TransactionType.TRANSFER,
+            occurred_on=TODAY + timedelta(days=2),
+            account_id=CHECKING.id,
+            transfer_account_id=CARD_B.id,
+        )
+        owed = {CARD.id: 5_000, CARD_B.id: 5_000}
+        for ordered in ((bill_a, bill_b), (bill_b, bill_a)):
+            with self.subTest(order=[b.name for b in ordered]):
+                result = run(
+                    bills=[ForecastBill(b, 5_000) for b in ordered],
+                    card_owed=owed,
+                    transactions=[transfer_to_b],
+                )
+                card_events = [event for event in result.events if event.kind == "card_payment"]
+                self.assertEqual(
+                    [(event.counter_account_id, event.amount_cents) for event in card_events],
+                    [(CARD.id, -5_000)],
+                )
+
+    def test_a_transfer_to_savings_does_not_cancel_a_card_payment(self):
+        b = bill(
+            name="Card payment",
+            amount_cents=5_000,
+            frequency=BillFrequency.ONCE,
+            next_due=TODAY + timedelta(days=2),
+            pay_to_account_id=CARD.id,
+        )
+        transfer = transaction(
+            amount_cents=5_000,
+            type_=TransactionType.TRANSFER,
+            occurred_on=TODAY + timedelta(days=2),
+            account_id=CHECKING.id,
+            transfer_account_id=SAVINGS.id,
+        )
+        result = run(bills=[ForecastBill(b, 5_000)], card_owed={CARD.id: 5_000}, transactions=[transfer])
+
+        self.assertEqual(
+            [(event.kind, event.amount_cents) for event in result.events if event.kind == "card_payment"],
+            [("card_payment", -5_000)],
+        )
+
+    def test_an_expense_does_not_cancel_a_card_payment_or_minimum(self):
+        b = bill(
+            name="Card payment",
+            amount_cents=5_000,
+            frequency=BillFrequency.ONCE,
+            next_due=TODAY + timedelta(days=2),
+            pay_to_account_id=CARD.id,
+        )
+        expense = transaction(
+            amount_cents=5_000,
+            type_=TransactionType.EXPENSE,
+            occurred_on=TODAY + timedelta(days=2),
+            description="Purchase",
+        )
+        result = run(
+            bills=[ForecastBill(b, 5_000)],
+            card_owed={CARD.id: 5_000},
+            transactions=[expense],
+        )
+        self.assertEqual(sorted(event.kind for event in result.events), ["bill", "card_payment"])
+        self.assertEqual(sum(event.amount_cents for event in result.events), -10_000)
+
+        minimum = CardMinimum(
+            account_id=CARD.id,
+            month="2026-09",  # due today
+            remaining_cents=5_000,
+            source_account_id=CHECKING.id,
+        )
+        expense_today = transaction(
+            amount_cents=5_000,
+            type_=TransactionType.EXPENSE,
+            occurred_on=TODAY,
+            description="Purchase",
+        )
+        result = run(card_minimums=[minimum], transactions=[expense_today])
+        self.assertEqual([(event.kind, event.amount_cents) for event in result.events], [("minimum", -5_000)])
+
+    def test_a_recorded_transfer_cancels_a_matching_card_minimum(self):
+        minimum = CardMinimum(
+            account_id=CARD.id,
+            month="2026-09",  # due today
+            remaining_cents=5_000,
+            source_account_id=CHECKING.id,
+        )
+        transfer = transaction(
+            amount_cents=5_000,
+            type_=TransactionType.TRANSFER,
+            occurred_on=TODAY,
+            account_id=CHECKING.id,
+            transfer_account_id=CARD.id,
+        )
+        result = run(card_minimums=[minimum], transactions=[transfer])
+        self.assertEqual(result.events, [])
+        self.assertEqual(result.points[0].balance_cents, result.starting_cents)
+
+        other_card = transaction(
+            amount_cents=5_000,
+            type_=TransactionType.TRANSFER,
+            occurred_on=TODAY,
+            account_id=CHECKING.id,
+            transfer_account_id=CARD_B.id,
+        )
+        result = run(card_minimums=[minimum], transactions=[other_card])
+        self.assertEqual(
+            [(event.kind, event.counter_account_id) for event in result.events],
+            [("minimum", CARD.id)],
+        )
+
+    def test_dedup_uses_the_full_simulation_horizon_for_checkpoints(self):
+        b = bill(
+            name="Day 40",
+            amount_cents=10_000,
+            frequency=BillFrequency.ONCE,
+            next_due=TODAY + timedelta(days=40),
+        )
+        recorded = transaction(
+            amount_cents=10_000,
+            type_=TransactionType.EXPENSE,
+            occurred_on=TODAY + timedelta(days=40),
+        )
+        result = run(bills=[ForecastBill(b, 10_000)], transactions=[recorded], horizon_days=30)
+
+        self.assertEqual(result.at_30, 100_000)
+        self.assertEqual(result.at_60, 90_000)  # the bill and the transaction must not both apply
+        self.assertEqual(result.events, [])
 
     def test_dedup_before_cap_allocation_keeps_the_still_owed_amount(self):
         b = bill(amount_cents=5_000, next_due=TODAY, anchor_day=14, pay_to_account_id=CARD.id)

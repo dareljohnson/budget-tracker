@@ -212,7 +212,8 @@ A forecast is only useful if money comes in. Click **Income plan** on the cash-f
 
 On the **Transactions** page, choose **Import statement** and pick a US checking or savings statement: a PDF, PNG, or JPEG. The app reads it on your PC — from the PDF's text layer when there is one, and with the built-in local OCR engine for scans, photos, and PDFs with no usable text — checks the transactions against the statement's own summary totals, and shows a review before anything is written.
 
-- The **account** is preselected when a single saved account number ending matches the statement's. If the statement's digits conflict with the selected account, the import is blocked until the right account is chosen.
+- The **account** is preselected when a single saved account number ending matches the statement's. If the statement's digits conflict with the selected account, the import is blocked until the right account is chosen. Statements can be imported into checking, savings, cash, or other asset accounts; credit cards and loans are refused, because a statement balance is an asset balance.
+- When a statement prints a fee separately from its withdrawals total, the fee is added to the review as one editable **Statement fees** expense, so the imported ledger still matches the printed ending balance.
 - Each row has its own **type** (expense, income, refund, or transfer), **category**, and, for transfers, destination account. **Apply** sets one category for all selected rows, and **Select all** toggles every row.
 - Rows that look like transactions you already have are flagged **Duplicate** and left unchecked. You can still include one deliberately.
 - If the account has no transactions before the statement period, you can set its **opening balance** to the statement's beginning balance.
@@ -251,14 +252,14 @@ A purchase can reach the app more than once — a receipt, a bill payment, and t
 - **Bill matches.** When you click **Mark paid**, payments already recorded for the bill's amount, account, type, and date window appear under **Already recorded**. **Use this transaction** advances the bill to its next due date without adding or changing a transaction. **Record a new payment** records a new payment as usual.
 - **Statement matches.** Each reviewed row is checked for an existing transaction with the same amount, account, and type within seven days. Rows with candidates show **Possible match**; choose **Match…** to mark the row as already recorded, which leaves it out of the import. **Import anyway** discards the match and imports the row as a new transaction.
 
-The filters are exact amount in cents, the same account (for a transfer, either side counts), the same type, and a seven-day window. Description similarity only orders the candidates; it never decides a match. Those are the facts that can be compared reliably, while a receipt's OCR text, a bill's name, and a bank's description often differ even for the same purchase. Nothing is auto-merged because only you can tell whether two similar entries are one event or two.
+The filters are exact amount in cents, the same account (for a transfer, either side counts; a statement row that pays out offers only outgoing transfers, and one that pays in offers only incoming ones), the same type, and a seven-day window. Description matching ignores case and extra spaces. Description similarity only orders the candidates; it never decides a match. Those are the facts that can be compared reliably, while a receipt's OCR text, a bill's name, and a bank's description often differ even for the same purchase. Nothing is auto-merged because only you can tell whether two similar entries are one event or two.
 
 A matched statement row counts toward the statement's ending balance through its existing transaction, but it is not inserted and is not tagged with the new statement. Undoing the import leaves matched transactions untouched.
 
 ## Reconciling accounts
 
 - A statement import records its own reconciliation at the statement's ending balance.
-- To check any account at any time, use **Check balance** on the **Accounts** page. Enter the balance the bank shows — for a credit card, enter the positive **amount owed** — and the date. The app compares it with the ledger and shows the difference.
+- To check any account at any time, use **Check balance** on the **Accounts** page. Enter the balance the bank shows — for a credit card, enter the positive **amount owed**, or a negative one when the card is in credit — and the date. The app compares it with the ledger and shows the difference.
 - If the amounts differ, you can record a **correction to the ledger**. It changes the account balance only; adjustments are excluded from income, spending, and budgets.
 - Previous checks, their differences, and their notes are listed in the balance check dialog.
 
@@ -266,7 +267,7 @@ A matched statement row counts toward the statement's ending balance through its
 
 1. On the **Bills** page, click **Add Bill**.
    - **Bill**: an expense with a category, e.g. rent, utilities, or subscriptions.
-   - **Card payment**: a payment from one account to a credit card or loan. Enter an amount of `0` to pay the full balance owed when the bill is due.
+   - **Card payment**: a payment from one account to a credit card or loan. Enter an amount of `0` to pay the full balance owed when the bill is due. The destination must be a card or loan; when two full-balance bills target the same card, only the soonest is shown as due so its balance is counted once.
 2. Choose how far ahead you want to be reminded with **Remind me** (on the due date up to 14 days before; the default is 3 days).
 3. When you've paid, click **Mark paid**. Bills are recorded as expenses, and card payments as transfers. The bill then moves to its next due date. Monthly bills keep their day of the month, so a bill due on the 31st is due on Feb 28 and then Mar 31. **Skip** moves to the next due date without recording a payment.
 

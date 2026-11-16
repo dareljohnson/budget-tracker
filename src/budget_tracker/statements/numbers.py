@@ -11,8 +11,12 @@ from datetime import date, datetime
 _AMOUNT_TOKEN_RE = re.compile(r"^\d+(?:\.\d{2})$")
 _MARKERS = ("CR", "DR")
 _NUMERIC_DATE_RE = re.compile(r"^(\d{1,2})/(\d{1,2})(?:/(\d{2}|\d{4}))?$")
-_MONTH_DAY_RE = re.compile(r"^([A-Za-z]+) (\d{1,2})$")
-_MONTH_DAY_YEAR_RE = re.compile(r"^([A-Za-z]+) (\d{1,2}), (\d{4})$")
+_MONTH_DAY_RE = re.compile(r"^([A-Za-z]+)\.? (\d{1,2})$")
+_MONTH_DAY_YEAR_RE = re.compile(r"^([A-Za-z]+)\.? (\d{1,2}), (\d{4})$")
+_MONTH_NAMES = (
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,7 +66,7 @@ def parse_date(text: str, anchor: date, *, anchor_on_end: bool = False) -> date 
 
     match = _MONTH_DAY_RE.match(raw)
     if match is not None:
-        month = _month_number(match.group(1), "%b")
+        month = _month_number(match.group(1), "%b", "%B")
         if month is None:
             return None
         return _build_date(None, month, int(match.group(2)), anchor, anchor_on_end)
@@ -77,11 +81,19 @@ def parse_date(text: str, anchor: date, *, anchor_on_end: bool = False) -> date 
 
 
 def _month_number(name: str, *formats: str) -> int | None:
+    cleaned = name.rstrip(".")
     for fmt in formats:
         try:
-            return datetime.strptime(name, fmt).month
+            return datetime.strptime(cleaned, fmt).month
         except ValueError:
             continue
+    # Statements print month names that ``%b`` rejects ("Sept") and sometimes an abbreviation
+    # ending in a period; a unique case-insensitive three-letter prefix decides those.
+    if len(cleaned) >= 3:
+        prefix = cleaned[:3].lower()
+        for index, full_name in enumerate(_MONTH_NAMES, start=1):
+            if full_name.lower().startswith(prefix):
+                return index
     return None
 
 

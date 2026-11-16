@@ -561,10 +561,20 @@ class BudgetService:
                 return category.id
         raise RepositoryError(f"The default '{name}' category is missing")
 
+    @staticmethod
+    def _require_import_account(account: Account) -> None:
+        """Statement balances are asset balances; a card or loan statement would invert the ledger."""
+        if account.kind.is_liability:
+            raise RepositoryError(
+                "Statements can only be imported into checking, savings, cash, or other asset accounts"
+            )
+
     def prepare_import(self, statement_path: Path, account_id: int) -> ImportPreview:
         """Parse a statement and build an editable preview without writing anything."""
-        if self.repo.get_account(account_id) is None:
+        account = self.repo.get_account(account_id)
+        if account is None:
             raise RepositoryError("Select an account")
+        self._require_import_account(account)
         parsed = load_statement(statement_path)
         file_sha256 = hashlib.sha256(statement_path.read_bytes()).hexdigest()
         if self.repo.statement_by_sha256(file_sha256):
@@ -620,6 +630,7 @@ class BudgetService:
         account = self.repo.get_account(preview.account_id)
         if account is None:
             raise RepositoryError("Select an account")
+        self._require_import_account(account)
         statement_last4 = preview.statement.account_last4
         if statement_last4 and account.number_last4:
             if not (statement_last4.endswith(account.number_last4)
@@ -773,7 +784,8 @@ class BudgetService:
         matches = [
             account
             for account in self.repo.list_accounts()
-            if account.number_last4
+            if not account.kind.is_liability
+            and account.number_last4
             and (account.number_last4.endswith(statement_last4) or statement_last4.endswith(account.number_last4))
         ]
         return matches[0] if len(matches) == 1 else None

@@ -319,6 +319,36 @@ class TestTransactionCandidates(Base):
         self.assertIn(self.receipted.id, self.ids(rows))
 
 
+class TestFindTransaction(Base):
+    def test_incoming_transfer_is_a_duplicate_for_the_destination_account(self):
+        self.transfer(5_000, "Cash", "Checking", date(2026, 9, 20), "TRANSFER FROM CASH")
+        checking = self.accts["Checking"].id
+        self.assertIsNotNone(
+            self.repo.find_transaction(checking, date(2026, 9, 20), 5_000, "TRANSFER FROM CASH")
+        )
+
+    def test_outgoing_transfer_is_a_duplicate_for_the_source_account(self):
+        self.transfer(5_000, "Checking", "Cash", date(2026, 9, 20), "TRANSFER TO CASH")
+        checking = self.accts["Checking"].id
+        self.assertIsNotNone(
+            self.repo.find_transaction(checking, date(2026, 9, 20), 5_000, "TRANSFER TO CASH")
+        )
+
+    def test_description_whitespace_is_collapsed_on_both_sides(self):
+        self.add(4_200, "Groceries", date(2026, 9, 4), "AMAZON   MKTPLACE")
+        checking = self.accts["Checking"].id
+        self.assertIsNotNone(
+            self.repo.find_transaction(checking, date(2026, 9, 4), 4_200, "Amazon MKTPLACE")
+        )
+
+    def test_different_description_is_not_a_duplicate(self):
+        self.add(4_200, "Groceries", date(2026, 9, 4), "AMAZON MKTPLACE")
+        checking = self.accts["Checking"].id
+        self.assertIsNone(
+            self.repo.find_transaction(checking, date(2026, 9, 4), 4_200, "WHOLE FOODS")
+        )
+
+
 class TestMarkBillPaidExisting(Base):
     def setUp(self) -> None:
         super().setUp()
@@ -559,6 +589,13 @@ class TestServiceMatching(Base):
         self.assertIs(returned, preview)
         self.assertEqual([tx.id for tx in preview.rows[0].match_candidates], [existing.id])
         self.assertIsNone(preview.rows[0].matched)
+
+    def test_commit_import_refuses_a_liability_account(self):
+        row = self.import_row()
+        row.transaction.account_id = self.credit
+        preview = ImportPreview(statement=self.statement(), account_id=self.credit, rows=[row])
+        with self.assertRaises(RepositoryError):
+            self.service.commit_import(preview, [row])
 
     def test_commit_import_skips_a_matched_row(self):
         existing = self.add(3485, "Groceries", date(2026, 9, 19), "FEL LINIS PIZZA")

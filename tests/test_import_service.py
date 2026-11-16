@@ -47,6 +47,12 @@ class TestImport(Base):
         rec = self.repo.list_reconciliations(self.accts["Checking"].id)[0]
         self.assertEqual((rec.stated_cents, rec.computed_cents, rec.difference_cents), (119_000, 119_000, 0))
 
+    def test_statement_cannot_be_imported_into_a_liability_account(self):
+        with self.assertRaises(RepositoryError):
+            BudgetService(self.repo).prepare_import(
+                Path("unused.pdf"), self.accts["Credit Card"].id
+            )
+
     def test_reimport_same_file_is_refused(self):
         self.preview()
         with tempfile.TemporaryDirectory() as tmp:

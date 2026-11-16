@@ -105,6 +105,24 @@ def test_unsigned_single_amount_uses_balance_delta():
     ), anchor=date(2026, 9, 16), anchor_on_end=False, beginning_cents=100_000)
     assert [r.direction for r in rows] == ["expense", "income"]
 
+def test_signed_single_amount_column_uses_the_sign():
+    rows = find_transactions(table_words(
+        ["DATE", "DESCRIPTION", "AMOUNT"],
+        [{"date": "09/20", "description": "Grocery", "amount": "-40.00"},
+         {"date": "09/25", "description": "Payroll", "amount": "500.00"}],
+    ), anchor=date(2026, 9, 16), anchor_on_end=False)
+    assert [(r.amount_cents, r.direction) for r in rows] == [(4_000, "expense"), (50_000, "income")]
+
+
+def test_unsigned_single_amount_column_without_balance_is_refused():
+    rows = find_transactions(table_words(
+        ["DATE", "DESCRIPTION", "AMOUNT"],
+        [{"date": "09/20", "description": "Grocery", "amount": "40.00"},
+         {"date": "09/25", "description": "Payroll", "amount": "500.00"}],
+    ), anchor=date(2026, 9, 16), anchor_on_end=False)
+    assert [r.direction for r in rows] == ["", ""]
+
+
 def test_continuation_line_and_repeated_header():
     words = table_words(
         ["DATE", "DESCRIPTION", "DEBIT", "CREDIT", "BALANCE"],
@@ -236,6 +254,15 @@ def test_fees_inside_withdrawals_and_separate_both_accepted():
                               ("Ending Balance", "$955.00")]) + table_words(
         ["DATE", "DESCRIPTION", "DEBIT"], [{"date": "09/20/2026", "description": "Grocery", "debit": "40.00"}])
     assert parse_generic(separate).ending_cents == 95_500
+
+def test_service_charges_label_is_a_fee_figure():
+    figures = find_summary(summary_words([
+        ("Beginning Balance", "$1,000.00"), ("Total Deposits", "$0.00"),
+        ("Total Withdrawals", "$40.00"), ("Service Charges", "$5.00"),
+        ("Ending Balance", "$955.00"),
+    ]), 500)
+    assert (figures.withdrawals_cents, figures.fees_cents, figures.ending_cents) == (4_000, 500, 95_500)
+
 
 def test_credit_card_and_non_usd_are_unsupported():
     with pytest.raises(UnsupportedStatementError):

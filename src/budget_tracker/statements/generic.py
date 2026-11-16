@@ -17,6 +17,7 @@ from typing import cast
 
 from budget_tracker.statements.labels import (
     detail_family,
+    exact_family,
     family_of,
     has_non_usd_marker,
     institution_of,
@@ -152,7 +153,7 @@ def find_summary(words: Sequence[Word], block_end_top: float) -> SummaryFigures:
                 cents = _nearest_amount(following, _label_end(label_words))
         if cents is None:
             continue
-        family = _classify(label)
+        family = _classify(label, wrapped=_wrapped_label(lines, index))
         if family is None:
             continue
         if _is_explicit_total(label):
@@ -168,16 +169,36 @@ def find_summary(words: Sequence[Word], block_end_top: float) -> SummaryFigures:
     )
 
 
-def _classify(label: str) -> str | None:
+def _wrapped_label(lines: Sequence[Sequence[Word]], index: int) -> bool:
+    """Whether the line continues a label-only line above it (a wrapped summary label)."""
+    if index == 0:
+        return False
+    previous = lines[index - 1]
+    if not label_text(collapsed(previous)):
+        return False
+    if any(_amount_cents(word) is not None for word in previous):
+        return False
+    return lines[index][0].top - previous[0].top <= _NEXT_LINE_TOLERANCE
+
+
+def _classify(label: str, *, wrapped: bool = False) -> str | None:
     """Classify a summary label.
 
-    Explicit totals use family matching only. A bare ``Fee``/``Fees`` summary line is the printed
-    fee figure. Every other line is tried with the detail keywords first, so a decomposed
-    withdrawal line that names service charges is not read as fees.
+    Explicit totals use family matching only. A bare ``Fee``/``Fees`` summary line and a label that
+    names the fees family outright (``Service Charges``, ``Bank Charges``, …) are the printed fee
+    figure. Every other line is tried with the detail keywords first, so a decomposed withdrawal
+    line that mentions service charges among other items is not read as fees. A wrapped label is
+    always the continuation of the line above it, so it never counts as the fee figure.
     """
     if _is_explicit_total(label):
         return family_of(label)
+    if wrapped:
+        return detail_family(label) or family_of(label)
     if normalize_label(label) in ("FEE", "FEES"):
+        return "fees"
+    # Only a label that is exactly a fees alias is the fee figure; a longer line that merely
+    # mentions service charges is a decomposed withdrawal line and must stay one.
+    if exact_family(label) == "fees":
         return "fees"
     return detail_family(label) or family_of(label)
 
@@ -266,6 +287,10 @@ def find_transactions(
     date_anchor = anchors["date"]
     description_anchor = anchors["description"]
     amount_anchors = {role: x for role, x in anchors.items() if role in _AMOUNT_ROLES}
+    amount_anchor = amount_anchors.get("amount")
+    signed_amount = amount_anchor is not None and _column_is_signed(
+        lines[header_index + 1 :], amount_anchor
+    )
 
     rows: list[TableRow] = []
     current: dict | None = None
@@ -276,7 +301,7 @@ def find_transactions(
         nonlocal current, running_balance
         if current is None:
             return
-        row = _build_row(current, running_balance, section)
+        row = _build_row(current, running_balance, section, signed_amount)
         if row is not None:
             rows.append(row)
             if row.balance_cents is not None:
@@ -446,12 +471,29 @@ def _non_transaction_line(text: str) -> bool:
     return any(pattern.search(text) for pattern in (_TOTAL_RE, _ENDING_BALANCE_RE, _NON_FLOW_RE))
 
 
-def _build_row(current: dict, previous_balance: int | None, section: str | None) -> TableRow | None:
+def _column_is_signed(lines: Sequence[Sequence[Word]], anchor: float) -> bool:
+    """Whether the amount column carries signed values (a negative amount or a ``DR`` marker)."""
+    for line in lines:
+        for word in line:
+            if abs(_centre(word) - anchor) > COLUMN_TOLERANCE:
+                continue
+            amount = parse_amount(word.text)
+            if amount is not None and (amount.cents < 0 or amount.marker == "DR"):
+                return True
+    return False
+
+
+def _build_row(
+    current: dict,
+    previous_balance: int | None,
+    section: str | None,
+    signed_amount_column: bool = False,
+) -> TableRow | None:
     columns = current["columns"]
     balance = columns.get("balance")
     # A balance keeps its sign: an overdrawn account is a real running-balance step.
     balance_cents = balance.cents if balance is not None else None
-    resolved = _direction(columns, balance_cents, previous_balance, section)
+    resolved = _direction(columns, balance_cents, previous_balance, section, signed_amount_column)
     if resolved is None:
         return None
     amount_cents, direction = resolved
@@ -469,6 +511,7 @@ def _direction(
     balance_cents: int | None,
     previous_balance: int | None,
     section: str | None,
+    signed_amount_column: bool = False,
 ) -> tuple[int, str] | None:
     debit = columns.get("debit")
     credit = columns.get("credit")
@@ -487,6 +530,10 @@ def _direction(
         return magnitude, "income"
     if amount.marker == "DR" or amount.cents < 0:
         return magnitude, "expense"
+    # A single signed column uses its sign for direction: in a column where negatives appear,
+    # a positive amount is a deposit even before the running-balance check.
+    if signed_amount_column and amount.cents > 0:
+        return magnitude, "income"
     if balance_cents is not None and previous_balance is not None:
         delta = balance_cents - previous_balance
         if delta < 0:

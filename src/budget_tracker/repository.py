@@ -543,15 +543,23 @@ class Repository:
     def find_transaction(
         self, account_id: int, occurred_on: date, amount_cents: int, description: str
     ) -> Transaction | None:
-        """An existing transaction matching an imported row (same account, date, amount and description)."""
+        """An existing transaction matching an imported row (same account, date, amount and description).
+
+        A transfer sits on both of its accounts, so an incoming transfer is a duplicate for the
+        receiving account just as an outgoing one is for the source. Descriptions are compared
+        case-insensitively with whitespace collapsed on both sides.
+        """
         normalized = " ".join(description.upper().split())
-        row = self.conn.execute(
+        rows = self.conn.execute(
             self._FIND_SQL
-            + " WHERE t.account_id = ? AND t.occurred_on = ? AND t.amount_cents = ? "
-            "AND UPPER(TRIM(t.description)) = ? ORDER BY t.id LIMIT 1",
-            (account_id, occurred_on.isoformat(), amount_cents, normalized),
-        ).fetchone()
-        return self._row_to_transaction(row) if row else None
+            + " WHERE (t.account_id = ? OR (t.type = 'transfer' AND t.transfer_account_id = ?)) "
+            "AND t.occurred_on = ? AND t.amount_cents = ? ORDER BY t.id",
+            (account_id, account_id, occurred_on.isoformat(), amount_cents),
+        ).fetchall()
+        for row in rows:
+            if " ".join((row["description"] or "").upper().split()) == normalized:
+                return self._row_to_transaction(row)
+        return None
 
     def has_transactions_before(self, account_id: int, before: date) -> bool:
         """Whether the account already has activity before ``before`` (used before setting an opening balance)."""
@@ -1287,14 +1295,18 @@ class Repository:
         return Summary(income_cents=row["income"], expense_cents=row["expense"])
 
     def totals_by_category(self, month: str, type_: TransactionType = TransactionType.EXPENSE) -> list[CategoryTotal]:
-        """Per-category totals for a month. Expense totals are net of refunds."""
+        """Per-category totals for a month, net of refunds.
+
+        A category whose refunds exceed its expenses keeps its negative total so the category
+        amounts add up to the month's net spending figure; only zero-total categories are dropped.
+        """
         start, end = _month_bounds(month)
         amount = _SPEND_SQL if type_ == TransactionType.EXPENSE else _INCOME_SQL
         rows = self.conn.execute(
             f"SELECT c.id, c.name, c.color, SUM({amount.format(t='t.')}) AS total FROM transactions t "
             "JOIN categories c ON c.id = t.category_id "
             "WHERE c.type = ? AND t.occurred_on >= ? AND t.occurred_on < ? "
-            "GROUP BY c.id HAVING total > 0 ORDER BY total DESC",
+            "GROUP BY c.id HAVING total <> 0 ORDER BY total DESC",
             (type_.value, start, end),
         )
         return [CategoryTotal(r["id"], r["name"], r["color"], r["total"]) for r in rows]

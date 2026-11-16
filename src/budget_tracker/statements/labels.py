@@ -193,6 +193,17 @@ def family_of(raw_line: str, *, threshold: float = DEFAULT_THRESHOLD) -> str | N
     return _match_aliases(normalized, threshold)
 
 
+def exact_family(raw_line: str) -> str | None:
+    """Return the family whose alias matches the whole label, ignoring fuzzy matches."""
+    normalized = normalize_label(label_text(raw_line))
+    if not normalized:
+        return None
+    for family, aliases in _NORMALIZED_FAMILIES.items():
+        if normalized in aliases:
+            return family
+    return None
+
+
 def detail_family(raw_line: str, *, threshold: float = DEFAULT_THRESHOLD) -> str | None:
     """Classify a decomposed summary line as ``deposits`` or ``withdrawals``.
 

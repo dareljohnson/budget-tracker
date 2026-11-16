@@ -50,7 +50,7 @@ class BudgetsView:
         progress = self.ctx.repo.budget_progress(self.month)
         total_limit = sum(b.limit_cents for b in progress)
         total_spent = sum(b.spent_cents for b in progress)
-        ratio = total_spent / total_limit if total_limit else 0
+        ratio = max(0.0, total_spent / total_limit) if total_limit else 0.0
         status = "over" if ratio > 1 else "warning" if ratio >= 0.8 else "ok"
 
         self.summary.content = card(

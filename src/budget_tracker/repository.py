@@ -1474,8 +1474,11 @@ class Repository:
         if self.get_account(bill.account_id) is None:
             raise RepositoryError("Select the account the payment comes from")
         if bill.is_card_payment:
-            if self.get_account(bill.pay_to_account_id) is None:
-                raise RepositoryError("Select the card or account being paid")
+            target = self.get_account(bill.pay_to_account_id)
+            if target is None:
+                raise RepositoryError("Select the card or loan being paid")
+            if not target.kind.is_liability:
+                raise RepositoryError("A card or loan payment must target a credit card or loan")
             if bill.pay_to_account_id == bill.account_id:
                 raise RepositoryError("Pay from a different account than the one being paid")
             bill.category_id = None
@@ -1541,7 +1544,17 @@ class Repository:
             self._BILL_SELECT + " WHERE b.active = 1 AND b.next_due <= ? ORDER BY b.next_due, b.name", (horizon,)
         )
         bills = [self._row_to_bill(r) for r in rows]
-        return [DueBill(b, (b.next_due - today).days, self.amount_due(b)) for b in bills]
+        due: list[DueBill] = []
+        covered: set[int] = set()
+        for bill in bills:
+            if bill.is_card_payment and bill.amount_cents == 0 and bill.pay_to_account_id is not None:
+                # Two "pay the full balance" bills for one card would each claim the same owed
+                # amount; only the soonest is due, the other stays editable on the Bills page.
+                if bill.pay_to_account_id in covered:
+                    continue
+                covered.add(bill.pay_to_account_id)
+            due.append(DueBill(bill, (bill.next_due - today).days, self.amount_due(bill)))
+        return due
 
     def mark_bill_paid(
         self,

@@ -407,6 +407,32 @@ class TestCardBills(unittest.TestCase):
         )
         self.assertEqual(sum(event.amount_cents for event in result.events), -10_000)
 
+    def test_future_card_transfer_does_not_cancel_an_earlier_payment(self):
+        b = bill(
+            amount_cents=10_000,
+            frequency=BillFrequency.ONCE,
+            next_due=TODAY + timedelta(days=5),
+            pay_to_account_id=CARD.id,
+        )
+        transfer = transaction(
+            amount_cents=10_000,
+            type_=TransactionType.TRANSFER,
+            occurred_on=TODAY + timedelta(days=80),
+            account_id=CHECKING.id,
+            transfer_account_id=CARD.id,
+        )
+        result = run(
+            bills=[ForecastBill(b, 10_000)],
+            card_owed={CARD.id: 10_000},
+            transactions=[transfer],
+        )
+
+        self.assertEqual(
+            [(event.date, event.kind, event.amount_cents) for event in result.events],
+            [(TODAY + timedelta(days=5), "card_payment", -10_000),
+             (TODAY + timedelta(days=80), "transfer_out", -10_000)],
+        )
+
     def test_future_card_expense_does_not_reduce_the_cap(self):
         b = bill(amount_cents=10_000, frequency=BillFrequency.ONCE, next_due=TODAY, pay_to_account_id=CARD.id)
         purchase = transaction(
@@ -663,6 +689,27 @@ class TestDeduplication(unittest.TestCase):
         result = run(bills=[ForecastBill(b, 10_000)], transactions=[recorded])
         self.assertEqual(len(result.events), 2)
 
+    def test_dedup_prefers_the_exact_date_occurrence(self):
+        later = schedule(
+            name="A Later", amount_cents=10_000, frequency=IncomeFrequency.MONTHLY,
+            next_date=TODAY + timedelta(days=31),
+        )
+        earlier = schedule(
+            name="B Earlier", amount_cents=10_000, frequency=IncomeFrequency.MONTHLY,
+            next_date=TODAY + timedelta(days=30),
+        )
+        recorded = transaction(
+            amount_cents=10_000,
+            type_=TransactionType.INCOME,
+            occurred_on=TODAY + timedelta(days=30),
+            description="Recorded",
+        )
+        result = run(incomes=[later, earlier], transactions=[recorded], horizon_days=40)
+
+        dates = [event.date for event in result.events]
+        self.assertEqual(dates.count(TODAY + timedelta(days=30)), 1)
+        self.assertIn(TODAY + timedelta(days=31), dates)
+
     def test_a_recorded_transfer_cancels_a_card_payment_bill(self):
         b = bill(amount_cents=5_000, next_due=TODAY + timedelta(days=2), pay_to_account_id=CARD.id)
         recorded = transaction(
@@ -811,13 +858,10 @@ class TestDeduplication(unittest.TestCase):
         result = run(card_minimums=[minimum], transactions=[expense_today])
         self.assertEqual([(event.kind, event.amount_cents) for event in result.events], [("minimum", -5_000)])
 
-    def test_a_recorded_transfer_cancels_a_matching_card_minimum(self):
-        minimum = CardMinimum(
-            account_id=CARD.id,
-            month="2026-09",  # due today
-            remaining_cents=5_000,
-            source_account_id=CHECKING.id,
-        )
+    def test_a_recorded_card_transfer_today_does_not_cancel_the_residual(self):
+        # The service passes the amount still owed after today's transfers, so the residual must
+        # stay projected; today's transfer is already in the starting balance.
+        b = bill(amount_cents=0, next_due=TODAY, pay_to_account_id=CARD.id)
         transfer = transaction(
             amount_cents=5_000,
             type_=TransactionType.TRANSFER,
@@ -825,8 +869,37 @@ class TestDeduplication(unittest.TestCase):
             account_id=CHECKING.id,
             transfer_account_id=CARD.id,
         )
+        result = run(
+            bills=[ForecastBill(b, 5_000)],
+            card_owed={},
+            transactions=[transfer],
+        )
+        self.assertEqual(
+            [(event.kind, event.amount_cents) for event in result.events],
+            [("card_payment", -5_000)],
+        )
+
+    def test_a_recorded_transfer_cancels_a_matching_card_minimum(self):
+        minimum = CardMinimum(
+            account_id=CARD.id,
+            month="2026-09",  # due today
+            remaining_cents=5_000,
+            source_account_id=CHECKING.id,
+        )
+        # A transfer dated today is already reflected in the minimum's remaining amount, so the
+        # future transfer (tolerated one day away) is what the engine de-duplicates.
+        transfer = transaction(
+            amount_cents=5_000,
+            type_=TransactionType.TRANSFER,
+            occurred_on=TODAY + timedelta(days=1),
+            account_id=CHECKING.id,
+            transfer_account_id=CARD.id,
+        )
         result = run(card_minimums=[minimum], transactions=[transfer])
-        self.assertEqual(result.events, [])
+        self.assertEqual(
+            [(event.kind, event.amount_cents) for event in result.events],
+            [("transfer_out", -5_000)],
+        )
         self.assertEqual(result.points[0].balance_cents, result.starting_cents)
 
         other_card = transaction(
@@ -860,7 +933,7 @@ class TestDeduplication(unittest.TestCase):
         self.assertEqual(result.at_60, 90_000)  # the bill and the transaction must not both apply
         self.assertEqual(result.events, [])
 
-    def test_dedup_before_cap_allocation_keeps_the_still_owed_amount(self):
+    def test_todays_occurrence_is_projected_from_the_remaining_owed(self):
         b = bill(amount_cents=5_000, next_due=TODAY, anchor_day=14, pay_to_account_id=CARD.id)
         recorded = transaction(
             amount_cents=5_000,
@@ -871,15 +944,15 @@ class TestDeduplication(unittest.TestCase):
         )
         result = run(
             bills=[ForecastBill(b, 5_000)],
-            card_owed={CARD.id: 10_000},
+            card_owed={CARD.id: 5_000},
             transactions=[recorded],
         )
 
-        # Today's occurrence is already recorded; the cap must not be consumed by it, so both
-        # remaining 5,000 occurrences survive.
+        # Callers pass the owed amount after today's transfers. Today's occurrence is projected
+        # from that residual, so the transfer is counted once and the cap is consumed once.
         self.assertEqual(
             [(event.date, event.amount_cents) for event in result.events],
-            [(date(2026, 12, 14), -5_000), (date(2027, 1, 14), -5_000)],
+            [(TODAY, -5_000)],
         )
 
     def test_a_transaction_after_the_horizon_does_not_cancel_a_last_day_bill(self):

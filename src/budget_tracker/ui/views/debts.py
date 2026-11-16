@@ -629,7 +629,7 @@ class DebtEditor:
                 self.minimum_note.visible = False
             else:
                 self.kind.value = DebtKind.CREDIT_CARD.value
-                status = self.ctx.service.current_minimum_payment(account_id)
+                status = self.ctx.service.current_minimum_payment(account_id, as_of=date.today())
                 if status is not None:
                     self.minimum.value = f"{status.amount_cents / 100:.2f}"
                     self.minimum.disabled = True

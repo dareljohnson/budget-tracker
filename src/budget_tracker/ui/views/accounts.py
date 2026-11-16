@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import date
+
 import flet as ft
 
 from ...formatting import format_money, month_label, parse_signed_money
@@ -133,7 +135,11 @@ class AccountsView:
                     weight=ft.FontWeight.W_500,
                 )
             )
-        minimum = self.ctx.service.current_minimum_payment(account.id) if is_credit_card else None
+        minimum = (
+            self.ctx.service.current_minimum_payment(account.id, as_of=date.today())
+            if is_credit_card
+            else None
+        )
         children: list[ft.Control] = [
             ft.Row(
                 [

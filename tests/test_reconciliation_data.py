@@ -590,6 +590,33 @@ class TestServiceMatching(Base):
         self.assertEqual([tx.id for tx in preview.rows[0].match_candidates], [existing.id])
         self.assertIsNone(preview.rows[0].matched)
 
+    def test_import_candidates_respect_transfer_direction(self):
+        outgoing = self.transfer(5_000, "Checking", "Credit Card", date(2026, 9, 19), "PAY CARD")
+        incoming = self.transfer(5_000, "Credit Card", "Checking", date(2026, 9, 19), "PAYMENT IN")
+
+        def transfer_row(direction: str, description: str) -> ImportRow:
+            return ImportRow(
+                transaction=Transaction(
+                    5_000,
+                    TRANSFER,
+                    None,
+                    date(2026, 9, 19),
+                    description,
+                    account_id=self.checking,
+                    transfer_account_id=self.credit,
+                ),
+                direction=direction,
+            )
+
+        expense_row = transfer_row("expense", "PAY CARD")
+        income_row = transfer_row("income", "PAYMENT IN")
+        preview = ImportPreview(self.statement(), self.checking, [expense_row, income_row])
+
+        outgoing_candidates = self.service.import_row_candidates(preview, expense_row)
+        incoming_candidates = self.service.import_row_candidates(preview, income_row)
+        self.assertEqual([candidate.transaction.id for candidate in outgoing_candidates], [outgoing.id])
+        self.assertEqual([candidate.transaction.id for candidate in incoming_candidates], [incoming.id])
+
     def test_commit_import_refuses_a_liability_account(self):
         row = self.import_row()
         row.transaction.account_id = self.credit

@@ -363,7 +363,9 @@ class StatementImportDialog:
             self._finish()
             return
 
-        matched = self.ctx.service.match_account(preview.statement.account_last4)
+        matched = self.ctx.service.match_account(
+            preview.statement.account_last4, asset_only=True
+        )
         if matched is not None:
             self.account.value = str(matched.id)
             if matched.id != preview.account_id:
@@ -1087,7 +1089,7 @@ class StatementImportDialog:
             return
 
         self.import_button.disabled = False
-        matched = self.ctx.service.match_account(statement_last4)
+        matched = self.ctx.service.match_account(statement_last4, asset_only=True)
         show_match = matched is not None and matched.id == account.id
         self.match_note.value = f"Matched by account number ending {statement_last4}" if show_match else ""
         self.match_note.visible = show_match

@@ -36,7 +36,11 @@ class BalanceCheckDialog:
         self.stated = ft.TextField(
             label="Amount owed" if self.is_liability else "Stated balance",
             prefix_icon=ft.Icons.ATTACH_MONEY,
-            hint_text="Positive amount the bank shows" if self.is_liability else "Balance the bank shows",
+            hint_text=(
+                "Amount owed; enter a negative number if the card is in credit"
+                if self.is_liability
+                else "Balance the bank shows"
+            ),
             keyboard_type=ft.KeyboardType.NUMBER,
             autofocus=True,
             on_submit=self._save,
@@ -238,9 +242,8 @@ class BalanceCheckDialog:
             raw_stated = (self.stated.value or "").strip()
             if not raw_stated:
                 raise ValueError("Enter the stated balance")
+            # A negative amount owed is a real credit balance on a card or loan, so it is kept.
             entered = parse_signed_money(raw_stated)
-            if self.is_liability and entered < 0:
-                raise ValueError("Enter the amount owed as a positive number")
         except ValueError as exc:
             self.stated.error = str(exc)
             valid = False

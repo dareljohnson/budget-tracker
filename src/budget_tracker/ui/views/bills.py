@@ -140,7 +140,15 @@ class BillsView:
         else:
             amount = "Full balance"
         if not bill.active:
-            when: ft.Control = ft.Text("Paid", size=fs(13), color=INCOME_COLOR, weight=ft.FontWeight.W_600)
+            # An inactive one-time bill was either paid or skipped; the bill itself does not
+            # record which, so it must not claim to have been paid.
+            when: ft.Control = ft.Text(
+                "Closed",
+                size=fs(13),
+                color=ft.Colors.ON_SURFACE_VARIANT,
+                weight=ft.FontWeight.W_600,
+                tooltip="Paid or skipped",
+            )
         elif due:
             when = status_chip(due)
         else:
@@ -488,6 +496,11 @@ class BillEditor:
         self.kind = CARD_KIND if bill and bill.is_card_payment else BILL_KIND
         accounts = ctx.repo.list_accounts()
         account_options = [ft.DropdownOption(key=str(a.id), text=f"{a.name} ({a.kind.label})") for a in accounts]
+        pay_to_options = [
+            ft.DropdownOption(key=str(a.id), text=f"{a.name} ({a.kind.label})")
+            for a in accounts
+            if a.kind.is_liability
+        ]
         default_source = next((a for a in accounts if a.kind == AccountKind.CHECKING), next((a for a in accounts if not a.kind.is_liability), None))
         default_card = next((a for a in accounts if a.kind.is_liability), None)
 
@@ -529,8 +542,8 @@ class BillEditor:
             expand=True,
         )
         self.pay_to = ft.Dropdown(
-            label="Card or account to pay",
-            options=list(account_options),
+            label="Card or loan to pay",
+            options=pay_to_options,
             value=str(bill.pay_to_account_id) if bill and bill.pay_to_account_id else (str(default_card.id) if default_card else None),
             expand=True,
         )

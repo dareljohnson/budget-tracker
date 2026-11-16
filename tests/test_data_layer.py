@@ -287,6 +287,27 @@ class TestBillsAndReminders(RepoTestCase):
         self.repo.mark_bill_paid(bill.id, paid_on=date(2026, 2, 27), amount_cents=150000)
         self.assertEqual(self.repo.get_bill(bill.id).next_due, date(2026, 3, 31))
 
+    def test_mark_paid_records_an_optional_confirmation_number(self):
+        bill = self.bill(due=date(2026, 1, 31))
+        self.repo.mark_bill_paid(
+            bill.id,
+            paid_on=date(2026, 1, 30),
+            amount_cents=150000,
+            confirmation_number="  ACH-4471 ",
+        )
+        [tx] = self.repo.list_transactions()
+        self.assertEqual(tx.confirmation_number, "ACH-4471")
+        tx.description = "Rent January"
+        self.repo.update_transaction(tx)
+        self.assertEqual(self.repo.get_transaction(tx.id).confirmation_number, "ACH-4471")
+
+        second = self.bill("Water", 4000, date(2026, 1, 31))
+        self.repo.mark_bill_paid(second.id, paid_on=date(2026, 1, 30), amount_cents=4000)
+        stored = [
+            row for row in self.repo.list_transactions() if row.description == "Water"
+        ][0]
+        self.assertIsNone(stored.confirmation_number)
+
     def test_card_payment_bill_pays_full_balance_as_transfer(self):
         card = self.accts["Credit Card"]
         self.add(8000, "Groceries", date(2026, 3, 2), account="Credit Card")

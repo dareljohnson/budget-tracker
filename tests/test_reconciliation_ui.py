@@ -493,6 +493,7 @@ class TestBillStrongCandidate(BillMatchTestCase):
             amount_cents=1500,
             account_id=self.checking.id,
             existing_transaction_id=candidate.id,
+            confirmation_number="",
         )
         self.assertEqual(len(self.repo.list_transactions()), len(before))
         kept = self.repo.get_transaction(candidate.id)

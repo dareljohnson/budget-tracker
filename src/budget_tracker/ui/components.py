@@ -203,11 +203,15 @@ def balance_text(balance: AccountBalance, size: int = 15) -> ft.Text:
 def _transaction_subtitle(tx: Transaction) -> str:
     when = f"{tx.occurred_on:%b %d, %Y}"
     if tx.type == TransactionType.ADJUSTMENT:
-        return f"Adjustment  •  {tx.account_name}  •  {when}"
-    if tx.type == TransactionType.TRANSFER:
-        return f"Transfer  •  {tx.account_name} → {tx.transfer_account_name}  •  {when}"
-    label = f"{tx.category_name} (refund)" if tx.type == TransactionType.REFUND else tx.category_name
-    return f"{label}  •  {tx.account_name}  •  {when}"
+        subtitle = f"Adjustment  •  {tx.account_name}  •  {when}"
+    elif tx.type == TransactionType.TRANSFER:
+        subtitle = f"Transfer  •  {tx.account_name} → {tx.transfer_account_name}  •  {when}"
+    else:
+        label = f"{tx.category_name} (refund)" if tx.type == TransactionType.REFUND else tx.category_name
+        subtitle = f"{label}  •  {tx.account_name}  •  {when}"
+    if tx.confirmation_number:
+        subtitle = f"{subtitle}  •  Confirmation {tx.confirmation_number}"
+    return subtitle
 
 
 def transaction_row(

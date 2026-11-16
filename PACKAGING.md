@@ -223,7 +223,7 @@ To use it:
 2. **Actions → Build installers → Run workflow** builds the installers and attaches them as artifacts.
 3. Or tag a release to also publish a **GitHub Release** with all installers attached:
    ```bash
-   git tag v1.8.2 && git push origin v1.8.2
+   git tag v1.8.3 && git push origin v1.8.3
    ```
 
 Signing secrets aren't wired in by default. Add them as repository secrets and export `MACOS_SIGN_IDENTITY` /

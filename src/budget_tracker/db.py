@@ -297,6 +297,11 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX idx_income_schedules_active ON income_schedules (active, next_date);
     """,
+    # v12: optional confirmation number recorded when a bill is paid. It belongs to the payment
+    # transaction, so each payment of a recurring bill keeps its own number.
+    """
+    ALTER TABLE transactions ADD COLUMN confirmation_number TEXT;
+    """,
 ]
 
 FOREIGN_KEYS_OFF_MIGRATIONS = {8}

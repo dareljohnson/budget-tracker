@@ -352,7 +352,7 @@ class TestEditors(unittest.TestCase):
         newest = self.repo.list_reconciliations(self.accts["Credit Card"].id)[0]
         self.assertEqual((newest.stated_cents, newest.computed_cents, newest.difference_cents), (-24000, -24000, 0))
 
-    def test_balance_check_rejects_blank_stated_and_negative_owed(self):
+    def test_balance_check_rejects_blank_stated_and_accepts_a_credit(self):
         from budget_tracker.ui.views.reconcile import BalanceCheckDialog
 
         dialog = BalanceCheckDialog(self.ctx, self.accts["Credit Card"])
@@ -364,10 +364,12 @@ class TestEditors(unittest.TestCase):
             self.assertEqual(dialog.stated.error, "Enter the stated balance")
             self.assertEqual(self.repo.list_reconciliations(self.accts["Credit Card"].id), [])
 
+            # A negative amount owed is a card in credit, not an input error.
             dialog.stated.value = "-10"
             dialog._save(None)
-        self.assertEqual(dialog.stated.error, "Enter the amount owed as a positive number")
-        self.assertEqual(self.repo.list_reconciliations(self.accts["Credit Card"].id), [])
+        self.assertIsNone(dialog.stated.error)
+        [reconciliation] = self.repo.list_reconciliations(self.accts["Credit Card"].id)
+        self.assertEqual((reconciliation.stated_cents, reconciliation.computed_cents), (1_000, 0))
 
     def test_deposit_retyped_as_transfer_credits_statement_account(self):
         """A deposit retyped as a transfer must add money to the statement account.
@@ -921,6 +923,31 @@ class TestEditors(unittest.TestCase):
             [("2026-11", 3500)],
         )
         self.assertEqual(dialog.history.controls[0].controls[0].value, "November 2026")
+
+    def test_minimum_history_ignores_a_future_dated_payment(self):
+        from datetime import date, timedelta
+
+        from budget_tracker.models import Transaction, TransactionType
+        from budget_tracker.ui.views.minimum_payments import MinimumPaymentDialog
+
+        card = self.accts["Credit Card"]
+        month = date.today().strftime("%Y-%m")
+        self.ctx.service.record_minimum_payment(card.id, month, 3500)
+        self.repo.add_transaction(
+            Transaction(
+                3500,
+                TransactionType.TRANSFER,
+                None,
+                date.today() + timedelta(days=5),
+                "Scheduled payment",
+                account_id=self.accts["Checking"].id,
+                transfer_account_id=card.id,
+            )
+        )
+        dialog = MinimumPaymentDialog(self.ctx, card)
+        dialog._render_history()
+        chip = dialog.history.controls[0].controls[2].content
+        self.assertEqual(chip.value, "Unpaid")
 
     def test_minimum_status_chip_states(self):
         from budget_tracker.models import MinimumPaymentStatus

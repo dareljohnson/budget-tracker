@@ -141,6 +141,16 @@ class TestBudgetsAndAggregates(RepoTestCase):
         [progress] = self.repo.budget_progress("2026-03")
         self.assertEqual((progress.limit_cents, progress.spent_cents, progress.status), (20000, 17000, "warning"))
 
+    def test_budget_ratio_is_floored_at_zero_after_refunds(self):
+        gid = self.cats["Groceries"].id
+        self.repo.set_budget(Budget(gid, "2026-03", 10000))
+        self.add(500, "Groceries", date(2026, 3, 2))
+        self.add(2000, "Groceries", date(2026, 3, 8), type_=REFUND)
+        [progress] = self.repo.budget_progress("2026-03")
+        self.assertEqual(progress.spent_cents, -1500)
+        self.assertEqual(progress.ratio, 0.0)
+        self.assertEqual(progress.status, "ok")
+
     def test_budget_only_for_expense_categories(self):
         with self.assertRaises(RepositoryError):
             self.repo.set_budget(Budget(self.cats["Salary"].id, "2026-03", 100))
@@ -193,7 +203,11 @@ class TestAccountsTransfersRefunds(RepoTestCase):
         self.add(500, "Dining Out", date(2026, 3, 9), type_=REFUND)
 
         self.assertEqual(self.repo.summary("2026-03").expense_cents, 5500)
-        self.assertEqual([(c.name, c.total_cents) for c in self.repo.totals_by_category("2026-03")], [("Groceries", 6000)])
+        self.assertEqual(
+            [(c.name, c.total_cents) for c in self.repo.totals_by_category("2026-03")],
+            [("Groceries", 6000), ("Dining Out", -500)],
+        )
+        self.assertEqual(sum(c.total_cents for c in self.repo.totals_by_category("2026-03")), 5500)
         [progress] = self.repo.budget_progress("2026-03")
         self.assertEqual(progress.spent_cents, 6000)
         self.assertEqual(self.balances()["Credit Card"], -6000)
@@ -285,6 +299,14 @@ class TestBillsAndReminders(RepoTestCase):
         self.assertFalse(self.repo.get_bill(bill.id).active)
         self.assertEqual(self.repo.due_bills(date(2026, 3, 18), 30), [])
 
+    def test_two_full_balance_bills_for_one_card_count_the_balance_once(self):
+        card = self.accts["Credit Card"]
+        self.add(8000, "Groceries", date(2026, 3, 2), account="Credit Card")
+        self.bill("Pay card", 0, date(2026, 3, 18), BillFrequency.ONCE, pay_to_account_id=card.id)
+        self.bill("Pay card again", 0, date(2026, 3, 19), BillFrequency.ONCE, pay_to_account_id=card.id)
+        due = self.repo.due_bills(date(2026, 3, 17), 7)
+        self.assertEqual([(d.bill.name, d.amount_cents) for d in due], [("Pay card", 8000)])
+
     def test_bill_validation_and_delete_guards(self):
         with self.assertRaises(RepositoryError):
             self.bill(cents=0)
@@ -292,6 +314,8 @@ class TestBillsAndReminders(RepoTestCase):
             self.bill(category_id=self.cats["Salary"].id)
         with self.assertRaises(RepositoryError):
             self.bill(pay_to_account_id=self.accts["Checking"].id)
+        with self.assertRaises(RepositoryError):
+            self.bill(pay_to_account_id=self.accts["Cash"].id)
         self.bill()
         with self.assertRaises(RepositoryError):
             self.repo.delete_category(self.cats["Housing"].id)

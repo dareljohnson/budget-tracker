@@ -10,6 +10,7 @@ from budget_tracker.db import connect
 from budget_tracker.models import Account, AccountKind, Statement, Transaction, TransactionType
 from budget_tracker.repository import Repository, RepositoryError
 from budget_tracker.services import BudgetService
+from budget_tracker.statements.model import ParsedStatement, ParsedTransaction
 
 
 class Base(unittest.TestCase):
@@ -46,6 +47,65 @@ class TestImport(Base):
         self.assertEqual(self.repo.account_balance_as_of(self.accts["Checking"].id, date(2026, 10, 15)), 119_000)
         rec = self.repo.list_reconciliations(self.accts["Checking"].id)[0]
         self.assertEqual((rec.stated_cents, rec.computed_cents, rec.difference_cents), (119_000, 119_000, 0))
+
+    def test_separate_fee_becomes_a_row_and_the_import_reconciles(self):
+        parsed = ParsedStatement(
+            institution="Bank",
+            account_label="Checking",
+            account_last4=None,
+            period_start=date(2026, 9, 1),
+            period_end=date(2026, 9, 30),
+            beginning_cents=100_000,
+            deposits_cents=0,
+            withdrawals_cents=4_000,
+            fees_cents=500,
+            ending_cents=95_500,
+            transactions=[ParsedTransaction(date(2026, 9, 20), "Grocery", 4_000, "expense")],
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "statement.pdf"
+            path.write_bytes(b"not really a pdf")
+            with mock.patch("budget_tracker.services.load_statement", return_value=parsed):
+                svc = BudgetService(self.repo)
+                preview = svc.prepare_import(path, self.accts["Checking"].id)
+                self.assertEqual(
+                    [(row.transaction.description, row.transaction.amount_cents) for row in preview.rows],
+                    [("Grocery", 4_000), ("Statement fees", 500)],
+                )
+                svc.commit_import(preview, preview.rows, set_opening_balance=True)
+        rec = self.repo.list_reconciliations(self.accts["Checking"].id)[0]
+        self.assertEqual(
+            (rec.stated_cents, rec.computed_cents, rec.difference_cents), (95_500, 95_500, 0)
+        )
+
+    def test_fee_inside_withdrawals_does_not_add_a_row(self):
+        parsed = ParsedStatement(
+            institution="Bank",
+            account_label="Checking",
+            account_last4=None,
+            period_start=date(2026, 9, 1),
+            period_end=date(2026, 9, 30),
+            beginning_cents=100_000,
+            deposits_cents=0,
+            withdrawals_cents=4_000,
+            fees_cents=500,
+            ending_cents=96_000,
+            transactions=[ParsedTransaction(date(2026, 9, 20), "Grocery", 4_000, "expense")],
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "statement.pdf"
+            path.write_bytes(b"not really a pdf")
+            with mock.patch("budget_tracker.services.load_statement", return_value=parsed):
+                preview = BudgetService(self.repo).prepare_import(
+                    path, self.accts["Checking"].id
+                )
+        self.assertEqual([row.transaction.description for row in preview.rows], ["Grocery"])
+
+    def test_statement_cannot_be_imported_into_a_liability_account(self):
+        with self.assertRaises(RepositoryError):
+            BudgetService(self.repo).prepare_import(
+                Path("unused.pdf"), self.accts["Credit Card"].id
+            )
 
     def test_reimport_same_file_is_refused(self):
         self.preview()
@@ -222,6 +282,12 @@ class TestMatchAccount(Base):
         svc = BudgetService(self.repo)
         self.assertEqual(svc.match_account("3060").id, acct.id)
         self.assertEqual(svc.match_account("60").id, acct.id)
+
+    def test_asset_only_ignores_liability_accounts(self):
+        card = self.repo.add_account(Account("Visa", AccountKind.CREDIT_CARD, number_last4="1234"))
+        svc = BudgetService(self.repo)
+        self.assertEqual(svc.match_account("1234").id, card.id)
+        self.assertIsNone(svc.match_account("1234", asset_only=True))
 
     def test_returns_none_when_missing_or_ambiguous(self):
         svc = BudgetService(self.repo)

@@ -277,6 +277,27 @@ class TestDebtService(ServiceCase):
                                  original_balance_cents=None, account_id=None)
         self.assertEqual(self.repo.get_debt(debt.id).balance_cents, 50_000)
 
+    def test_unlinking_clears_tagged_payments_so_editing_one_cannot_subtract_twice(self):
+        self.owe_card(50_000)
+        debt = self.service.create_debt("Visa", DebtKind.CREDIT_CARD, 0, 2499, 10_500,
+                                        account_id=self.card.id)
+        payment = self.service.record_debt_payment(
+            debt.id, self.checking.id, 20_000, date(2026, 11, 10), today=date(2026, 11, 14)
+        )
+        self.service.update_debt(debt.id, name="Visa", kind=DebtKind.CREDIT_CARD,
+                                 balance_cents=0, apr_bps=2499, minimum_cents=10_500,
+                                 original_balance_cents=None, account_id=None)
+
+        self.assertEqual(self.repo.get_debt(debt.id).balance_cents, 30_000)
+        self.assertEqual(self.repo.list_debt_payments(debt.id), [])
+        # Turning the historical transfer into an expense must not subtract it a second time.
+        payment = self.repo.get_transaction(payment.id)
+        payment.type = TransactionType.EXPENSE
+        payment.category_id = self.payments_category.id
+        payment.transfer_account_id = None
+        self.repo.update_transaction(payment)
+        self.assertEqual(self.repo.get_debt(debt.id).balance_cents, 30_000)
+
     def test_editing_a_linked_debt_keeps_the_live_card_balance(self):
         self.owe_card(50_000)
         debt = self.service.create_debt("Visa", DebtKind.CREDIT_CARD, 0, 2499, 10_500,

@@ -104,7 +104,7 @@ class MinimumPaymentDialog:
         self.ctx.page.show_dialog(self.dialog)
 
     def _render_history(self) -> None:
-        statuses = self.ctx.service.minimum_payment_statuses(self.account.id)
+        statuses = self.ctx.service.minimum_payment_statuses(self.account.id, as_of=date.today())
         if not statuses:
             self.history.controls = [
                 ft.Text("No minimum payments recorded yet.", size=fs(13), color=ft.Colors.ON_SURFACE_VARIANT)

@@ -270,7 +270,14 @@ class BudgetProgress:
 
     @property
     def ratio(self) -> float:
-        return self.spent_cents / self.limit_cents if self.limit_cents else 0.0
+        """Progress toward the limit, floored at zero.
+
+        Refunds can push a category's net spending below zero. Progress cannot go below zero, and a
+        negative ratio would be rejected by Flet's progress bar.
+        """
+        if not self.limit_cents:
+            return 0.0
+        return max(0.0, self.spent_cents / self.limit_cents)
 
     @property
     def remaining_cents(self) -> int:

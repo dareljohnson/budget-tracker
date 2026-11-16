@@ -64,6 +64,18 @@ def _csv_safe(value: str) -> str:
     return f"'{value}" if value[:1] in ("=", "+", "-", "@", "\t", "\r") else value
 
 
+def _fees_are_separate(statement: Statement) -> bool:
+    """Whether the printed fee is an extra subtraction outside the printed withdrawals total.
+
+    The import gate accepts two ending-balance identities: fees inside withdrawals, and fees
+    separate from them. Only the second leaves a fee that no parsed row accounts for.
+    """
+    if statement.fees_cents <= 0:
+        return False
+    plain = statement.beginning_cents + statement.deposits_cents - statement.withdrawals_cents
+    return plain != statement.ending_cents and plain - statement.fees_cents == statement.ending_cents
+
+
 @dataclass(slots=True, frozen=True)
 class DashboardData:
     month: str
@@ -364,7 +376,7 @@ class BudgetService:
             lowest_date, lowest_cents = lowest.date, lowest.balance_cents
         else:
             lowest_date, lowest_cents = today, result.starting_cents
-        has_income = any(
+        has_income = any(event.kind == "income" for event in events) or any(
             schedule.account_id in liquid_ids
             and schedule.amount_cents > 0
             and bool(income_dates(schedule, today + timedelta(days=1), slice_end))
@@ -561,10 +573,20 @@ class BudgetService:
                 return category.id
         raise RepositoryError(f"The default '{name}' category is missing")
 
+    @staticmethod
+    def _require_import_account(account: Account) -> None:
+        """Statement balances are asset balances; a card or loan statement would invert the ledger."""
+        if account.kind.is_liability:
+            raise RepositoryError(
+                "Statements can only be imported into checking, savings, cash, or other asset accounts"
+            )
+
     def prepare_import(self, statement_path: Path, account_id: int) -> ImportPreview:
         """Parse a statement and build an editable preview without writing anything."""
-        if self.repo.get_account(account_id) is None:
+        account = self.repo.get_account(account_id)
+        if account is None:
             raise RepositoryError("Select an account")
+        self._require_import_account(account)
         parsed = load_statement(statement_path)
         file_sha256 = hashlib.sha256(statement_path.read_bytes()).hexdigest()
         if self.repo.statement_by_sha256(file_sha256):
@@ -607,6 +629,27 @@ class BudgetService:
                     direction=item.direction,
                 )
             )
+        parsed_expenses = sum(
+            item.amount_cents for item in parsed.transactions if item.direction == "expense"
+        )
+        if _fees_are_separate(statement) and parsed_expenses == statement.withdrawals_cents:
+            # The printed fee is subtracted from the ending balance but appears in no parsed row
+            # (the parsed expenses are exactly the withdrawals total), so importing only the rows
+            # would leave the ledger short by the fee. It becomes one visible, editable expense
+            # row dated at the end of the period.
+            rows.append(
+                ImportRow(
+                    transaction=Transaction(
+                        amount_cents=statement.fees_cents,
+                        type=TransactionType.EXPENSE,
+                        category_id=self._default_category_id(TransactionType.EXPENSE),
+                        occurred_on=statement.period_end,
+                        description="Statement fees",
+                        account_id=account_id,
+                    ),
+                    direction="expense",
+                )
+            )
         preview = ImportPreview(statement=statement, account_id=account_id, rows=rows, source=parsed.source)
         return self.match_import_preview(preview)
 
@@ -620,6 +663,7 @@ class BudgetService:
         account = self.repo.get_account(preview.account_id)
         if account is None:
             raise RepositoryError("Select an account")
+        self._require_import_account(account)
         statement_last4 = preview.statement.account_last4
         if statement_last4 and account.number_last4:
             if not (statement_last4.endswith(account.number_last4)
@@ -749,6 +793,18 @@ class BudgetService:
             preview.statement.period_end,
             tx.type,
         )
+        if tx.type is TransactionType.TRANSFER:
+            # A transfer row stands for a payment out of the statement account or a deposit into
+            # it; matching the opposite side would exclude the row while recording the opposite
+            # movement.
+            if row.direction == "expense":
+                rows = [candidate for candidate in rows if candidate.account_id == preview.account_id]
+            elif row.direction == "income":
+                rows = [
+                    candidate
+                    for candidate in rows
+                    if candidate.transfer_account_id == preview.account_id
+                ]
         return self.match_candidates(
             rows,
             account_id=preview.account_id,
@@ -766,14 +822,19 @@ class BudgetService:
             ]
         return preview
 
-    def match_account(self, account_last4: str | None) -> Account | None:
-        """The single account whose saved suffix matches the statement's suffix (either direction)."""
+    def match_account(self, account_last4: str | None, *, asset_only: bool = False) -> Account | None:
+        """The single account whose saved suffix matches the statement's suffix (either direction).
+
+        Receipts may match any account, including a card. Statement imports pass ``asset_only``
+        because a statement balance must not be posted to a liability account.
+        """
         if not account_last4 or not (statement_last4 := account_last4.strip()):
             return None
         matches = [
             account
             for account in self.repo.list_accounts()
             if account.number_last4
+            and (not asset_only or not account.kind.is_liability)
             and (account.number_last4.endswith(statement_last4) or statement_last4.endswith(account.number_last4))
         ]
         return matches[0] if len(matches) == 1 else None
@@ -945,7 +1006,7 @@ class BudgetService:
             account = self.repo.get_account(debt.account_id)
             account_name = account.name if account else None
             if account is not None and account.kind is AccountKind.CREDIT_CARD:
-                status = self.current_minimum_payment(debt.account_id)
+                status = self.current_minimum_payment(debt.account_id, as_of=date.today())
                 if status is not None:
                     minimum, from_statement, statement_month = status.amount_cents, True, status.month
         interest = monthly_interest_cents(balance, debt.apr_bps)
@@ -1008,6 +1069,10 @@ class BudgetService:
                                    original_balance_cents, account_id, debt_id=debt_id)
         if existing.account_id is None and account_id is not None:
             # Pre-link payments are superseded by the card's live balance snapshot.
+            self.repo.clear_debt_payments(debt_id)
+        elif existing.account_id is not None and account_id is None:
+            # The card's owed balance at unlink time already reflects every tagged payment;
+            # keeping the tags would let a later edit of one subtract the payment twice.
             self.repo.clear_debt_payments(debt_id)
         self.repo.update_debt(Debt(
             id=debt_id, name=name.strip(), kind=kind, balance_cents=balance, apr_bps=apr_bps,

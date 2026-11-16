@@ -23,6 +23,10 @@ def test_dates_anchor_on_start():
     assert parse_date("09/20/2024", date(2026, 9, 16)) == date(2024, 9, 20)
     assert parse_date("Sep 20", date(2026, 9, 16)) == date(2026, 9, 20)
     assert parse_date("September 20, 2026", date(2026, 9, 16)) == date(2026, 9, 20)
+    assert parse_date("Sept 5, 2026", date(2026, 9, 16)) == date(2026, 9, 5)
+    assert parse_date("Sept. 5", date(2026, 9, 16)) == date(2026, 9, 5)
+    assert parse_date("Jan. 5, 2026", date(2026, 1, 15)) == date(2026, 1, 5)
+    assert parse_date("Sept 31, 2026", date(2026, 9, 16)) is None
 
 def test_dates_anchor_on_end():
     assert parse_date("01/03", date(2026, 1, 15), anchor_on_end=True) == date(2026, 1, 3)

@@ -31,7 +31,9 @@ INFLOW_KINDS = frozenset({"income", "refund", "transfer_in"})
 # minimum events carry ``counter_account_id`` so a transfer only cancels the debt it actually pays.
 _INCOME_KINDS = frozenset({"income"})
 _EXPENSE_KINDS = frozenset({"bill"})
-_TRANSFER_KINDS = frozenset({"card_payment", "minimum"})
+# A card_payment amount is already net of recorded transfers, so a transfer never cancels one.
+# Minimum amounts are net of payments through today only, so a future transfer can.
+_TRANSFER_KINDS = frozenset({"minimum"})
 
 _ONE_DAY = timedelta(days=1)
 _RECHECK_DAYS = (30, 60, 90)
@@ -233,20 +235,19 @@ def forecast(
         if today <= transaction.occurred_on <= simulation_end
         and transaction.type is not TransactionType.ADJUSTMENT
     ]
-    consumed = _deduplicate(scheduled, recorded, liquid_set)
+    consumed = _deduplicate(scheduled, recorded, liquid_set, today)
     card_indexes = set(card_occurrences)
     events = [
         event
         for index, event in enumerate(scheduled)
         if index not in consumed and index not in card_indexes
     ]
-    # A recorded future card transfer lowers the card's debt, so it also lowers the cap that
-    # later fixed card payments may use. Payments dated today are already reflected in card_owed.
-    adjusted_owed = _owed_after_future_card_transfers(card_owed, scheduled_transactions, today, simulation_end)
     events.extend(
         _allocate_card_payments(
             [occurrence for index, occurrence in card_occurrences.items() if index not in consumed],
-            adjusted_owed,
+            card_owed,
+            scheduled_transactions,
+            today,
         )
     )
     events.extend(_transaction_events(scheduled_transactions, today, simulation_end, liquid_set))
@@ -414,34 +415,45 @@ def _add_card_occurrence(
     )
 
 
-def _owed_after_future_card_transfers(
-    card_owed: Mapping[int, int],
-    transactions: Sequence[Transaction],
-    today: date,
-    end: date,
-) -> dict[int, int]:
-    """Reduce today's owed by recorded card transfers after today (today's are already included)."""
-    remaining = {int(account_id): int(cents) for account_id, cents in card_owed.items()}
-    for transaction in transactions:
-        if transaction.type is not TransactionType.TRANSFER:
-            continue
-        if transaction.occurred_on <= today or transaction.occurred_on > end:
-            continue
-        target = transaction.transfer_account_id
-        if target is None or target not in remaining:
-            continue
-        remaining[target] = max(0, remaining[target] - abs(transaction.amount_cents))
-    return remaining
-
-
 def _allocate_card_payments(
     occurrences: Sequence[_CardOccurrence],
     card_owed: Mapping[int, int],
+    transactions: Sequence[Transaction],
+    today: date,
 ) -> list[CashEvent]:
-    """Allocate the remaining owed across surviving card-payment occurrences chronologically."""
+    """Allocate the remaining owed across surviving card-payment occurrences chronologically.
+
+    A recorded card transfer dated after today lowers the cap only from its own date onward, so a
+    transfer made later never cancels a payment due before it. Today's transfers are already inside
+    ``card_owed``.
+    """
     remaining_owed = {int(account_id): int(cents) for account_id, cents in card_owed.items()}
+    transfer_amounts: dict[int, list[tuple[date, int]]] = {}
+    for transaction in transactions:
+        if transaction.type is not TransactionType.TRANSFER:
+            continue
+        target = transaction.transfer_account_id
+        if target is None or target not in remaining_owed or transaction.occurred_on <= today:
+            continue
+        transfer_amounts.setdefault(target, []).append(
+            (transaction.occurred_on, abs(transaction.amount_cents))
+        )
+    for entries in transfer_amounts.values():
+        entries.sort()
+
+    applied: dict[int, int] = {}
     events: list[CashEvent] = []
     for occurrence in sorted(occurrences, key=lambda item: (item.date, item.order)):
+        pending = transfer_amounts.get(occurrence.target_id, [])
+        index = applied.get(occurrence.target_id, 0)
+        while index < len(pending) and pending[index][0] <= occurrence.date:
+            paid = pending[index][1]
+            if occurrence.target_id in remaining_owed:
+                remaining_owed[occurrence.target_id] = max(
+                    0, remaining_owed[occurrence.target_id] - paid
+                )
+            index += 1
+        applied[occurrence.target_id] = index
         remaining = remaining_owed.get(occurrence.target_id)
         if occurrence.is_open:
             amount = occurrence.nominal_cents if remaining is None else min(occurrence.nominal_cents, remaining)
@@ -527,17 +539,24 @@ def _deduplicate(
     scheduled: Sequence[CashEvent],
     recorded: Sequence[Transaction],
     liquid_set: set[int],
+    today: date,
 ) -> set[int]:
     """Return indexes of scheduled events cancelled one-to-one by recorded transactions.
 
     Matching is deliberately strict: income cancels only scheduled income, an expense cancels only
-    a regular bill, and a transfer cancels only a card payment or minimum for the account it pays.
-    A refund cancels nothing scheduled.
+    a regular bill, and a transfer cancels only a card minimum for the account it pays. A refund
+    cancels nothing scheduled. A transfer dated today is already inside the starting balances and
+    inside the minimum's paid amount, so it never cancels anything again.
     """
     consumed: set[int] = set()
     for transaction in recorded:
         amount = abs(transaction.amount_cents)
         if amount == 0:
+            continue
+        if (
+            transaction.type is TransactionType.TRANSFER
+            and transaction.occurred_on <= today
+        ):
             continue
         match = _find_transaction_match(scheduled, consumed, transaction, liquid_set, amount)
         if match is not None:
@@ -599,6 +618,8 @@ def _find_match(
     *,
     required_counter: int | None,
 ) -> int | None:
+    best: int | None = None
+    best_key: tuple[int, int] | None = None
     for index, event in enumerate(scheduled):
         if index in consumed:
             continue
@@ -609,10 +630,15 @@ def _find_match(
         expected = amount if event.kind in INFLOW_KINDS else -amount
         if event.amount_cents != expected:
             continue
-        if abs((event.date - occurred_on).days) > _MAX_DAY_SPAN:
+        span = abs((event.date - occurred_on).days)
+        if span > _MAX_DAY_SPAN:
             continue
-        return index
-    return None
+        # Prefer the occurrence on the transaction's own date over one a day away, so a transfer
+        # never cancels the wrong neighbour.
+        key = (span, index)
+        if best_key is None or key < best_key:
+            best, best_key = index, key
+    return best
 
 
 def _transaction_events(

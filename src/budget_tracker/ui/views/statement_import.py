@@ -183,13 +183,19 @@ class StatementImportDialog:
         self.preview: ImportPreview | None = None
         self._row_widgets: list[_RowWidgets] = []
         self._accounts = ctx.repo.list_accounts()
+        # A statement's balance is an asset balance; cards and loans stay available as transfer
+        # destinations only.
+        self._import_accounts = [a for a in self._accounts if not a.kind.is_liability]
         self._categories: dict[TransactionType, list[Category]] = {}
 
         self.account = ft.Dropdown(
             label="Account",
             hint_text="Choose the account this statement belongs to",
             width=340,
-            options=[ft.DropdownOption(key=str(a.id), text=f"{a.name} ({a.kind.label})") for a in self._accounts],
+            options=[
+                ft.DropdownOption(key=str(a.id), text=f"{a.name} ({a.kind.label})")
+                for a in self._import_accounts
+            ],
             on_select=self._account_changed,
         )
         self.match_note = ft.Text("", size=fs(13), color=INCOME_COLOR, weight=ft.FontWeight.W_600, visible=False)
@@ -323,8 +329,10 @@ class StatementImportDialog:
 
     # ---------- opening ----------
     async def open(self) -> None:
-        if not self._accounts:
-            self.ctx.notify("Create an account first, then import a statement", error=True)
+        if not self._import_accounts:
+            self.ctx.notify(
+                "Create a checking or savings account first, then import a statement", error=True
+            )
             self._finish()
             return
         try:
@@ -347,7 +355,7 @@ class StatementImportDialog:
         # account reveals the statement's account digits, which then select the real account.
         try:
             preview = await asyncio.to_thread(
-                self.ctx.service.prepare_import, self._path, self._accounts[0].id
+                self.ctx.service.prepare_import, self._path, self._import_accounts[0].id
             )
         except (StatementValidationError, UnsupportedStatementError, StatementReadError, OSError,
                 RepositoryError) as exc:
@@ -355,7 +363,9 @@ class StatementImportDialog:
             self._finish()
             return
 
-        matched = self.ctx.service.match_account(preview.statement.account_last4)
+        matched = self.ctx.service.match_account(
+            preview.statement.account_last4, asset_only=True
+        )
         if matched is not None:
             self.account.value = str(matched.id)
             if matched.id != preview.account_id:
@@ -1079,7 +1089,7 @@ class StatementImportDialog:
             return
 
         self.import_button.disabled = False
-        matched = self.ctx.service.match_account(statement_last4)
+        matched = self.ctx.service.match_account(statement_last4, asset_only=True)
         show_match = matched is not None and matched.id == account.id
         self.match_note.value = f"Matched by account number ending {statement_last4}" if show_match else ""
         self.match_note.visible = show_match

@@ -246,6 +246,58 @@ class TestBills(Base):
             [(TODAY + timedelta(days=40), -20_000)],
         )
 
+    def test_open_card_bill_residual_is_not_cancelled_by_the_transfer_it_nets(self):
+        self.add_transaction(100_000, TransactionType.INCOME, TODAY - timedelta(days=5), category="Salary")
+        self.add_card_balance(10_000, TODAY - timedelta(days=2))
+        self.add_transaction(
+            5_000,
+            TransactionType.TRANSFER,
+            TODAY,
+            transfer_account=self.card,
+            description="Card payment",
+        )
+        self.add_bill("Pay card", 0, pay_to=self.card)
+
+        result = self.service.cash_flow(TODAY)
+
+        self.assertEqual(result.starting_cents, 95_000)
+        self.assertEqual(
+            [(event.date, event.kind, event.amount_cents) for event in result.events],
+            [(TODAY, "card_payment", -5_000)],
+        )
+        self.assertEqual(result.at_30, 90_000)
+
+    def test_fixed_card_payment_today_uses_the_amount_left_after_todays_transfer(self):
+        self.add_transaction(100_000, TransactionType.INCOME, TODAY - timedelta(days=5), category="Salary")
+        self.add_card_balance(10_000, TODAY - timedelta(days=2))
+        self.add_transaction(5_000, TransactionType.TRANSFER, TODAY, transfer_account=self.card)
+        self.add_bill("Pay card", 10_000, pay_to=self.card)
+
+        result = self.service.cash_flow(TODAY)
+
+        self.assertEqual(
+            [(event.date, event.kind, event.amount_cents) for event in result.events],
+            [(TODAY, "card_payment", -5_000)],
+        )
+        self.assertEqual(result.at_30, 90_000)
+
+    def test_future_card_transfer_does_not_cancel_an_earlier_fixed_bill(self):
+        self.add_card_balance(10_000, TODAY - timedelta(days=2))
+        self.add_transaction(10_000, TransactionType.TRANSFER, TODAY + timedelta(days=80),
+                             transfer_account=self.card)
+        self.add_bill("Pay card", 10_000, day=TODAY + timedelta(days=5), pay_to=self.card)
+
+        result = self.service.cash_flow(TODAY)
+
+        self.assertEqual(
+            [(event.date, event.kind, event.amount_cents) for event in result.events],
+            [
+                (TODAY + timedelta(days=5), "card_payment", -10_000),
+                (TODAY + timedelta(days=80), "transfer_out", -10_000),
+            ],
+        )
+        self.assertEqual(result.at_30, -10_000)
+
     def test_open_card_bill_with_nothing_owed_is_skipped(self):
         self.add_bill("Pay card", 0, pay_to=self.card)
 
@@ -345,6 +397,21 @@ class TestCardMinimums(Base):
 
         minimums = [(event.date, event.amount_cents) for event in result.events if event.kind == "minimum"]
         self.assertEqual(minimums, [(TODAY, -3_000), (date(2026, 11, 30), -4_000)])
+
+    def test_minimum_remaining_after_todays_transfer_is_still_projected(self):
+        self.add_transaction(100_000, TransactionType.INCOME, TODAY - timedelta(days=5), category="Salary")
+        self.add_card_balance(10_000, TODAY - timedelta(days=20))
+        self.service.record_minimum_payment(self.card.id, "2026-09", 10_000)
+        self.add_transaction(5_000, TransactionType.TRANSFER, TODAY, transfer_account=self.card)
+
+        result = self.service.cash_flow(TODAY)
+
+        self.assertEqual(result.starting_cents, 95_000)
+        self.assertEqual(
+            [(event.date, event.kind, event.amount_cents) for event in result.events],
+            [(TODAY, "minimum", -5_000)],
+        )
+        self.assertEqual(result.at_30, 90_000)
 
     def test_minimum_uses_todays_status_not_a_future_payment(self):
         self.add_card_balance()
@@ -540,6 +607,19 @@ class TestHorizonSlicing(Base):
         result = self.service.cash_flow(TODAY, horizon_days=30)
 
         self.assertEqual([event.description for event in result.events], ["Last day"])
+
+
+class TestRecordedIncome(Base):
+    def test_a_recorded_future_income_counts_as_income(self):
+        self.add_transaction(50_000, TransactionType.INCOME, TODAY + timedelta(days=5), category="Salary")
+
+        result = self.service.cash_flow(TODAY)
+
+        self.assertTrue(result.has_income)
+        self.assertEqual(
+            [(event.date, event.kind, event.amount_cents) for event in result.events],
+            [(TODAY + timedelta(days=5), "income", 50_000)],
+        )
 
 
 class TestIncomeScheduleCrud(Base):

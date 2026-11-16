@@ -82,6 +82,29 @@ class TestReceiptRow(unittest.TestCase):
         self.assertFalse([c for c in row.content.controls
                           if isinstance(c, ft.IconButton) and c.tooltip == "Open receipt"])
 
+    def test_rows_with_and_without_a_receipt_keep_the_same_action_width(self):
+        from budget_tracker.ui.components import transaction_row
+        with_receipt = Transaction(500, TransactionType.EXPENSE, 1, date(2026, 11, 14),
+                                   "Shop", receipt_path="receipts/x.png")
+        without_receipt = Transaction(500, TransactionType.EXPENSE, 1, date(2026, 11, 14), "Shop")
+
+        def action_slots(tx):
+            row = transaction_row(
+                tx,
+                on_edit=lambda t: None,
+                on_delete=lambda t: None,
+                on_open_receipt=lambda t: None,
+            )
+            return row.content.controls[3:]
+
+        for tx in (with_receipt, without_receipt):
+            with self.subTest(has_receipt=bool(tx.receipt_path)):
+                slots = action_slots(tx)
+                self.assertEqual([getattr(slot, "width", None) for slot in slots], [40, 40, 40])
+        # The empty slot sits first, so the edit and delete icons stay in the same place too.
+        self.assertIsInstance(action_slots(without_receipt)[0], ft.Container)
+        self.assertEqual(action_slots(without_receipt)[1].tooltip, "Edit")
+
     def test_row_hides_receipt_button_without_callback(self):
         from budget_tracker.ui.components import transaction_row
         tx = Transaction(500, TransactionType.EXPENSE, 1, date(2026, 11, 14),

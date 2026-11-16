@@ -214,6 +214,11 @@ def _transaction_subtitle(tx: Transaction) -> str:
     return subtitle
 
 
+# Every action icon uses the same slot, and a row without a receipt keeps an empty slot, so the
+# amount column lines up down the list instead of shifting by one icon.
+_ACTION_SLOT_WIDTH = 40
+
+
 def transaction_row(
     tx: Transaction,
     on_edit: Callable[[Transaction], None] | None = None,
@@ -221,20 +226,33 @@ def transaction_row(
     on_open_receipt: Callable[[Transaction], None] | None = None,
 ) -> ft.Container:
     actions: list[ft.Control] = []
-    if tx.receipt_path and on_open_receipt:
+    if on_open_receipt:
+        if tx.receipt_path:
+            actions.append(
+                ft.IconButton(
+                    ft.Icons.RECEIPT_LONG,
+                    tooltip="Open receipt",
+                    icon_size=20,
+                    width=_ACTION_SLOT_WIDTH,
+                    on_click=lambda _: on_open_receipt(tx),
+                )
+            )
+        else:
+            actions.append(ft.Container(width=_ACTION_SLOT_WIDTH, height=_ACTION_SLOT_WIDTH))
+    if on_edit:
         actions.append(
             ft.IconButton(
-                ft.Icons.RECEIPT_LONG,
-                tooltip="Open receipt",
-                icon_size=20,
-                on_click=lambda _: on_open_receipt(tx),
+                ft.Icons.EDIT_OUTLINED, tooltip="Edit", icon_size=20,
+                width=_ACTION_SLOT_WIDTH, on_click=lambda _: on_edit(tx),
             )
         )
-    if on_edit:
-        actions.append(ft.IconButton(ft.Icons.EDIT_OUTLINED, tooltip="Edit", icon_size=20, on_click=lambda _: on_edit(tx)))
     if on_delete:
         actions.append(
-            ft.IconButton(ft.Icons.DELETE_OUTLINE, tooltip="Delete", icon_size=20, icon_color=EXPENSE_COLOR, on_click=lambda _: on_delete(tx))
+            ft.IconButton(
+                ft.Icons.DELETE_OUTLINE, tooltip="Delete", icon_size=20,
+                width=_ACTION_SLOT_WIDTH, icon_color=EXPENSE_COLOR,
+                on_click=lambda _: on_delete(tx),
+            )
         )
     if tx.type == TransactionType.ADJUSTMENT:
         avatar = category_avatar("ACCOUNT_BALANCE", SEED_COLOR)

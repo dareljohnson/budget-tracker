@@ -79,14 +79,16 @@ class Base(unittest.TestCase):
 
 class TestSchemaV11(Base):
     def test_schema_version_and_source_column(self):
-        self.assertEqual(len(MIGRATIONS), 11)
-        self.assertEqual(schema_version(self.repo.conn), 11)
+        self.assertEqual(len(MIGRATIONS), 12)
+        self.assertEqual(schema_version(self.repo.conn), 12)
         columns = {
             row["name"]: row
             for row in self.repo.conn.execute("PRAGMA table_info(transactions)")
         }
         self.assertIn("source", columns)
         self.assertEqual(columns["source"]["dflt_value"], "'manual'")
+        self.assertIn("confirmation_number", columns)
+        self.assertIsNone(columns["confirmation_number"]["dflt_value"])
         self.assertEqual(
             self.repo.conn.execute(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_transactions_match'"
@@ -122,7 +124,7 @@ class TestSchemaV11(Base):
 
             migrate(conn)
 
-            self.assertEqual(schema_version(conn), 11)
+            self.assertEqual(schema_version(conn), 12)
             sources = [
                 row["source"]
                 for row in conn.execute("SELECT source FROM transactions ORDER BY id")
@@ -396,6 +398,33 @@ class TestMarkBillPaidExisting(Base):
         self.assertEqual(stored.source, "manual")
         self.assertEqual(stored.description, "RENT")
         self.assertEqual(stored.occurred_on, date(2026, 10, 3))
+
+    def test_confirmation_number_is_attached_to_the_reused_payment(self):
+        existing = self.regular_payment()
+        self.repo.mark_bill_paid(
+            self.regular.id,
+            paid_on=date(2026, 10, 1),
+            amount_cents=150000,
+            existing_transaction_id=existing.id,
+            confirmation_number="  CONF-7788  ",
+        )
+        stored = self.repo.get_transaction(existing.id)
+        self.assertEqual(stored.confirmation_number, "CONF-7788")
+        self.assertEqual(
+            (stored.amount_cents, stored.occurred_on, stored.description),
+            (150000, date(2026, 10, 1), "RENT"),
+        )
+
+    def test_blank_confirmation_leaves_the_reused_payment_unchanged(self):
+        existing = self.regular_payment()
+        self.repo.mark_bill_paid(
+            self.regular.id,
+            paid_on=date(2026, 10, 1),
+            amount_cents=150000,
+            existing_transaction_id=existing.id,
+            confirmation_number="   ",
+        )
+        self.assertIsNone(self.repo.get_transaction(existing.id).confirmation_number)
 
     def test_mismatched_amount_account_type_or_date_raises(self):
         wrong_amount = self.regular_payment(cents=149999)

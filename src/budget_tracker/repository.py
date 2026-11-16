@@ -282,7 +282,7 @@ class Repository:
     _TX_SELECT = (
         "SELECT t.id, t.amount_cents, t.type, t.category_id, t.account_id, t.transfer_account_id, "
         "t.goal_id, t.debt_id, t.receipt_path, t.occurred_on, t.description, t.statement_id, t.import_ref, "
-        "t.source, c.name AS category_name, c.color AS category_color, c.icon AS category_icon, "
+        "t.source, t.confirmation_number, c.name AS category_name, c.color AS category_color, c.icon AS category_icon, "
         "a.name AS account_name, ta.name AS transfer_account_name"
     )
     _TX_FROM = (
@@ -314,6 +314,7 @@ class Repository:
             debt_id=row["debt_id"],
             receipt_path=row["receipt_path"],
             source=row["source"],
+            confirmation_number=row["confirmation_number"],
         )
 
     def _validate_transaction(self, tx: Transaction) -> None:
@@ -372,6 +373,7 @@ class Repository:
             tx.debt_id,
             tx.occurred_on.isoformat(),
             tx.description.strip(),
+            tx.confirmation_number,
         )
 
     def _payment_debt(self, tx: Transaction) -> Debt | None:
@@ -401,8 +403,9 @@ class Repository:
         with self.conn:
             cur = self.conn.execute(
                 "INSERT INTO transactions (amount_cents, type, account_id, category_id, transfer_account_id, "
-                "goal_id, debt_id, occurred_on, description, statement_id, import_ref, receipt_path, source) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "goal_id, debt_id, occurred_on, description, confirmation_number, statement_id, import_ref, "
+                "receipt_path, source) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (*self._tx_params(tx), tx.statement_id, tx.import_ref, tx.receipt_path, tx.source),
             )
             if (debt := self._payment_debt(tx)) is not None:
@@ -431,7 +434,8 @@ class Repository:
                     )
             updated = self.conn.execute(
                 "UPDATE transactions SET amount_cents = ?, type = ?, account_id = ?, category_id = ?, "
-                "transfer_account_id = ?, goal_id = ?, debt_id = ?, occurred_on = ?, description = ? WHERE id = ?",
+                "transfer_account_id = ?, goal_id = ?, debt_id = ?, occurred_on = ?, description = ?, "
+                "confirmation_number = ? WHERE id = ?",
                 (*self._tx_params(tx), tx.id),
             )
             if updated.rowcount != 1:
@@ -843,9 +847,9 @@ class Repository:
                     tx.import_ref = f"{statement.file_sha256}:{index}"
                     tx_cur = self.conn.execute(
                         "INSERT INTO transactions (amount_cents, type, account_id, category_id, "
-                        "transfer_account_id, goal_id, debt_id, occurred_on, description, statement_id, "
-                        "import_ref, source) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        "transfer_account_id, goal_id, debt_id, occurred_on, description, "
+                        "confirmation_number, statement_id, import_ref, source) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (*self._tx_params(tx), tx.statement_id, tx.import_ref, "import"),
                     )
                     tx.id = tx_cur.lastrowid
@@ -1564,24 +1568,33 @@ class Repository:
         amount_cents: int,
         account_id: int | None = None,
         existing_transaction_id: int | None = None,
+        confirmation_number: str | None = None,
     ) -> Transaction:
         """Record the payment (expense or transfer) and roll the bill to its next due date, atomically.
 
         When ``existing_transaction_id`` is supplied the named transaction is reused instead of
         inserting a new one. It must still satisfy the bill (type, source account, exact amount,
-        destination for a card payment, and a date within seven days); the row itself is never
-        modified. Only the bill's due date changes.
+        destination for a card payment, and a date within seven days). The row's amount, date,
+        account, category and description are never modified; only the optional confirmation
+        number is attached when one is given. The bill's due date advances either way.
         """
         bill = self.get_bill(bill_id)
         if bill is None or not bill.active:
             raise RepositoryError("This bill is no longer active")
         paid_account = account_id or bill.account_id
+        confirmation = (confirmation_number or "").strip() or None
         following = next_due_date(bill.next_due, bill.frequency, bill.anchor_day or bill.next_due.day)
         if existing_transaction_id is not None:
             existing = self.get_transaction(existing_transaction_id)
             if existing is None or not self._bill_matches(bill, existing, paid_account, paid_on, amount_cents):
                 raise RepositoryError("That transaction does not match this bill")
             with self.conn:
+                if confirmation is not None:
+                    self.conn.execute(
+                        "UPDATE transactions SET confirmation_number = ? WHERE id = ?",
+                        (confirmation, existing.id),
+                    )
+                    existing.confirmation_number = confirmation
                 if following is None:
                     self.conn.execute("UPDATE bills SET active = 0 WHERE id = ?", (bill_id,))
                 else:
@@ -1598,12 +1611,14 @@ class Repository:
             account_id=paid_account,
             transfer_account_id=bill.pay_to_account_id,
             source="bill",
+            confirmation_number=confirmation,
         )
         self._validate_transaction(tx)
         with self.conn:
             cur = self.conn.execute(
                 "INSERT INTO transactions (amount_cents, type, account_id, category_id, transfer_account_id, "
-                "goal_id, debt_id, occurred_on, description, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "goal_id, debt_id, occurred_on, description, confirmation_number, source) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (*self._tx_params(tx), tx.source),
             )
             if following is None:

@@ -80,9 +80,9 @@ class Base(unittest.TestCase):
 
 
 class TestIncomeScheduleSchema(Base):
-    def test_schema_version_is_11(self):
-        self.assertEqual(schema_version(self.repo.conn), 11)
-        self.assertEqual(len(MIGRATIONS), 11)
+    def test_schema_version_is_current(self):
+        self.assertEqual(schema_version(self.repo.conn), len(MIGRATIONS))
+        self.assertEqual(len(MIGRATIONS), 12)
 
     def test_table_columns_and_index(self):
         columns = [row[1] for row in self.repo.conn.execute("PRAGMA table_info(income_schedules)")]

@@ -11,7 +11,7 @@ A personal budget tracker desktop app built with **Python 3.13**, **[Flet](https
   comparing avalanche and snowball strategies at several extra monthly amounts.
 - **Year**: monthly budget versus actual spending, year-to-date totals with the same period last year, a run-rate year-end projection, and a daily cash-flow forecast for the next 30, 60, or 90 days with an income plan.
 - **Balance checks and adjustments**: check any account against the balance your bank shows and see the difference. If they disagree, record a signed correction that changes the account balance only — adjustments are excluded from income, spending, and budgets. Earlier checks are kept in a history.
-- **Bills and reminders**: recurring bills (one-time, weekly, monthly, yearly) and credit card payments, each with a due date. Overdue and soon-due bills show on the Bills page, on the Dashboard, and in a pop-up when the app starts. **Mark paid** records the payment and moves the bill to its next due date. Windows notifications can also remind you when the app is closed (see below).
+- **Bills and reminders**: recurring bills (one-time, weekly, monthly, yearly) and credit card payments, each with a due date. Overdue and soon-due bills show on the Bills page, on the Dashboard, and in a pop-up when the app starts. **Mark paid** records the payment and moves the bill to its next due date, with an optional confirmation number saved on that payment. Windows notifications can also remind you when the app is closed (see below).
 - **Transactions**: five types, each tied to an account:
   - **Expense**: money spent, e.g. groceries paid with a credit card.
   - **Income**: money received into an account.
@@ -269,7 +269,7 @@ A matched statement row counts toward the statement's ending balance through its
    - **Bill**: an expense with a category, e.g. rent, utilities, or subscriptions.
    - **Card payment**: a payment from one account to a credit card or loan. Enter an amount of `0` to pay the full balance owed when the bill is due. The destination must be a card or loan; when two full-balance bills target the same card, only the soonest is shown as due so its balance is counted once.
 2. Choose how far ahead you want to be reminded with **Remind me** (on the due date up to 14 days before; the default is 3 days).
-3. When you've paid, click **Mark paid**. Bills are recorded as expenses, and card payments as transfers. The bill then moves to its next due date. Monthly bills keep their day of the month, so a bill due on the 31st is due on Feb 28 and then Mar 31. **Skip** moves to the next due date without recording a payment.
+3. When you've paid, click **Mark paid**. Bills are recorded as expenses, and card payments as transfers. A **Confirmation number** is optional: paste the reference the bank or payment site gave you, and it is saved with that payment, shown under it in Transactions, and included in the Excel export. The bill then moves to its next due date. Monthly bills keep their day of the month, so a bill due on the 31st is due on Feb 28 and then Mar 31. **Skip** moves to the next due date without recording a payment.
 
 ### Notifications when the app is closed (Windows)
 
@@ -292,7 +292,7 @@ schtasks /Create /SC DAILY /ST 09:00 /TN "BudgetTracker Reminders" `
 | Sheet | Contents | Formulas and lookups |
 |---|---|---|
 | **Summary** | Net worth, amount owed on cards, monthly cost of bills, bills overdue, then one row per month (Income, Spending, Net, Savings Rate, Budgeted, Budget Used) and an all-time total | `SUMIFS` over Transactions and Budgets, `COUNTIF` over Bills, plus links to the Accounts and Bills totals |
-| **Transactions** | Every transaction, oldest first: Date, Month, Type, Account, Account Type, Category, To Account, Description, Amount, Cash Flow, Income, Spending | Month = `DATE(YEAR(),MONTH(),1)`; Account Type = `INDEX/MATCH` into Accounts; Cash Flow, Income, and Spending use `IF` (refunds reduce spending) |
+| **Transactions** | Every transaction, oldest first: Date, Month, Type, Account, Account Type, Category, To Account, Description, Amount, Cash Flow, Income, Spending, Confirmation | Month = `DATE(YEAR(),MONTH(),1)`; Account Type = `INDEX/MATCH` into Accounts; Cash Flow, Income, and Spending use `IF` (refunds reduce spending) |
 | **Accounts** | Opening Balance, Money In, Money Out, Balance, Amount Owed, transaction count, plus a Net worth total | `SUMIFS` by account and type (transfers count as money in for the receiving account); credit card owed = `MAX(0,-Balance)` |
 | **Budgets** | Month, Category, Limit, Spent, Remaining, % Used, Status | Spent = `SUMIFS` of Transactions spending by category and month; Status = Over budget / Near limit (80%) / On track |
 | **Bills** | Amount, Repeats, Next Due, Days Until, Status, Pay From, Amount Due, Monthly Cost, Pay-From Balance, Active | Days Until = `Next Due - TODAY()`; Status uses the reminder window from Lookups; Amount Due for an open card payment uses `INDEX/MATCH` to get the card's owed amount; Monthly Cost uses the payments-per-year lookup |

@@ -39,9 +39,9 @@ def _header(*titles: str) -> list[Cell]:
 
 
 def _transactions_sheet(transactions: list[Transaction], account_kinds: dict[str, str]) -> Sheet:
-    sheet = Sheet(TX, widths=[12, 11, 10, 20, 14, 20, 20, 36, 13, 13, 13, 13], freeze_rows=1, filter_header_row=1, tab_color="#3949AB")
+    sheet = Sheet(TX, widths=[12, 11, 10, 20, 14, 20, 20, 36, 13, 13, 13, 13, 20], freeze_rows=1, filter_header_row=1, tab_color="#3949AB")
     sheet.append(
-        _header("Date", "Month", "Type", "Account", "Account Type", "Category", "To Account", "Description", "Amount", "Cash Flow", "Income", "Spending")
+        _header("Date", "Month", "Type", "Account", "Account Type", "Category", "To Account", "Description", "Amount", "Cash Flow", "Income", "Spending", "Confirmation")
     )
     for tx in transactions:
         r = len(sheet.rows) + 1
@@ -69,6 +69,7 @@ def _transactions_sheet(transactions: list[Transaction], account_kinds: dict[str
                     Style.CURRENCY,
                     f'IF(C{r}="Expense",I{r},IF(C{r}="Refund",-I{r},0))',
                 ),
+                tx.confirmation_number or "",
             ]
         )
     return sheet

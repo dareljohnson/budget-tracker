@@ -239,6 +239,12 @@ class MarkPaidDialog:
             value=str(bill.account_id) if any(a.id == bill.account_id for a in sources) else None,
             on_select=self._account_changed,
         )
+        self.confirmation = ft.TextField(
+            label="Confirmation number (optional)",
+            hint_text="The reference the bank or payment site gave you",
+            max_length=80,
+            on_submit=self._save,
+        )
         self.match_group = ft.RadioGroup(
             content=ft.Column([], spacing=4),
             on_change=self._candidate_selected,
@@ -287,6 +293,7 @@ class MarkPaidDialog:
                         self.amount,
                         self.date,
                         self.account,
+                        self.confirmation,
                         self.match_panel,
                     ],
                     spacing=14,
@@ -468,6 +475,7 @@ class MarkPaidDialog:
                     amount_cents=amount,
                     account_id=int(self.account.value),
                     existing_transaction_id=existing_id,
+                    confirmation_number=self.confirmation.value,
                 )
             else:
                 self.ctx.repo.mark_bill_paid(
@@ -475,6 +483,7 @@ class MarkPaidDialog:
                     paid_on=paid_on,
                     amount_cents=amount,
                     account_id=int(self.account.value),
+                    confirmation_number=self.confirmation.value,
                 )
         except RepositoryError as exc:
             self._saving = False

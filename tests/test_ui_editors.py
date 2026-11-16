@@ -654,11 +654,31 @@ class TestEditors(unittest.TestCase):
         dialog.open()
         self.assertEqual(dialog.amount.value, "45.00")
         self.assertNotIn(str(self.accts["Credit Card"].id), [o.key for o in dialog.account.options])
+        dialog.confirmation.value = "  CONF-4471  "
         dialog._save(None)
         self.assertEqual((self.page.errors, self.page.open_dialogs), ([], []))
         balances = {b.account.name: b.balance_cents for b in self.repo.account_balances()}
         self.assertEqual((balances["Credit Card"], balances["Checking"]), (0, -4500))
         self.assertEqual(self.repo.get_bill(bill.id).next_due.month, (date.today().month % 12) + 1)
+        [payment] = [
+            tx for tx in self.repo.list_transactions() if tx.type is TransactionType.TRANSFER
+        ]
+        self.assertEqual(payment.confirmation_number, "CONF-4471")
+
+    def test_transaction_subtitle_shows_the_confirmation_number(self):
+        from budget_tracker.ui.components import _transaction_subtitle
+
+        tx = Transaction(
+            4500,
+            TransactionType.TRANSFER,
+            None,
+            date(2026, 11, 4),
+            "Visa payment",
+            account_id=self.accts["Checking"].id,
+            transfer_account_id=self.accts["Credit Card"].id,
+            confirmation_number="CONF-4471",
+        )
+        self.assertIn("Confirmation CONF-4471", _transaction_subtitle(tx))
 
     def test_bill_editor_validation_and_startup_alert(self):
         from budget_tracker.main import show_due_bills_alert

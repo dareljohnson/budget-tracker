@@ -4,7 +4,7 @@ A personal budget tracker desktop app built with **Python 3.13**, **[Flet](https
 
 ## Features
 
-- **Dashboard**: net worth across all accounts, monthly income and spending, savings rate, spending by category, a six-month income vs. spending trend, account balances, budget health, and recent activity.
+- **Dashboard**: net worth across all accounts, monthly income and spending, savings rate, spending by category, a six-month income vs. spending trend, account balances, budget health, recent activity, and the five days in the selected month with the highest net spending.
 - **Accounts**: checking, savings, credit card, cash, and other accounts, each with a live balance. Credit cards show the amount owed, and **Pay card** records a payment from your checking account.
 - **Goals**: savings targets with progress, a fixed monthly plan, and contributions recorded as transfers.
 - **Debts**: credit cards, auto, student, personal, mortgage and other debts, with a payoff planner

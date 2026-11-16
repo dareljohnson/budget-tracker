@@ -314,6 +314,15 @@ class MonthTotal:
     expense_cents: int
 
 
+@dataclass(slots=True, frozen=True)
+class DailySpend:
+    """One day's spending total, net of refunds, and how many entries it has."""
+
+    day: date
+    total_cents: int
+    transaction_count: int
+
+
 class BillFrequency(StrEnum):
     ONCE = "once"
     WEEKLY = "weekly"

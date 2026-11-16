@@ -27,6 +27,7 @@ from .models import (
     Bill,
     BudgetProgress,
     CategoryTotal,
+    DailySpend,
     Debt,
     DebtKind,
     DueBill,
@@ -73,6 +74,7 @@ class DashboardData:
     recent: list[Transaction]
     budgets: list[BudgetProgress]
     upcoming_bills: list[DueBill]
+    top_days: list[DailySpend]
 
     @property
     def net_worth_cents(self) -> int:
@@ -176,6 +178,7 @@ class BudgetService:
             recent=self.repo.list_transactions(limit=6),
             budgets=self.repo.budget_progress(month),
             upcoming_bills=self.due_bills(),
+            top_days=self.repo.top_spending_days(month),
         )
 
     def available_years(self) -> list[int]:

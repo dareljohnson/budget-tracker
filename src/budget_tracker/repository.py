@@ -18,6 +18,7 @@ from .models import (
     Category,
     CategoryRule,
     CategoryTotal,
+    DailySpend,
     Debt,
     DebtKind,
     DueBill,
@@ -1312,6 +1313,29 @@ class Repository:
         )
         by_month = {r["m"]: (r["income"], r["expense"]) for r in rows}
         return [MonthTotal(m, *by_month.get(m, (0, 0))) for m in months]
+
+    def top_spending_days(self, month: str, limit: int = 5) -> list[DailySpend]:
+        """Days in a month with the highest net spending, largest first.
+
+        Refunds reduce that day's total; days whose net total is zero or negative are omitted.
+        Transfers and adjustments never count as spending.
+        """
+        start, end = _month_bounds(month)
+        rows = self.conn.execute(
+            f"SELECT occurred_on, SUM({_SPEND_SQL.format(t='')}) AS total, COUNT(*) AS entries "
+            "FROM transactions WHERE occurred_on >= ? AND occurred_on < ? "
+            "AND type IN ('expense', 'refund') GROUP BY occurred_on "
+            "HAVING total > 0 ORDER BY total DESC, occurred_on ASC LIMIT ?",
+            (start, end, max(0, int(limit))),
+        )
+        return [
+            DailySpend(
+                day=date.fromisoformat(row["occurred_on"]),
+                total_cents=row["total"],
+                transaction_count=row["entries"],
+            )
+            for row in rows
+        ]
 
     def budget_totals(self, months: Sequence[str]) -> dict[str, tuple[int, int]]:
         """Overall limit and number of budgets per month, for the requested months."""

@@ -7,7 +7,7 @@ from collections.abc import Callable
 import flet as ft
 
 from ...formatting import format_money, month_label, short_month_label
-from ...models import BudgetProgress, CategoryTotal, MonthTotal
+from ...models import BudgetProgress, CategoryTotal, DailySpend, MonthTotal
 from ...services import DashboardData
 from ..components import (
     MonthSelector,
@@ -65,7 +65,11 @@ class DashboardView:
                         spacing=GAP,
                         col={"xs": 12, "lg": 6},
                     ),
-                    card(self._recent(data), col={"xs": 12, "lg": 6}),
+                    ft.Column(
+                        [card(self._recent(data)), card(self._top_days(data))],
+                        spacing=GAP,
+                        col={"xs": 12, "lg": 6},
+                    ),
                 ],
                 spacing=GAP,
                 run_spacing=GAP,
@@ -265,3 +269,63 @@ class DashboardView:
         if not data.recent:
             return ft.Column([header, empty_state(ft.Icons.RECEIPT_LONG, "No transactions", "Add your first transaction to get started.")])
         return ft.Column([header, *[transaction_row(t) for t in data.recent]], spacing=2)
+
+    @staticmethod
+    def _top_days(data: DashboardData) -> ft.Column:
+        """The five days in the selected month with the most net spending."""
+        header = section_title(
+            "Highest spending days",
+            ft.Text(month_label(data.month), size=fs(12), color=ft.Colors.ON_SURFACE_VARIANT),
+        )
+        if not data.top_days:
+            return ft.Column(
+                [
+                    header,
+                    empty_state(
+                        ft.Icons.CALENDAR_MONTH_OUTLINED,
+                        "No spending yet",
+                        "Days with expenses in this month will be ranked here.",
+                    ),
+                ]
+            )
+        peak = max(day.total_cents for day in data.top_days)
+        rows: list[ft.Control] = []
+        for index, day in enumerate(data.top_days):
+            rows.append(
+                ft.Row(
+                    [
+                        ft.Column(
+                            [
+                                ft.Text(
+                                    day.day.strftime("%a, %b %d"),
+                                    size=fs(13),
+                                    weight=ft.FontWeight.W_600,
+                                ),
+                                ft.Text(
+                                    f"{day.transaction_count} entr{'y' if day.transaction_count == 1 else 'ies'}",
+                                    size=fs(11),
+                                    color=ft.Colors.ON_SURFACE_VARIANT,
+                                ),
+                            ],
+                            spacing=0,
+                            width=96,
+                        ),
+                        ft.ProgressBar(
+                            value=day.total_cents / peak if peak else 0,
+                            color=EXPENSE_COLOR if index == 0 else ft.Colors.SECONDARY,
+                            bgcolor=ft.Colors.SURFACE_CONTAINER_LOW,
+                            expand=True,
+                        ),
+                        ft.Text(
+                            format_money(day.total_cents),
+                            size=fs(13),
+                            weight=ft.FontWeight.W_600,
+                            width=88,
+                            text_align=ft.TextAlign.RIGHT,
+                        ),
+                    ],
+                    spacing=10,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                )
+            )
+        return ft.Column([header, *rows], spacing=8)

@@ -175,10 +175,11 @@ class TestMonthlyReport(Base):
         self.assertEqual(report.period_detail, "October 1 - October 31, 2026")
         self.assertEqual(report.filename, "budget_tracker_monthly_2026-10.pdf")
 
-    def test_balances_exclude_transactions_after_the_generation_date(self) -> None:
-        self.income(999_000, date(2026, 12, 1))
-        report = self.reports.monthly("2026-10", today=date(2026, 10, 31))
+    def test_balances_are_as_of_the_selected_month_end(self) -> None:
+        self.income(999_000, date(2026, 11, 5))
+        report = self.reports.monthly("2026-10", today=date(2026, 11, 16))
 
+        self.assertEqual(report.balances_as_of, date(2026, 10, 31))
         balances = {row.account.name: row.balance_cents for row in report.accounts}
         self.assertEqual(balances["Checking"], 340_000)
         self.assertEqual(report.net_worth_cents, 260_000)
@@ -248,6 +249,21 @@ class TestYearReport(Base):
         self.assertEqual(report.in_progress_month, "2026-12")
         self.assertEqual(report.period_label, "2026 to date")
         self.assertEqual(report.period_detail, "January 1 - December 15, 2026")
+
+    def test_future_dated_transactions_are_excluded_from_actuals(self) -> None:
+        self.spend(50_000, "Groceries", date(2026, 3, 20))
+        report = self.reports.year(2026, today=date(2026, 3, 15))
+
+        self.assertEqual(report.spending_cents, 360_000)
+        self.assertEqual(report.overview.months[2].spending_cents, 130_000)
+        self.assertEqual(report.projected_year_end_cents, 1_440_000)
+        self.assertEqual(report.categories[0].amount_cents, 360_000)
+
+    def test_prior_year_comparison_uses_the_same_cutoff(self) -> None:
+        self.spend(100_000, "Groceries", date(2025, 3, 20))
+        report = self.reports.year(2026, today=date(2026, 3, 15))
+
+        self.assertEqual(report.prior_spending_cents, 180_000)
 
 
 class TestCategorySlices(Base):
@@ -337,6 +353,15 @@ class TestNetWorthReport(Base):
         self.assertGreater(report.goals[0].required_monthly_cents, 0)
         self.assertEqual(report.period_label, "As of November 16, 2026")
         self.assertEqual(report.filename, "budget_tracker_net_worth_2026-11-16.pdf")
+
+    def test_debt_balances_use_the_report_cutoff(self) -> None:
+        self.transfer(30_000, "Checking", "Credit Card", date(2026, 12, 1))
+        report = self.reports.net_worth(today=TODAY)
+
+        debts = {row.name: row.balance_cents for row in report.debts}
+        self.assertEqual(debts["Visa"], 30_000)
+        self.assertEqual(report.liabilities_cents, 30_000)
+        self.assertEqual(report.net_worth_cents, 230_000)
 
     def test_liquid_and_other_assets_are_separated(self) -> None:
         self.repo.add_account(Account("Home", AccountKind.OTHER, 500_000))
@@ -431,6 +456,15 @@ class TestReportPdf(Base):
         report = self.reports.net_worth(today=TODAY)
         data = render_report_pdf(report)
         self.assertGreaterEqual(page_count(data), 1)
+
+    def test_negative_spending_charts_render(self) -> None:
+        self.refund(500_000, "Groceries", date(2026, 10, 7))
+        monthly = self.reports.monthly("2026-10", today=TODAY)
+        year = self.reports.year(2026, today=TODAY)
+        self.assertLess(monthly.spending_cents, 0)
+        self.assertLess(year.spending_cents, 0)
+        self.assertGreaterEqual(page_count(render_report_pdf(monthly)), 1)
+        self.assertGreaterEqual(page_count(render_report_pdf(year)), 1)
 
     def test_empty_database_still_renders_each_report(self) -> None:
         empty = Repository(connect(":memory:"))

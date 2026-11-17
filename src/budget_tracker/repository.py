@@ -507,6 +507,7 @@ class Repository:
         account_id: int | None = None,
         search: str | None = None,
         limit: int | None = None,
+        through: date | None = None,
     ) -> list[Transaction]:
         clauses: list[str] = []
         params: list = []
@@ -514,6 +515,9 @@ class Repository:
             start, end = _month_bounds(month)
             clauses.append("t.occurred_on >= ? AND t.occurred_on < ?")
             params += [start, end]
+        if through is not None:
+            clauses.append("t.occurred_on <= ?")
+            params.append(through.isoformat())
         if type_ is not None:
             clauses.append("t.type = ?")
             params.append(type_.value)
@@ -1300,47 +1304,70 @@ class Repository:
         return None
 
     # ---------- aggregates ----------
-    def summary(self, month: str | None = None) -> Summary:
+    def summary(self, month: str | None = None, *, through: date | None = None) -> Summary:
         sql = (
             f"SELECT COALESCE(SUM({_INCOME_SQL.format(t='')}), 0) AS income, "
             f"COALESCE(SUM({_SPEND_SQL.format(t='')}), 0) AS expense FROM transactions"
         )
-        params: tuple = ()
+        params: list = []
+        conditions: list[str] = []
         if month:
-            sql += " WHERE occurred_on >= ? AND occurred_on < ?"
-            params = _month_bounds(month)
+            start, end = _month_bounds(month)
+            conditions.append("occurred_on >= ? AND occurred_on < ?")
+            params += [start, end]
+        if through is not None:
+            conditions.append("occurred_on <= ?")
+            params.append(through.isoformat())
+        if conditions:
+            sql += " WHERE " + " AND ".join(conditions)
         row = self.conn.execute(sql, params).fetchone()
         return Summary(income_cents=row["income"], expense_cents=row["expense"])
 
-    def totals_by_category(self, month: str, type_: TransactionType = TransactionType.EXPENSE) -> list[CategoryTotal]:
+    def totals_by_category(
+        self,
+        month: str,
+        type_: TransactionType = TransactionType.EXPENSE,
+        *,
+        through: date | None = None,
+    ) -> list[CategoryTotal]:
         """Per-category totals for a month, net of refunds.
 
         A category whose refunds exceed its expenses keeps its negative total so the category
         amounts add up to the month's net spending figure; only zero-total categories are dropped.
+        ``through`` limits the totals to transactions on or before that date.
         """
         start, end = _month_bounds(month)
         amount = _SPEND_SQL if type_ == TransactionType.EXPENSE else _INCOME_SQL
-        rows = self.conn.execute(
+        sql = (
             f"SELECT c.id, c.name, c.color, SUM({amount.format(t='t.')}) AS total FROM transactions t "
             "JOIN categories c ON c.id = t.category_id "
-            "WHERE c.type = ? AND t.occurred_on >= ? AND t.occurred_on < ? "
-            "GROUP BY c.id HAVING total <> 0 ORDER BY total DESC",
-            (type_.value, start, end),
+            "WHERE c.type = ? AND t.occurred_on >= ? AND t.occurred_on < ?"
         )
+        params: list = [type_.value, start, end]
+        if through is not None:
+            sql += " AND t.occurred_on <= ?"
+            params.append(through.isoformat())
+        sql += " GROUP BY c.id HAVING total <> 0 ORDER BY total DESC"
+        rows = self.conn.execute(sql, params)
         return [CategoryTotal(r["id"], r["name"], r["color"], r["total"]) for r in rows]
 
-    def monthly_totals(self, months: list[str]) -> list[MonthTotal]:
+    def monthly_totals(self, months: list[str], *, through: date | None = None) -> list[MonthTotal]:
         if not months:
             return []
         start, _ = _month_bounds(min(months))
         _, end = _month_bounds(max(months))
-        rows = self.conn.execute(
+        sql = (
             "SELECT substr(occurred_on, 1, 7) AS m, "
             f"COALESCE(SUM({_INCOME_SQL.format(t='')}), 0) AS income, "
             f"COALESCE(SUM({_SPEND_SQL.format(t='')}), 0) AS expense "
-            "FROM transactions WHERE occurred_on >= ? AND occurred_on < ? GROUP BY m",
-            (start, end),
+            "FROM transactions WHERE occurred_on >= ? AND occurred_on < ?"
         )
+        params: list = [start, end]
+        if through is not None:
+            sql += " AND occurred_on <= ?"
+            params.append(through.isoformat())
+        sql += " GROUP BY m"
+        rows = self.conn.execute(sql, params)
         by_month = {r["m"]: (r["income"], r["expense"]) for r in rows}
         return [MonthTotal(m, *by_month.get(m, (0, 0))) for m in months]
 
@@ -1430,14 +1457,22 @@ class Repository:
         rows = self.conn.execute("SELECT DISTINCT month FROM budgets ORDER BY month DESC")
         return [r["month"] for r in rows]
 
-    def budget_progress(self, month: str) -> list[BudgetProgress]:
+    def budget_progress(self, month: str, *, through: date | None = None) -> list[BudgetProgress]:
         start, end = _month_bounds(month)
+        spent_sql = (
+            f"COALESCE((SELECT SUM({_SPEND_SQL.format(t='t.')}) FROM transactions t "
+            "WHERE t.category_id = b.category_id AND t.occurred_on >= ? AND t.occurred_on < ?"
+        )
+        params: list = [start, end]
+        if through is not None:
+            spent_sql += " AND t.occurred_on <= ?"
+            params.append(through.isoformat())
+        spent_sql += "), 0) AS spent"
+        params.append(month)
         rows = self.conn.execute(
-            "SELECT b.id, b.category_id, c.name, c.color, c.icon, b.limit_cents, "
-            f"COALESCE((SELECT SUM({_SPEND_SQL.format(t='t.')}) FROM transactions t WHERE t.category_id = b.category_id "
-            "AND t.occurred_on >= ? AND t.occurred_on < ?), 0) AS spent "
+            f"SELECT b.id, b.category_id, c.name, c.color, c.icon, b.limit_cents, {spent_sql} "
             "FROM budgets b JOIN categories c ON c.id = b.category_id WHERE b.month = ? ORDER BY c.name",
-            (start, end, month),
+            params,
         )
         return [
             BudgetProgress(r["id"], r["category_id"], r["name"], r["color"], r["icon"], r["limit_cents"], r["spent"])

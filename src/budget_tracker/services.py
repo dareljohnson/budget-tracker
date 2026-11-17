@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import calendar
 import csv
 import hashlib
 from dataclasses import dataclass
@@ -195,12 +196,20 @@ class BudgetService:
     def available_years(self) -> list[int]:
         return self.repo.data_years()
 
-    def year_overview(self, year: int, today: date | None = None) -> YearOverview:
+    def year_overview(
+        self,
+        year: int,
+        today: date | None = None,
+        *,
+        through: date | None = None,
+    ) -> YearOverview:
         """Monthly budget-vs-spending and cash flow for one year.
 
         The YTD figures cover January through the chosen month for the current year, all twelve
         months for a past year, and nothing for a future year. The year-end projection is a simple
-        run-rate: YTD spending divided by the months elapsed, times twelve.
+        run-rate: YTD spending divided by the months elapsed, times twelve. ``through`` limits the
+        aggregates to transactions on or before that date; reports use it so a future-dated
+        transaction in the current month does not appear as actual spending.
         """
         today = today or date.today()
         if year < today.year:
@@ -210,7 +219,7 @@ class BudgetService:
         else:
             elapsed = 0
         months = [f"{year:04d}-{month:02d}" for month in range(1, 13)]
-        totals = {total.month: total for total in self.repo.monthly_totals(months)}
+        totals = {total.month: total for total in self.repo.monthly_totals(months, through=through)}
         budgets = self.repo.budget_totals(months)
         year_months: list[YearMonth] = []
         for month in months:
@@ -236,7 +245,13 @@ class BudgetService:
         prior_spending = prior_income = None
         if elapsed:
             prior_months = [f"{year - 1:04d}-{month:02d}" for month in range(1, elapsed + 1)]
-            prior = self.repo.monthly_totals(prior_months)
+            prior_through = None
+            if through is not None and through.year == year:
+                # Compare the same slice of the prior year, not a full final month on one side
+                # and a partial one on the other.
+                prior_day = min(through.day, calendar.monthrange(year - 1, through.month)[1])
+                prior_through = date(year - 1, through.month, prior_day)
+            prior = self.repo.monthly_totals(prior_months, through=prior_through)
             if any(month.income_cents or month.expense_cents for month in prior):
                 prior_spending = sum(month.expense_cents for month in prior)
                 prior_income = sum(month.income_cents for month in prior)
@@ -995,11 +1010,18 @@ class BudgetService:
                 return balance.owed_cents
         return 0
 
-    def debt_summary(self, debt_id: int) -> DebtSummary:
+    def debt_summary(self, debt_id: int, *, as_of: date | None = None) -> DebtSummary:
         debt = self.repo.get_debt(debt_id)
         if debt is None:
             raise RepositoryError("Debt not found")
-        balance = self._card_owed(debt.account_id) if debt.account_id is not None else debt.balance_cents
+        if debt.account_id is not None:
+            balance = (
+                self.repo.amount_owed_as_of(debt.account_id, as_of)
+                if as_of is not None
+                else self._card_owed(debt.account_id)
+            )
+        else:
+            balance = debt.balance_cents
         account_name = None
         minimum = debt.minimum_cents
         from_statement = False
@@ -1008,7 +1030,7 @@ class BudgetService:
             account = self.repo.get_account(debt.account_id)
             account_name = account.name if account else None
             if account is not None and account.kind is AccountKind.CREDIT_CARD:
-                status = self.current_minimum_payment(debt.account_id, as_of=date.today())
+                status = self.current_minimum_payment(debt.account_id, as_of=as_of or date.today())
                 if status is not None:
                     minimum, from_statement, statement_month = status.amount_cents, True, status.month
         interest = monthly_interest_cents(balance, debt.apr_bps)
@@ -1023,8 +1045,8 @@ class BudgetService:
             account_name=account_name,
         )
 
-    def list_debt_summaries(self) -> list[DebtSummary]:
-        return [self.debt_summary(debt.id) for debt in self.repo.list_debts()]
+    def list_debt_summaries(self, *, as_of: date | None = None) -> list[DebtSummary]:
+        return [self.debt_summary(debt.id, as_of=as_of) for debt in self.repo.list_debts()]
 
     def create_debt(
         self,
@@ -1162,12 +1184,13 @@ class BudgetService:
         strategy: DebtStrategy,
         *,
         today: date | None = None,
+        as_of: date | None = None,
     ) -> DebtPlan:
         if extra_cents < 0:
             raise RepositoryError("Extra payment cannot be negative")
         inputs = [
             DebtInput(summary.debt, summary.balance_cents, summary.effective_minimum_cents)
-            for summary in self.list_debt_summaries()
+            for summary in self.list_debt_summaries(as_of=as_of)
             if summary.balance_cents > 0
         ]
         return plan_payoff(

@@ -223,7 +223,7 @@ Choose **Reports** in the navigation rail to turn your ledger into a document yo
 
 ### What each report includes
 
-- **Monthly summary** — income, spending, net, savings rate, and budget use; a six-month income and spending chart; spending by category; every budget with its spent, remaining, and status; the five largest expenses; and account balances with net worth as of the generation date. Category amounts are net of refunds, so a category where refunds exceed spending appears as a negative amount, and shares use net spending.
+- **Monthly summary** — income, spending, net, savings rate, and budget use; a six-month income and spending chart; spending by category; every budget with its spent, remaining, and status; the five largest expenses; and account balances with net worth as of the end of the report month, or today while that month is still in progress. Category amounts are net of refunds, so a category where refunds exceed spending appears as a negative amount, and shares use net spending.
 - **Year in review** — year-to-date income, spending, net, and savings rate; a cumulative budget-versus-spending chart with a year-end projection; month-by-month budget performance (the current month is marked **In progress**); annual category totals; a comparison with the same period last year when that data exists; and the year-end pace.
 - **Net worth statement** — net worth with changes since last month and January 1; a twelve-month trend; **liquid and non-liquid assets** listed separately, followed by liabilities by account; each debt's balance, APR, minimum, monthly interest, and payoff at its current minimum, with an avalanche comparison at $200 extra per month; and progress on each savings goal.
 
@@ -233,7 +233,7 @@ Choose **Reports** in the navigation rail to turn your ledger into a document yo
 - **Net worth is account-based**, matching the Dashboard. A debt linked to a card or loan is represented by that account. A standalone debt appears in the debt table but is not part of account net worth.
 - **Liquidity is a property of each account.** The cash-flow forecast counts only accounts marked Liquid; the net-worth statement groups assets into Liquid and Other using the same flag. A house or car remains part of net worth even though it is not spendable cash.
 - The year report includes the current month to date, and labels the period **to date** when that month is not complete. Future months in the chart use a simple run rate: spending year to date divided by the number of months elapsed, times twelve. It is an estimate, not a forecast of specific bills.
-- The monthly report's balances are as of the date it is generated and exclude transactions dated after that date. A balance is signed: a negative card or loan balance is money owed.
+- The monthly report's balances and aggregates are as of the end of its month, or as of today while that month is still in progress. Transactions dated after the cutoff are excluded. A balance is signed: a negative card or loan balance is money owed.
 - Debt payoff estimates assume a fixed APR, monthly compounding, the minimums currently recorded, and constant payments. A plan that cannot finish within 50 years is reported as **Does not pay off**; a minimum below the monthly interest will not reduce the balance.
 
 ## Importing bank statements

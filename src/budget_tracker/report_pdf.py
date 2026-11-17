@@ -435,10 +435,11 @@ def _render_monthly(report: MonthlyReport) -> bytes:
     else:
         pdf.note("No expenses recorded for this month.")
 
+    as_of = report.balances_as_of
     pdf.section(
         "Balances",
-        f"As of {calendar.month_abbr[report.generated_on.month]} {report.generated_on.day}, "
-        f"{report.generated_on.year} | net worth {_money(report.net_worth_cents)}",
+        f"As of {calendar.month_abbr[as_of.month]} {as_of.day}, "
+        f"{as_of.year} | net worth {_money(report.net_worth_cents)}",
         reserve=22,
     )
     if report.accounts:

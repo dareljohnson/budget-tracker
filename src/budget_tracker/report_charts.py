@@ -81,12 +81,12 @@ def _draw_grid(
 ) -> None:
     """Five horizontal rules with compact labels, including zero when it is in range."""
     span = top_value - low_value or 1.0
-    for value in _tick_values(top_value - low_value):
-        y = bottom - value / span * (bottom - top)
-        color = AXIS if abs(value) < 1e-9 and low_value <= 0 else GRID
+    for offset in _tick_values(top_value - low_value):
+        actual = low_value + offset
+        y = bottom - offset / span * (bottom - top)
+        color = AXIS if abs(actual) < 1e-9 else GRID
         draw.line((left, y, right, y), fill=color, width=2)
-        label = _compact(low_value + value)
-        draw.text((left - 14, y), label, font=_font(26), fill=MUTED, anchor="rm")
+        draw.text((left - 14, y), _compact(actual), font=_font(26), fill=MUTED, anchor="rm")
 
 
 def _draw_legend(
@@ -111,6 +111,23 @@ def _draw_legend(
         width, _ = _text_size(draw, label, font)
         draw.text((cursor + 42, y + 18), label, font=font, fill=MUTED, anchor="lm")
         cursor += 42 + width + 34
+
+
+def _draw_zero_line(
+    draw: ImageDraw.ImageDraw,
+    *,
+    left: int,
+    right: int,
+    top: int,
+    bottom: int,
+    low: float,
+    high: float,
+) -> None:
+    """A visible baseline when a chart includes negative values."""
+    if low >= 0 or high <= low:
+        return
+    y = bottom - (0 - low) / (high - low) * (bottom - top)
+    draw.line((left, y, right, y), fill=AXIS, width=3)
 
 
 def _dashed_line(
@@ -188,7 +205,14 @@ def monthly_chart_png(
     plot_left, plot_right = left, width - right
     plot_top, plot_bottom = top, height - bottom
     values = [value for month in trend for value in (month.income_cents, month.expense_cents)]
-    axis_top = _nice_top(max(values or [0]))
+    low = min(0, min(values))
+    high = max(0, max(values))
+    axis_low = -_nice_top(-low) if low < 0 else 0.0
+    axis_high = _nice_top(high) if high > 0 else 100.0
+    span = axis_high - axis_low or 1.0
+
+    def y_at(value: float) -> float:
+        return plot_bottom - (value - axis_low) / span * (plot_bottom - plot_top)
 
     _draw_grid(
         draw,
@@ -196,7 +220,17 @@ def monthly_chart_png(
         right=plot_right,
         top=plot_top,
         bottom=plot_bottom,
-        top_value=axis_top,
+        top_value=axis_high,
+        low_value=axis_low,
+    )
+    _draw_zero_line(
+        draw,
+        left=plot_left,
+        right=plot_right,
+        top=plot_top,
+        bottom=plot_bottom,
+        low=axis_low,
+        high=axis_high,
     )
     _draw_legend(
         draw,
@@ -210,7 +244,7 @@ def monthly_chart_png(
     bar_width = min(72, max(24, group_width * 0.30))
     gap = 10
 
-    if max(values or [0]) <= 0:
+    if not any(values):
         draw.text(
             (width / 2, height / 2),
             "No income or spending in this period",
@@ -220,24 +254,27 @@ def monthly_chart_png(
         )
         return _png_bytes(image)
 
+    zero_y = y_at(0)
+
+    def draw_bar(x: float, value: int, color: str) -> None:
+        if value == 0:
+            return
+        end_y = y_at(value)
+        rect_top = min(zero_y, end_y)
+        rect_bottom = max(zero_y, end_y)
+        radius = min(8, max(1, int((rect_bottom - rect_top) / 2)))
+        draw.rounded_rectangle(
+            (x, rect_top, x + bar_width, rect_bottom),
+            radius=radius,
+            fill=color,
+        )
+
     for index, month in enumerate(trend):
         center = plot_left + group_width * (index + 0.5)
         income_x = center - bar_width - gap / 2
         spending_x = center + gap / 2
-        income_height = month.income_cents / axis_top * (plot_bottom - plot_top)
-        spending_height = month.expense_cents / axis_top * (plot_bottom - plot_top)
-        if income_height > 0:
-            draw.rounded_rectangle(
-                (income_x, plot_bottom - income_height, income_x + bar_width, plot_bottom),
-                radius=min(8, max(1, int(min(bar_width, income_height) / 2))),
-                fill=INCOME,
-            )
-        if spending_height > 0:
-            draw.rounded_rectangle(
-                (spending_x, plot_bottom - spending_height, spending_x + bar_width, plot_bottom),
-                radius=min(8, max(1, int(min(bar_width, spending_height) / 2))),
-                fill=SPENDING,
-            )
+        draw_bar(income_x, month.income_cents, INCOME)
+        draw_bar(spending_x, month.expense_cents, SPENDING)
         draw.text(
             (center, plot_bottom + 24),
             short_month_label(month.month),
@@ -249,7 +286,7 @@ def monthly_chart_png(
             label_font = _font(24)
             if month.income_cents > 0:
                 draw.text(
-                    (income_x + bar_width / 2, plot_bottom - income_height - 16),
+                    (income_x + bar_width / 2, y_at(month.income_cents) - 16),
                     _whole_money(month.income_cents),
                     font=label_font,
                     fill=INK,
@@ -257,11 +294,19 @@ def monthly_chart_png(
                 )
             if month.expense_cents > 0:
                 draw.text(
-                    (spending_x + bar_width / 2, plot_bottom - spending_height - 16),
+                    (spending_x + bar_width / 2, y_at(month.expense_cents) - 16),
                     _whole_money(month.expense_cents),
                     font=label_font,
                     fill=INK,
                     anchor="mb",
+                )
+            elif month.expense_cents < 0:
+                draw.text(
+                    (spending_x + bar_width / 2, y_at(month.expense_cents) + 16),
+                    _whole_money(month.expense_cents),
+                    font=label_font,
+                    fill=INK,
+                    anchor="mt",
                 )
     return _png_bytes(image)
 
@@ -286,14 +331,38 @@ def cumulative_chart_png(
     left, right, top, bottom = 170, 270, 112, 92
     plot_left, plot_right = left, width - right
     plot_top, plot_bottom = top, height - bottom
-    axis_top = _nice_top(max([*budget[:count], *spending[:count], 0]))
+    values = [*budget[:count], *spending[:count]]
+    if not any(values):
+        draw.text(
+            (width / 2, height / 2),
+            "No budget or spending in this period",
+            font=_font(28),
+            fill=MUTED,
+            anchor="mm",
+        )
+        return _png_bytes(image)
+    low = min(0, min(values))
+    high = max(0, max(values))
+    axis_low = -_nice_top(-low) if low < 0 else 0.0
+    axis_high = _nice_top(high) if high > 0 else 100.0
+    span = axis_high - axis_low or 1.0
     _draw_grid(
         draw,
         left=plot_left,
         right=plot_right,
         top=plot_top,
         bottom=plot_bottom,
-        top_value=axis_top,
+        top_value=axis_high,
+        low_value=axis_low,
+    )
+    _draw_zero_line(
+        draw,
+        left=plot_left,
+        right=plot_right,
+        top=plot_top,
+        bottom=plot_bottom,
+        low=axis_low,
+        high=axis_high,
     )
     _draw_legend(
         draw,
@@ -306,17 +375,22 @@ def cumulative_chart_png(
         return plot_left + (plot_right - plot_left) * index / max(1, count - 1)
 
     def y_at(value: float) -> float:
-        return plot_bottom - min(max(value, 0), axis_top) / axis_top * (plot_bottom - plot_top)
+        return plot_bottom - (value - axis_low) / span * (plot_bottom - plot_top)
 
     actual = max(0, min(actual_months, count))
+    zero_y = y_at(0)
     if actual > 0:
         actual_points = [(x_at(index), y_at(spending[index])) for index in range(actual)]
-        area = (
-            [(x_at(0), plot_bottom)]
-            + actual_points
-            + [(x_at(actual - 1), plot_bottom)]
-        )
-        draw.polygon(area, fill=SPENDING_WASH)
+        for start, end in zip(actual_points, actual_points[1:]):
+            draw.polygon(
+                [
+                    start,
+                    end,
+                    (end[0], zero_y),
+                    (start[0], zero_y),
+                ],
+                fill=SPENDING_WASH,
+            )
         if len(actual_points) > 1:
             draw.line(actual_points, fill=SPENDING, width=5, joint="curve")
         else:

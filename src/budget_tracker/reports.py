@@ -123,6 +123,11 @@ class MonthlyReport:
         return f"{calendar.month_name[month]} 1 - {calendar.month_name[month]} {last}, {year}"
 
     @property
+    def balances_as_of(self) -> date:
+        """Month end for a past month; the generation date for the current or a future month."""
+        return min(self.generated_on, _month_end(self.month))
+
+    @property
     def filename(self) -> str:
         return f"budget_tracker_monthly_{self.month}.pdf"
 
@@ -514,16 +519,16 @@ class ReportService:
 
     def monthly(self, month: str, *, today: date | None = None) -> MonthlyReport:
         today = today or date.today()
+        cutoff = min(today, _month_end(month))
         trend_months = [shift_month(month, offset) for offset in range(-5, 1)]
-        summary = self.repo.summary(month)
-        # Balances are labeled as of the generation date. Using account_balances() would also
-        # count transactions dated after that date, which would make the report's "Balances"
-        # include money that has not moved yet.
+        summary = self.repo.summary(month, through=cutoff)
+        # A monthly report is a snapshot of its period. Month-end for a past month; today for
+        # the current month. account_balances() would count anything dated later.
         accounts = [
-            AccountBalance(account, self.repo.account_balance_as_of(account.id, today))
+            AccountBalance(account, self.repo.account_balance_as_of(account.id, cutoff))
             for account in self.repo.list_accounts()
         ]
-        progress = self.repo.budget_progress(month)
+        progress = self.repo.budget_progress(month, through=cutoff)
         budgets = [
             BudgetRow(
                 name=budget.category_name,
@@ -536,7 +541,7 @@ class ReportService:
             for budget in progress
         ]
         budgets.sort(key=lambda row: (-row.ratio, row.name.casefold()))
-        categories = self.repo.totals_by_category(month, TransactionType.EXPENSE)
+        categories = self.repo.totals_by_category(month, TransactionType.EXPENSE, through=cutoff)
         budgeted_ids = {budget.category_id for budget in progress}
         unbudgeted = sum(
             total.total_cents
@@ -546,7 +551,7 @@ class ReportService:
         largest = sorted(
             (
                 transaction
-                for transaction in self.repo.list_transactions(month=month)
+                for transaction in self.repo.list_transactions(month=month, through=cutoff)
                 if transaction.type is TransactionType.EXPENSE
             ),
             key=lambda transaction: (
@@ -562,7 +567,7 @@ class ReportService:
             summary=summary,
             budgets=budgets,
             categories=_category_slices(categories, total_cents=summary.expense_cents),
-            trend=self.repo.monthly_totals(trend_months),
+            trend=self.repo.monthly_totals(trend_months, through=cutoff),
             largest=largest,
             accounts=accounts,
             unbudgeted_spending_cents=unbudgeted,
@@ -570,11 +575,15 @@ class ReportService:
 
     def year(self, year: int, *, today: date | None = None) -> YearReport:
         today = today or date.today()
-        overview = self.service.year_overview(year, today=today)
+        overview = self.service.year_overview(year, today=today, through=today)
         actual_months = overview.elapsed_months
         totals: dict[int, CategoryTotal] = {}
         for month in overview.months[:actual_months]:
-            for total in self.repo.totals_by_category(month.month, TransactionType.EXPENSE):
+            for total in self.repo.totals_by_category(
+                month.month,
+                TransactionType.EXPENSE,
+                through=today,
+            ):
                 previous = totals.get(total.category_id)
                 if previous is None:
                     totals[total.category_id] = total
@@ -637,7 +646,7 @@ class ReportService:
             self.repo.account_balance_as_of(balance.account.id, year_start)
             for balance in accounts
         )
-        summaries = self.service.list_debt_summaries()
+        summaries = self.service.list_debt_summaries(as_of=today)
         debts: list[DebtRow] = []
         for summary in summaries:
             plan = plan_payoff(
@@ -666,10 +675,17 @@ class ReportService:
                 )
             )
         minimum_plan = (
-            self.service.debt_plan(0, DebtStrategy.AVALANCHE, today=today) if summaries else None
+            self.service.debt_plan(0, DebtStrategy.AVALANCHE, today=today, as_of=today)
+            if summaries
+            else None
         )
         extra_plan = (
-            self.service.debt_plan(NET_WORTH_EXTRA_CENTS, DebtStrategy.AVALANCHE, today=today)
+            self.service.debt_plan(
+                NET_WORTH_EXTRA_CENTS,
+                DebtStrategy.AVALANCHE,
+                today=today,
+                as_of=today,
+            )
             if summaries
             else None
         )

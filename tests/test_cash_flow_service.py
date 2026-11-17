@@ -170,6 +170,23 @@ class TestLiquidBalances(Base):
         self.assertEqual(result.lowest_cents, 0)
         self.assertFalse(result.has_income)
 
+    def test_other_account_marked_liquid_is_included(self):
+        brokerage = self.repo.add_account(Account("Brokerage", AccountKind.OTHER, 100_000, liquid=True))
+
+        result = self.service.cash_flow(TODAY)
+
+        self.assertIn(brokerage.id, result.endings_by_account)
+        self.assertEqual(result.starting_cents, 100_000)
+
+    def test_checking_account_marked_non_liquid_is_excluded(self):
+        self.checking.liquid = False
+        self.repo.update_account(self.checking)
+
+        result = self.service.cash_flow(TODAY)
+
+        self.assertNotIn(self.checking.id, result.endings_by_account)
+        self.assertIn(self.cash.id, result.endings_by_account)
+
 
 class TestBills(Base):
     def test_active_regular_bill_becomes_a_forecast_event(self):
@@ -708,6 +725,19 @@ class TestIncomeScheduleCrud(Base):
         self.assertEqual(self.repo.transaction_count(savings.id), 0)
         self.service.delete_income_schedule(created.id)
         self.assertEqual(self.repo.transaction_count(savings.id), 0)
+
+    def test_income_can_be_deposited_into_a_liquid_other_account(self):
+        brokerage = self.repo.add_account(Account("Brokerage", AccountKind.OTHER, 0, liquid=True))
+
+        created = self.add_income(account=brokerage)
+
+        self.assertEqual(created.account_id, brokerage.id)
+
+    def test_income_cannot_be_deposited_into_a_non_liquid_account(self):
+        home = self.repo.add_account(Account("Home", AccountKind.OTHER, 0))
+
+        with self.assertRaises(RepositoryError):
+            self.add_income(account=home)
 
 
 if __name__ == "__main__":

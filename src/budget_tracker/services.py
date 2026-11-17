@@ -9,7 +9,6 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from .cashflow import (
-    LIQUID_KINDS,
     CardMinimum,
     CashFlowForecast,
     ForecastBill,
@@ -272,7 +271,7 @@ class BudgetService:
         horizon = max(0, horizon_days)
         full_end = today + timedelta(days=self.FULL_CASH_FLOW_HORIZON)
         accounts = self.repo.list_accounts()
-        liquid = [account for account in accounts if account.kind in LIQUID_KINDS]
+        liquid = [account for account in accounts if account.liquid]
         if not liquid:
             return CashFlowForecast(
                 points=[],
@@ -338,7 +337,7 @@ class BudgetService:
             bills.append(ForecastBill(bill, amount))
 
         source = next(
-            (account for account in accounts if account.kind is AccountKind.CHECKING), liquid[0]
+            (account for account in liquid if account.kind is AccountKind.CHECKING), liquid[0]
         )
         minimums: list[CardMinimum] = []
         for account in accounts:

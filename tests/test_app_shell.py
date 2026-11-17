@@ -53,5 +53,6 @@ def test_nav_indices_stay_in_sync_with_the_labels():
     from budget_tracker import main as shell
 
     assert shell.NAV_ITEMS[1][0] == "Year"
+    assert shell.NAV_ITEMS[shell.REPORTS_INDEX][0] == "Reports"
     assert shell.NAV_ITEMS[shell.TRANSACTIONS_INDEX][0] == "Transactions"
     assert shell.NAV_ITEMS[shell.BILLS_INDEX][0] == "Bills"

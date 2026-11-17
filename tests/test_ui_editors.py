@@ -896,7 +896,7 @@ class TestEditors(unittest.TestCase):
     def test_nav_indices_stay_in_sync_with_budgets(self):
         from budget_tracker import main as shell
 
-        self.assertEqual(shell.BUDGETS_INDEX, 7)
+        self.assertEqual(shell.BUDGETS_INDEX, 8)
         self.assertEqual(shell.NAV_ITEMS[shell.BUDGETS_INDEX][0], "Budgets")
 
     def test_year_view_accepts_a_budgets_callback(self):
@@ -1089,6 +1089,41 @@ class TestEditors(unittest.TestCase):
         loan = next(a for a in self.repo.list_accounts() if a.name == "Mortgage")
         self.assertEqual((loan.kind, loan.opening_balance_cents), (AccountKind.LOAN, -100_000))
 
+    def test_account_editor_saves_liquid_flag_for_an_other_asset(self):
+        from budget_tracker.ui.views.accounts import AccountEditor
+
+        editor = AccountEditor(self.ctx, None)
+        editor.name.value = "Brokerage"
+        editor._kind_changed(_event(value=AccountKind.OTHER.value))
+        self.assertTrue(editor.liquid_block.visible)
+        self.assertFalse(editor.liquid_switch.value)
+
+        editor.liquid_switch.value = True
+        editor._liquid_changed(_event(value=True))
+        editor.opening.value = "1000.00"
+        editor._save(None)
+
+        account = next(a for a in self.repo.list_accounts() if a.name == "Brokerage")
+        self.assertTrue(account.liquid)
+
+    def test_accounts_mark_liquid_and_other_assets(self):
+        from budget_tracker.ui.views.accounts import AccountsView
+
+        self.repo.add_account(Account("Rainy Day", AccountKind.SAVINGS, 50_000))
+        self.repo.add_account(Account("Brokerage", AccountKind.OTHER, 100_000))
+        view = AccountsView(self.ctx)
+        stats = {
+            card.content.controls[0].controls[0].value: card.content.controls[0].controls[1].value
+            for card in view.stats.controls
+        }
+        self.assertEqual(stats["Liquid Assets"], "$500.00")
+        self.assertEqual(stats["Other Assets"], "$1,000.00")
+
+        savings_card = next(c for c in view.grid.controls if any("Rainy Day" in t for t in self._texts(c)))
+        brokerage_card = next(c for c in view.grid.controls if any("Brokerage" in t for t in self._texts(c)))
+        self.assertTrue(any("Liquid" in t for t in self._texts(savings_card)))
+        self.assertTrue(any("Non-liquid" in t for t in self._texts(brokerage_card)))
+
     @staticmethod
     def _texts(control) -> list[str]:
         values = []
@@ -1127,7 +1162,7 @@ class TestEditors(unittest.TestCase):
 
     def test_nav_indices_stay_in_sync_with_goals(self):
         from budget_tracker import main as shell
-        self.assertEqual(shell.NAV_ITEMS[4][0], "Goals")
+        self.assertEqual(shell.NAV_ITEMS[5][0], "Goals")
         self.assertEqual(shell.NAV_ITEMS[shell.BILLS_INDEX][0], "Bills")
 
     def test_editing_a_goal_contribution_preserves_the_tag(self):
@@ -1252,7 +1287,7 @@ class TestEditors(unittest.TestCase):
 
     def test_nav_indices_stay_in_sync_with_debts(self):
         from budget_tracker import main as shell
-        self.assertEqual(shell.NAV_ITEMS[5][0], "Debts")
+        self.assertEqual(shell.NAV_ITEMS[6][0], "Debts")
         self.assertEqual(shell.NAV_ITEMS[shell.BILLS_INDEX][0], "Bills")
 
     def test_percent_parsing_and_formatting(self):

@@ -4,13 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "budget-tracker"
-version = "1.8.4"
+version = "1.9.0"
 description = "A personal budget tracker desktop app built with Flet and SQLite"
 readme = "README.md"
 requires-python = ">=3.13"
 # Only what the packaged app needs at runtime; `flet build` bundles exactly this list.
 dependencies = [
     "flet>=1.1,<2",
+    # Print-ready PDF reports.
+    "fpdf2>=2.7,<3",
     "pdfplumber>=0.11,<1",
     # Local OCR: RapidOCR on ONNX Runtime, plus PDF rasterisation and image loading.
     "rapidocr-onnxruntime==1.2.3",
@@ -22,7 +24,7 @@ dependencies = [
 [project.optional-dependencies]
 # Desktop runner, CLI (flet build) and web preview for running from source.
 desktop = ["flet[all]>=1.1,<2"]
-dev = ["flet[all]>=1.1,<2", "pytest>=8", "fpdf2>=2.7"]
+dev = ["flet[all]>=1.1,<2", "pytest>=8"]
 
 [project.scripts]
 budget-tracker = "budget_tracker.main:run"

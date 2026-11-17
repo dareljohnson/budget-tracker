@@ -40,7 +40,6 @@ if TYPE_CHECKING:
 
 REMINDER_DAYS_SETTING = "reminder_days"
 DEFAULT_REMINDER_DAYS = 3
-LIQUID_ACCOUNT_KINDS = frozenset({AccountKind.CHECKING, AccountKind.SAVINGS, AccountKind.CASH})
 
 # Net spending: expenses minus refunds. Transfers are neither income nor spending.
 _SPEND_SQL = "CASE {t}type WHEN 'expense' THEN {t}amount_cents WHEN 'refund' THEN -{t}amount_cents ELSE 0 END"
@@ -150,18 +149,19 @@ class Repository:
             opening_balance_cents=row["opening_balance_cents"],
             color=row["color"],
             number_last4=row["number_last4"],
+            liquid=bool(row["liquid"]),
         )
 
     def list_accounts(self) -> list[Account]:
         rows = self.conn.execute(
-            "SELECT id, name, kind, opening_balance_cents, color, number_last4 FROM accounts "
+            "SELECT id, name, kind, opening_balance_cents, color, number_last4, liquid FROM accounts "
             "ORDER BY kind IN ('credit_card','loan'), name"
         )
         return [self._row_to_account(r) for r in rows]
 
     def get_account(self, account_id: int) -> Account | None:
         row = self.conn.execute(
-            "SELECT id, name, kind, opening_balance_cents, color, number_last4 FROM accounts WHERE id = ?",
+            "SELECT id, name, kind, opening_balance_cents, color, number_last4, liquid FROM accounts WHERE id = ?",
             (account_id,),
         ).fetchone()
         return self._row_to_account(row) if row else None
@@ -174,9 +174,16 @@ class Repository:
         try:
             with self.conn:
                 cur = self.conn.execute(
-                    "INSERT INTO accounts (name, kind, opening_balance_cents, color, number_last4) "
-                    "VALUES (?, ?, ?, ?, ?)",
-                    (name, account.kind.value, account.opening_balance_cents, account.color, number_last4),
+                    "INSERT INTO accounts (name, kind, opening_balance_cents, color, number_last4, liquid) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        name,
+                        account.kind.value,
+                        account.opening_balance_cents,
+                        account.color,
+                        number_last4,
+                        int(bool(account.liquid)),
+                    ),
                 )
         except sqlite3.IntegrityError as exc:
             raise RepositoryError(f"An account named '{name}' already exists") from exc
@@ -208,10 +215,17 @@ class Repository:
         try:
             with self.conn:
                 self.conn.execute(
-                    "UPDATE accounts SET name = ?, kind = ?, opening_balance_cents = ?, color = ?, number_last4 = ? "
-                    "WHERE id = ?",
-                    (name, account.kind.value, account.opening_balance_cents, account.color, number_last4,
-                     account.id),
+                    "UPDATE accounts SET name = ?, kind = ?, opening_balance_cents = ?, color = ?, number_last4 = ?, "
+                    "liquid = ? WHERE id = ?",
+                    (
+                        name,
+                        account.kind.value,
+                        account.opening_balance_cents,
+                        account.color,
+                        number_last4,
+                        int(bool(account.liquid)),
+                        account.id,
+                    ),
                 )
         except sqlite3.IntegrityError as exc:
             raise RepositoryError(f"An account named '{name}' already exists") from exc
@@ -269,7 +283,7 @@ class Repository:
     def account_balances(self) -> list[AccountBalance]:
         """Current balance of every account. Credit cards go negative as you spend on them."""
         rows = self.conn.execute(
-            "SELECT a.id, a.name, a.kind, a.opening_balance_cents, a.color, a.number_last4, "
+            "SELECT a.id, a.name, a.kind, a.opening_balance_cents, a.color, a.number_last4, a.liquid, "
             "a.opening_balance_cents "
             "+ COALESCE((SELECT SUM(CASE t.type WHEN 'expense' THEN -t.amount_cents WHEN 'transfer' THEN -t.amount_cents "
             "WHEN 'adjustment' THEN t.amount_cents ELSE t.amount_cents END) FROM transactions t WHERE t.account_id = a.id), 0) "
@@ -1094,8 +1108,8 @@ class Repository:
         account = self.get_account(schedule.account_id)
         if account is None:
             raise RepositoryError("Select the account the income is deposited into")
-        if account.kind not in LIQUID_ACCOUNT_KINDS:
-            raise RepositoryError("Income must be deposited into a checking, savings or cash account")
+        if not account.liquid:
+            raise RepositoryError("Income must be deposited into a liquid account")
 
     @staticmethod
     def _income_params(schedule: IncomeSchedule) -> tuple:

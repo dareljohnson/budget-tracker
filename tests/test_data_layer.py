@@ -66,6 +66,31 @@ class TestSchema(RepoTestCase):
         self.assertEqual(schema_version(conn), len(MIGRATIONS))
         conn.close()
 
+    def test_v13_adds_liquid_defaults_to_existing_accounts(self):
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = OFF")
+        for script in MIGRATIONS[:12]:
+            conn.executescript(script)
+        conn.execute(
+            "INSERT INTO accounts (name, kind, opening_balance_cents, color) "
+            "VALUES ('Home', 'other', 100000, '#000000')"
+        )
+        conn.execute(
+            "INSERT INTO accounts (name, kind, opening_balance_cents, color) "
+            "VALUES ('Savings', 'savings', 50000, '#000000')"
+        )
+        conn.execute("PRAGMA user_version = 12")
+        conn.commit()
+        conn.execute("PRAGMA foreign_keys = ON")
+        migrate(conn)
+        rows = {row["name"]: row["liquid"] for row in conn.execute("SELECT name, liquid FROM accounts")}
+        conn.close()
+
+        self.assertEqual(rows["Checking"], 1)
+        self.assertEqual(rows["Savings"], 1)
+        self.assertEqual(rows["Home"], 0)
+
     def test_reopening_file_db_does_not_reseed(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "t.db"
@@ -178,6 +203,24 @@ class TestBudgetsAndAggregates(RepoTestCase):
 
 
 class TestAccountsTransfersRefunds(RepoTestCase):
+    def test_account_liquidity_defaults_and_round_trips(self):
+        home = self.repo.add_account(Account("Home", AccountKind.OTHER, 100_000))
+        checking = self.repo.get_account(self.accts["Checking"].id)
+        cash = self.repo.get_account(self.accts["Cash"].id)
+        card = self.repo.get_account(self.accts["Credit Card"].id)
+
+        self.assertFalse(home.liquid)
+        self.assertTrue(checking.liquid)
+        self.assertTrue(cash.liquid)
+        self.assertFalse(card.liquid)
+
+        brokerage = self.repo.add_account(Account("Brokerage", AccountKind.OTHER, 50_000, liquid=True))
+        self.assertTrue(self.repo.get_account(brokerage.id).liquid)
+
+        home.liquid = True
+        self.repo.update_account(home)
+        self.assertTrue(self.repo.get_account(home.id).liquid)
+
     def test_card_purchase_and_payment_are_not_double_counted(self):
         self.add(300000, "Salary", date(2026, 3, 1))
         self.add(12000, "Groceries", date(2026, 3, 5), account="Credit Card")

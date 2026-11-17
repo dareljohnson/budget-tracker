@@ -30,7 +30,7 @@ class AccountsView:
             [
                 page_header(
                     "Accounts",
-                    "Bank accounts, credit cards and cash in one place",
+                    "Bank accounts, cash, investments, property and debts in one place",
                     [
                         ft.OutlinedButton(
                             content="Transfer",
@@ -54,6 +54,12 @@ class AccountsView:
         balances = self.ctx.repo.account_balances()
         net_worth = sum(b.balance_cents for b in balances)
         assets = sum(b.balance_cents for b in balances if b.balance_cents > 0)
+        liquid_assets = sum(
+            b.balance_cents
+            for b in balances
+            if b.balance_cents > 0 and b.account.liquid and not b.account.kind.is_liability
+        )
+        other_assets = assets - liquid_assets
         # Only liabilities count as debts here; an overdrawn checking or savings account is not a
         # debt (it still lowers net worth above and shows on its own card).
         debts = sum(
@@ -63,17 +69,18 @@ class AccountsView:
         )
         self.stats.controls = [
             stat_card("Net Worth", format_money(net_worth), ft.Icons.ACCOUNT_BALANCE_WALLET, SEED_COLOR, "Assets minus debts"),
-            stat_card("Assets", format_money(assets), ft.Icons.TRENDING_UP, INCOME_COLOR, "Accounts in credit"),
+            stat_card("Liquid Assets", format_money(liquid_assets), ft.Icons.PAYMENTS, INCOME_COLOR, "Checking, savings and cash"),
+            stat_card("Other Assets", format_money(other_assets), ft.Icons.ACCOUNT_BALANCE, SEED_COLOR, "Investments, property and other"),
             stat_card("Debts", format_money(debts), ft.Icons.CREDIT_CARD, EXPENSE_COLOR, "Credit card and loan balances owed"),
         ]
         for control in self.stats.controls:
-            control.col = {"xs": 12, "sm": 6, "xl": 4}
+            control.col = {"xs": 12, "sm": 6, "xl": 3}
         self.grid.controls = [self._account_card(b) for b in balances] or [
             card(
                 empty_state(
                     ft.Icons.ACCOUNT_BALANCE,
                     "No accounts",
-                    "Add a checking account, credit card or cash wallet to start tracking.",
+                    "Add checking, savings, cash, or an Other account for investments and property.",
                 ),
                 col=12,
             )
@@ -113,12 +120,13 @@ class AccountsView:
             ),
         ]
         caption = "Owed" if is_liability and balance.owed_cents else "Balance"
+        mode = "Liability" if is_liability else ("Liquid" if account.liquid else "Non-liquid")
         if transactions:
-            details = f"{account.kind.label}  •  {transactions} transaction(s)"
+            details = f"{account.kind.label}  •  {mode}  •  {transactions} transaction(s)"
         elif usage:
-            details = f"{account.kind.label}  •  in use by an income schedule"
+            details = f"{account.kind.label}  •  {mode}  •  in use by an income schedule"
         else:
-            details = f"{account.kind.label}  •  0 transaction(s)"
+            details = f"{account.kind.label}  •  {mode}  •  0 transaction(s)"
         if account.number_last4:
             details += f"  •  •••• {account.number_last4}"
         heading: list[ft.Control] = [
@@ -229,6 +237,20 @@ class AccountEditor:
             options=[ft.DropdownOption(key=k.value, text=k.label) for k in AccountKind],
             on_select=self._kind_changed,
         )
+        self.liquid = account.liquid if account is not None else self.kind.default_liquid
+        self.liquid_switch = ft.Switch(
+            label="Liquid",
+            value=bool(self.liquid),
+            on_change=self._liquid_changed,
+        )
+        self.liquid_help = ft.Text(
+            "Count this account as liquid in the cash-flow forecast and reports.",
+            size=fs(12),
+            color=ft.Colors.ON_SURFACE_VARIANT,
+        )
+        self.liquid_block = ft.Column(
+            [self.liquid_switch, self.liquid_help], spacing=0
+        )
         self.number_last4 = ft.TextField(
             label="Last 4 digits (optional)",
             value=(account.number_last4 or "") if account else "",
@@ -258,6 +280,7 @@ class AccountEditor:
                     [
                         ft.Row([self.preview, ft.Column([self.name], expand=True)], spacing=GAP, vertical_alignment=ft.CrossAxisAlignment.START),
                         self.kind_dropdown,
+                        self.liquid_block,
                         self.number_last4,
                         self.opening,
                         ft.Text("Color", weight=ft.FontWeight.W_600),
@@ -279,6 +302,8 @@ class AccountEditor:
         self.ctx.page.show_dialog(self.dialog)
 
     def _render(self) -> None:
+        self.liquid_block.visible = not self.kind.is_liability
+        self.liquid_switch.value = bool(self.liquid)
         if self.kind.is_liability:
             self.opening.label = "Amount currently owed"
             self.opening.hint_text = "Balance before your first tracked transaction"
@@ -306,8 +331,12 @@ class AccountEditor:
         self._render()
         self.dialog.update()
 
+    def _liquid_changed(self, e: ft.Event[ft.Switch]) -> None:
+        self.liquid = bool(e.control.value)
+
     def _kind_changed(self, e: ft.Event[ft.Dropdown]) -> None:
         self.kind = AccountKind(e.control.value)
+        self.liquid = self.kind.default_liquid
         self._render()
 
     def _save(self, _: ft.Event) -> None:
@@ -340,6 +369,7 @@ class AccountEditor:
             opening_balance_cents=opening,
             color=self.color,
             number_last4=last4 or None,
+            liquid=self.liquid,
         )
         try:
             if account.id:

@@ -42,6 +42,7 @@ from .ui.views.categories import CategoriesView
 from .ui.views.dashboard import DashboardView
 from .ui.views.debts import DebtsView
 from .ui.views.goals import GoalsView
+from .ui.views.reports import ReportsView
 from .ui.views.transactions import TransactionsView
 from .ui.views.year import YearView
 
@@ -53,6 +54,7 @@ TEXT_SIZE_SETTING = "text_scale"
 NAV_ITEMS = [
     ("Dashboard", ft.Icons.DASHBOARD_OUTLINED, ft.Icons.DASHBOARD),
     ("Year", ft.Icons.CALENDAR_MONTH_OUTLINED, ft.Icons.CALENDAR_MONTH),
+    ("Reports", ft.Icons.DESCRIPTION_OUTLINED, ft.Icons.DESCRIPTION),
     ("Transactions", ft.Icons.RECEIPT_LONG_OUTLINED, ft.Icons.RECEIPT_LONG),
     ("Accounts", ft.Icons.ACCOUNT_BALANCE_OUTLINED, ft.Icons.ACCOUNT_BALANCE),
     ("Goals", ft.Icons.SAVINGS_OUTLINED, ft.Icons.SAVINGS),
@@ -61,9 +63,10 @@ NAV_ITEMS = [
     ("Budgets", ft.Icons.TRACK_CHANGES_OUTLINED, ft.Icons.TRACK_CHANGES),
     ("Categories", ft.Icons.CATEGORY_OUTLINED, ft.Icons.CATEGORY),
 ]
-TRANSACTIONS_INDEX = 2
-BILLS_INDEX = 6
-BUDGETS_INDEX = 7
+REPORTS_INDEX = 2
+TRANSACTIONS_INDEX = 3
+BILLS_INDEX = 7
+BUDGETS_INDEX = 8
 ALERT_MAX_ROWS = 6
 AUTO_BACKUP_INTERVAL_SECONDS = 6 * 60 * 60
 
@@ -162,6 +165,7 @@ def main(page: ft.Page) -> None:
         return [
             DashboardView(ctx, on_view_bills=lambda: show_view(BILLS_INDEX)),
             YearView(ctx, on_view_budgets=lambda: show_view(BUDGETS_INDEX)),
+            ReportsView(ctx),
             TransactionsView(ctx),
             AccountsView(ctx),
             GoalsView(ctx),
@@ -267,6 +271,9 @@ def main(page: ft.Page) -> None:
         label_type=ft.NavigationRailLabelType.ALL,
         min_width=120,
         group_alignment=-0.85,
+        scrollable=True,
+        pin_leading_to_top=True,
+        pin_trailing_to_bottom=True,
         indicator_color=ft.Colors.PRIMARY_CONTAINER,
         selected_label_text_style=ft.TextStyle(
             color=ft.Colors.ON_PRIMARY_CONTAINER, weight=ft.FontWeight.BOLD

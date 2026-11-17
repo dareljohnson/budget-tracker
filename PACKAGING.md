@@ -76,7 +76,7 @@ the venv launcher fail silently.
 1. `flet build <platform>` creates a Flutter project in `build/flutter`. It packages `src/main.py`, the
    `budget_tracker` package and `src/assets/icon.png`, along with a **Python 3.13** runtime (pinned with
    `--python-version 3.13`) and the dependencies listed in `[project].dependencies` (`flet`,
-   `pdfplumber`, `pypdfium2`, `Pillow`, `rapidocr-onnxruntime` and `onnxruntime`).
+   `fpdf2`, `pdfplumber`, `pypdfium2`, `Pillow`, `rapidocr-onnxruntime` and `onnxruntime`).
 2. Flutter compiles a native executable into `build/<platform>/`.
 3. The scripts in `packaging/<platform>/build.*` wrap that folder in an installer under `build/installer/`.
 
@@ -119,6 +119,10 @@ dependency the statement and receipt features already use. It adds no new depend
 network calls; the forecast is derived only from data already in the local database. Theme presets and
 the Large text setting are respected because the chart is re-rendered with the current colors and text
 scale.
+
+The **reports** feature adds **fpdf2**, a small pure-Python PDF writer, as a normal runtime
+dependency. Report charts are drawn with the same Pillow dependency, and the in-app PDF preview is
+rasterised with pypdfium2, which statement import already needs. No report data leaves the PC.
 
 Import supports most US checking or savings statements — specifically, those that print a standard
 date / description / amount transaction table — in PDF, PNG, or JPEG form, and is accepted only when

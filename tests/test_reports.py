@@ -15,6 +15,7 @@ from budget_tracker.models import (
     Account,
     AccountKind,
     Budget,
+    Debt,
     DebtKind,
     SavingsGoal,
     Transaction,
@@ -174,6 +175,14 @@ class TestMonthlyReport(Base):
         self.assertEqual(report.period_detail, "October 1 - October 31, 2026")
         self.assertEqual(report.filename, "budget_tracker_monthly_2026-10.pdf")
 
+    def test_balances_exclude_transactions_after_the_generation_date(self) -> None:
+        self.income(999_000, date(2026, 12, 1))
+        report = self.reports.monthly("2026-10", today=date(2026, 10, 31))
+
+        balances = {row.account.name: row.balance_cents for row in report.accounts}
+        self.assertEqual(balances["Checking"], 340_000)
+        self.assertEqual(report.net_worth_cents, 260_000)
+
     def test_empty_month_is_a_valid_report(self) -> None:
         report = self.reports.monthly("2026-04", today=date(2026, 10, 31))
 
@@ -226,11 +235,38 @@ class TestYearReport(Base):
         self.assertAlmostEqual(report.spending_change, 1.0)
         self.assertAlmostEqual(report.prior_savings_rate, 0.4)
         self.assertAlmostEqual(report.savings_rate_change, 0.0)
-        self.assertEqual(report.period_label, "January - March 2026")
+        self.assertEqual(report.period_label, "2026 to date")
         self.assertEqual(report.period_detail, "January 1 - March 15, 2026")
+        self.assertEqual(report.in_progress_month, "2026-03")
         self.assertEqual(report.filename, "budget_tracker_year_2026.pdf")
         self.assertEqual(month_status(report.overview.months[2], in_progress=True), "In progress")
         self.assertEqual(month_status(report.overview.months[0]), "Under")
+
+    def test_december_partial_month_is_to_date(self) -> None:
+        report = self.reports.year(2026, today=date(2026, 12, 15))
+
+        self.assertEqual(report.in_progress_month, "2026-12")
+        self.assertEqual(report.period_label, "2026 to date")
+        self.assertEqual(report.period_detail, "January 1 - December 15, 2026")
+
+
+class TestCategorySlices(Base):
+    def test_refund_heavy_category_is_kept_and_shares_use_net_spending(self) -> None:
+        self.spend(100_000, "Groceries", date(2026, 10, 1))
+        self.refund(150_000, "Groceries", date(2026, 10, 2))
+        self.spend(50_000, "Dining Out", date(2026, 10, 3))
+        self.spend(100_000, "Shopping", date(2026, 10, 4))
+
+        report = self.reports.monthly("2026-10", today=date(2026, 10, 31))
+
+        amounts = {item.name: item.amount_cents for item in report.categories}
+        self.assertEqual(amounts, {"Shopping": 100_000, "Dining Out": 50_000, "Groceries": -50_000})
+        self.assertEqual(sum(amounts.values()), report.spending_cents)
+        shares = {item.name: item.share for item in report.categories}
+        self.assertAlmostEqual(shares["Shopping"], 1.0)
+        self.assertAlmostEqual(shares["Dining Out"], 0.5)
+        self.assertAlmostEqual(shares["Groceries"], -0.5)
+        self.assertAlmostEqual(sum(shares.values()), 1.0)
 
 
 class TestNetWorthReport(Base):
@@ -377,6 +413,22 @@ class TestReportPdf(Base):
     def test_unicode_description_does_not_break_the_pdf(self) -> None:
         self.spend(99_999, "Groceries", date(2026, 10, 20), description="Café — 日本 • 100%")
         report = self.reports.monthly("2026-10", today=TODAY)
+        data = render_report_pdf(report)
+        self.assertGreaterEqual(page_count(data), 1)
+
+    def test_december_partial_month_is_marked_in_progress(self) -> None:
+        report = self.reports.year(2026, today=date(2026, 12, 15))
+        text = self._text(render_report_pdf(report))
+        self.assertIn("2026 to date", text)
+        self.assertIn("January 1 - December 15, 2026", text)
+        self.assertIn("In progress", text)
+        self.assertIn("Year to date", text)
+
+    def test_legacy_long_debt_name_does_not_break_the_pdf(self) -> None:
+        self.repo.add_debt(
+            Debt("x" * 1_200, DebtKind.AUTO, 100_000, 490, 5_000)
+        )
+        report = self.reports.net_worth(today=TODAY)
         data = render_report_pdf(report)
         self.assertGreaterEqual(page_count(data), 1)
 

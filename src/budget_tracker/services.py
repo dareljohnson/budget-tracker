@@ -962,8 +962,11 @@ class BudgetService:
         *,
         debt_id: int | None = None,
     ) -> None:
-        if not (name or "").strip():
+        name = (name or "").strip()
+        if not name:
             raise RepositoryError("Debt name is required")
+        if len(name) > 80:
+            raise RepositoryError("Debt name must be 80 characters or fewer")
         if not isinstance(kind, DebtKind):
             raise RepositoryError("Choose a debt kind")
         if balance_cents < 0:

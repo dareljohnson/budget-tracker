@@ -185,7 +185,24 @@ class YearReport:
         return "Year in Review"
 
     @property
+    def in_progress_month(self) -> str | None:
+        """The current month when this report was generated before that month ended.
+
+        ``elapsed_months`` counts the current month even on its first day, so a December report
+        generated on the 15th used to look like a completed year. This keeps the partial month
+        distinct from a finished one.
+        """
+        if self.generated_on.year != self.year:
+            return None
+        last_day = calendar.monthrange(self.year, self.generated_on.month)[1]
+        if self.generated_on.day >= last_day:
+            return None
+        return f"{self.year:04d}-{self.generated_on.month:02d}"
+
+    @property
     def period_label(self) -> str:
+        if self.in_progress_month is not None:
+            return f"{self.year} to date"
         if self.actual_months <= 0 or self.actual_months >= 12:
             return str(self.year)
         last_month = self.overview.months[self.actual_months - 1].month
@@ -193,6 +210,8 @@ class YearReport:
 
     @property
     def period_detail(self) -> str:
+        if self.in_progress_month is not None:
+            return f"January 1 - {_long_date(self.generated_on)}"
         if self.actual_months >= 12:
             return f"January 1 - December 31, {self.year}"
         if self.actual_months <= 0:
@@ -415,30 +434,36 @@ def _month_end(month: str) -> date:
     return date(year, mon, calendar.monthrange(year, mon)[1])
 
 
-def _category_slices(totals: list[CategoryTotal], *, limit: int = RANKED_CATEGORY_LIMIT) -> list[CategorySlice]:
-    """Rank positive category totals and fold the tail into one labelled row.
+def _category_slices(
+    totals: list[CategoryTotal],
+    *,
+    total_cents: int,
+    limit: int = RANKED_CATEGORY_LIMIT,
+) -> list[CategorySlice]:
+    """Rank category totals and fold the tail into one labelled row.
 
-    Refund-heavy categories can be negative. They stay out of the ranked chart, so the
-    shares are shares of positive spending and always total 100% (within rounding).
+    Negative totals stay in the table: a category whose refunds exceed its spending is part of
+    the period's net spending. Shares use that same net total, so the table reconciles with the
+    Spending KPI instead of omitting a refund-heavy category.
     """
-    positive = sorted(
-        (total for total in totals if total.total_cents > 0),
+    nonzero = sorted(
+        (total for total in totals if total.total_cents != 0),
         key=lambda total: (-total.total_cents, total.name.casefold()),
     )
-    denominator = sum(total.total_cents for total in positive)
-    if denominator <= 0:
+    if not nonzero:
         return []
-    if len(positive) <= limit + 1:
-        selected = positive
+    denominator = total_cents if total_cents else 0
+    if len(nonzero) <= limit + 1:
+        selected = nonzero
         tail: list[CategoryTotal] = []
     else:
-        selected = positive[:limit]
-        tail = positive[limit:]
+        selected = nonzero[:limit]
+        tail = nonzero[limit:]
     slices = [
         CategorySlice(
             name=total.name,
             amount_cents=total.total_cents,
-            share=total.total_cents / denominator,
+            share=total.total_cents / denominator if denominator else 0.0,
             color=total.color,
         )
         for total in selected
@@ -449,7 +474,7 @@ def _category_slices(totals: list[CategoryTotal], *, limit: int = RANKED_CATEGOR
             CategorySlice(
                 name=f"Other ({len(tail)} categories)",
                 amount_cents=tail_total,
-                share=tail_total / denominator,
+                share=tail_total / denominator if denominator else 0.0,
                 color="#9AA0AD",
                 muted=True,
             )
@@ -490,7 +515,14 @@ class ReportService:
     def monthly(self, month: str, *, today: date | None = None) -> MonthlyReport:
         today = today or date.today()
         trend_months = [shift_month(month, offset) for offset in range(-5, 1)]
-        accounts = self.repo.account_balances()
+        summary = self.repo.summary(month)
+        # Balances are labeled as of the generation date. Using account_balances() would also
+        # count transactions dated after that date, which would make the report's "Balances"
+        # include money that has not moved yet.
+        accounts = [
+            AccountBalance(account, self.repo.account_balance_as_of(account.id, today))
+            for account in self.repo.list_accounts()
+        ]
         progress = self.repo.budget_progress(month)
         budgets = [
             BudgetRow(
@@ -527,9 +559,9 @@ class ReportService:
         return MonthlyReport(
             month=month,
             generated_on=today,
-            summary=self.repo.summary(month),
+            summary=summary,
             budgets=budgets,
-            categories=_category_slices(categories),
+            categories=_category_slices(categories, total_cents=summary.expense_cents),
             trend=self.repo.monthly_totals(trend_months),
             largest=largest,
             accounts=accounts,
@@ -573,7 +605,10 @@ class ReportService:
             year=year,
             generated_on=today,
             overview=overview,
-            categories=_category_slices(list(totals.values())),
+            categories=_category_slices(
+                list(totals.values()),
+                total_cents=overview.ytd_spending_cents,
+            ),
             cumulative_budget=cumulative_budget,
             cumulative_spending=cumulative_spending,
             actual_months=actual_months,

@@ -9,7 +9,6 @@ via pypdfium2.
 from __future__ import annotations
 
 import calendar
-import math
 import os
 import tempfile
 from collections.abc import Sequence
@@ -70,6 +69,14 @@ def _pdf_text(value: object) -> str:
     """Fold typographic punctuation and replace characters the built-in PDF font cannot draw."""
     text = str(value or "").translate(_TRANSLATIONS)
     return text.encode("latin-1", "replace").decode("latin-1")
+
+
+def _cell_text(value: object, *, limit: int = 80) -> str:
+    """Keep a table cell short enough that a legacy long name cannot create a giant row."""
+    text = _pdf_text(value)
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3].rstrip() + "..."
 
 
 def _money(cents: int, *, signed: bool = False) -> str:
@@ -203,8 +210,13 @@ class _ReportPDF(FPDF):
         self.cell(CONTENT_WIDTH_MM - 6, 5.5, _pdf_text(text))
         self.set_y(y + 11.5)
 
-    def section(self, title: str, note: str = "") -> None:
-        self.ensure(18)
+    def section(self, title: str, note: str = "", *, reserve: float = 0.0) -> None:
+        """Add a section heading, reserving room for the block that follows it.
+
+        A heading on its own at the bottom of a page reads as an orphan. ``reserve`` is the
+        approximate height of the chart or table that follows, so the heading moves with it.
+        """
+        self.ensure(18 + reserve)
         self.ln(3)
         self.set_font("Helvetica", "B", 12)
         self.set_text_color(*INK)
@@ -245,11 +257,11 @@ class _ReportPDF(FPDF):
         ) as table:
             heading = table.row()
             for value in headers:
-                heading.cell(_pdf_text(value))
+                heading.cell(_cell_text(value))
             for row in rows:
                 table_row = table.row()
                 for value in row:
-                    table_row.cell(_pdf_text(value))
+                    table_row.cell(_cell_text(value))
         self.ln(2)
 
     def chart(self, png: bytes, *, max_height_mm: float = 80) -> None:
@@ -288,25 +300,33 @@ class _ReportPDF(FPDF):
         self.ln(4)
 
     def debt_callout(self, text: str) -> None:
-        lines = max(1, math.ceil(len(text) / 96))
-        height = 5 + lines * 4.4
+        text = _pdf_text(text)
+        self.set_font("Helvetica", "", 8.2)
+        text_height = self.multi_cell(
+            CONTENT_WIDTH_MM - 8,
+            4.4,
+            text,
+            dry_run=True,
+            output="HEIGHT",
+        )
+        height = text_height + 4
+        self.ensure(height + 4)
         y = self.get_y()
         self.set_fill_color(*PANEL)
         self.rect(MARGIN_MM, y, CONTENT_WIDTH_MM, height, "F")
         self.set_fill_color(*ACCENT)
         self.rect(MARGIN_MM, y, 1.5, height, "F")
         self.set_xy(MARGIN_MM + 4, y + 2)
-        self.set_font("Helvetica", "", 8.2)
         self.set_text_color(*INK)
-        self.multi_cell(CONTENT_WIDTH_MM - 8, 4.4, _pdf_text(text))
+        self.multi_cell(CONTENT_WIDTH_MM - 8, 4.4, text)
         self.set_y(y + height + 4)
 
 
 def _month_rows(report: YearReport) -> list[list[str]]:
     rows: list[list[str]] = []
-    for index, month in enumerate(report.overview.months[: report.actual_months]):
+    for month in report.overview.months[: report.actual_months]:
         label = calendar.month_name[int(month.month.split("-")[1])]
-        in_progress = report.has_projection and index == report.actual_months - 1
+        in_progress = report.in_progress_month == month.month
         if in_progress:
             difference = "-"
         elif month.has_budget:
@@ -354,10 +374,10 @@ def _render_monthly(report: MonthlyReport) -> bytes:
     else:
         pdf.strip("No budgets set for this month.", color=MUTED)
 
-    pdf.section("Income and spending", "Last six months")
+    pdf.section("Income and spending", "Last six months", reserve=64)
     pdf.chart(monthly_chart_png(report.trend), max_height_mm=64)
 
-    pdf.section("Spending by category", report.period_label)
+    pdf.section("Spending by category", "Share of net spending", reserve=20)
     if report.categories:
         pdf.report_table(
             ("Category", "Amount", "Share"),
@@ -365,10 +385,12 @@ def _render_monthly(report: MonthlyReport) -> bytes:
             widths=(110, 45.9, 30),
             aligns=(Align.L, Align.R, Align.R),
         )
+        if any(item.amount_cents < 0 for item in report.categories):
+            pdf.note("A negative amount is net refunds in that category; shares use net spending.")
     else:
         pdf.note("No spending recorded for this month.")
 
-    pdf.section("Budget performance", f"{_money(report.budget_cents)} total")
+    pdf.section("Budget performance", f"{_money(report.budget_cents)} total", reserve=22)
     if report.budgets:
         pdf.report_table(
             ("Category", "Budget", "Spent", "Left", "Status"),
@@ -393,7 +415,7 @@ def _render_monthly(report: MonthlyReport) -> bytes:
     else:
         pdf.note("Set monthly limits on the Budgets page to compare spending with a plan.")
 
-    pdf.section("Largest expenses", "Top five by amount")
+    pdf.section("Largest expenses", "Top five by amount", reserve=20)
     if report.largest:
         pdf.report_table(
             ("Date", "Description", "Category", "Account", "Amount"),
@@ -415,7 +437,9 @@ def _render_monthly(report: MonthlyReport) -> bytes:
 
     pdf.section(
         "Balances",
-        f"Net worth {_money(report.net_worth_cents)} · negative = owed",
+        f"As of {calendar.month_abbr[report.generated_on.month]} {report.generated_on.day}, "
+        f"{report.generated_on.year} | net worth {_money(report.net_worth_cents)}",
+        reserve=22,
     )
     if report.accounts:
         ordered = sorted(
@@ -452,7 +476,12 @@ def _render_year(report: YearReport) -> bytes:
     pdf.header_block(report.title, report.period_detail, report.generated_on)
     pdf.kpis(
         [
-            ("Income", _money(report.income_cents), f"Across {report.actual_months} months", INCOME),
+            (
+                "Income",
+                _money(report.income_cents),
+                "Year to date" if report.in_progress_month else f"Across {report.actual_months} months",
+                INCOME,
+            ),
             ("Spending", _money(report.spending_cents), "Net of refunds", SPENDING),
             ("Net", _money(report.net_cents, signed=True), "Income minus spending", _difference_color(report.net_cents)),
             ("Savings rate", f"{report.savings_rate:.1%}" if report.income_cents else "-", "Kept from income", INK),
@@ -467,7 +496,7 @@ def _render_year(report: YearReport) -> bytes:
     if not report.overview.has_data:
         pdf.note("No transactions or budgets were recorded for this period yet.")
 
-    pdf.section("Budget and spending across the year", "Cumulative")
+    pdf.section("Budget and spending across the year", "Cumulative", reserve=76)
     labels = [calendar.month_abbr[int(month.month.split("-")[1])] for month in report.overview.months]
     pdf.chart(
         cumulative_chart_png(
@@ -479,19 +508,42 @@ def _render_year(report: YearReport) -> bytes:
         max_height_mm=76,
     )
     forecast = report.projected_year_end_cents
+    budgeted = report.overview.budgeted_months
+    if report.has_projection and forecast is not None:
+        pace = ("Year-end pace", _money(forecast), "Estimate")
+    else:
+        pace = (
+            "Year spending",
+            _money(report.spending_cents),
+            "Year to date" if report.in_progress_month else "Completed year",
+        )
     pdf.stats_row(
         [
-            ("Budget, year to date", _money(report.budget_cents), f"{report.actual_months} months"),
-            ("Over budget" if difference < 0 else "Under budget", _money(abs(difference)), "Budget minus spending"),
             (
-                "Year-end pace" if forecast is not None else "Year spending",
-                _money(forecast if forecast is not None else report.spending_cents),
-                "Estimate" if forecast is not None else "Completed year",
+                "Budget, year to date",
+                _money(report.budget_cents),
+                f"{budgeted} of {report.actual_months} months budgeted",
             ),
+            ("Over budget" if difference < 0 else "Under budget", _money(abs(difference)), "Budget minus spending"),
+            pace,
         ]
     )
+    if report.actual_months and budgeted < 3:
+        if budgeted == 0:
+            coverage = "No months have a budget; the budget comparison is empty."
+        elif budgeted == 1:
+            coverage = (
+                f"Only 1 of {report.actual_months} months has a budget; "
+                "the budget comparison is partial."
+            )
+        else:
+            coverage = (
+                f"Only {budgeted} of {report.actual_months} months have a budget; "
+                "the budget comparison is partial."
+            )
+        pdf.note(coverage)
 
-    pdf.section("Month by month", "Actuals")
+    pdf.section("Month by month", "Actuals", reserve=22)
     if report.actual_months:
         rows = _month_rows(report)
         if report.actual_months:
@@ -513,7 +565,7 @@ def _render_year(report: YearReport) -> bytes:
     else:
         pdf.note("No months have been completed for this year yet.")
 
-    pdf.section("Where the year went", "Share of spending")
+    pdf.section("Where the year went", "Share of net spending", reserve=20)
     if report.categories:
         pdf.report_table(
             ("Category", "Amount", "Share"),
@@ -521,10 +573,12 @@ def _render_year(report: YearReport) -> bytes:
             widths=(110, 45.9, 30),
             aligns=(Align.L, Align.R, Align.R),
         )
+        if any(item.amount_cents < 0 for item in report.categories):
+            pdf.note("A negative amount is net refunds in that category; shares use net spending.")
     else:
         pdf.note("No spending recorded for this period.")
 
-    pdf.section("Against last year", "Same period")
+    pdf.section("Against last year", "Same period", reserve=20)
     if report.prior_income_cents is not None and report.prior_spending_cents is not None:
         prior_rate = report.prior_savings_rate
         pdf.report_table(
@@ -570,7 +624,7 @@ def _render_net_worth(report: NetWorthReport) -> bytes:
     pdf.header_block(report.title, report.period_detail, report.generated_on)
     pdf.hero_net_worth(report)
 
-    pdf.section("Net worth over twelve months", "Month-end balances")
+    pdf.section("Net worth over twelve months", "Month-end balances", reserve=58)
     pdf.chart(
         net_worth_chart_png(
             [point.label for point in report.trend],
@@ -582,6 +636,7 @@ def _render_net_worth(report: NetWorthReport) -> bytes:
     pdf.section(
         "Assets",
         f"Liquid {_money(report.liquid_assets_cents)}  |  Other {_money(report.other_assets_cents)}",
+        reserve=20,
     )
     if report.assets:
         pdf.report_table(
@@ -600,7 +655,7 @@ def _render_net_worth(report: NetWorthReport) -> bytes:
     else:
         pdf.note("No asset accounts recorded.")
 
-    pdf.section("Liabilities", f"{_money(report.liabilities_cents)} owed")
+    pdf.section("Liabilities", f"{_money(report.liabilities_cents)} owed", reserve=20)
     if report.liabilities:
         pdf.report_table(
             ("Liability", "Type", "Owed"),
@@ -622,7 +677,7 @@ def _render_net_worth(report: NetWorthReport) -> bytes:
         f"  =  Net worth {_money(report.net_worth_cents)}"
     )
 
-    pdf.section("Debt payoff", "Estimates at the current minimums")
+    pdf.section("Debt payoff", "Estimates at the current minimums", reserve=24)
     if report.debts:
         pdf.report_table(
             ("Debt", "Balance", "APR", "Minimum", "Interest / mo", "Payoff at minimum"),
@@ -678,7 +733,7 @@ def _render_net_worth(report: NetWorthReport) -> bytes:
     else:
         pdf.note("No debts are tracked. Add one on the Debts page to see a payoff estimate.")
 
-    pdf.section("Savings goals", "Contributed to date")
+    pdf.section("Savings goals", "Contributed to date", reserve=20)
     if report.goals:
         pdf.report_table(
             ("Goal", "Saved", "Target", "Progress", "Target date", "Monthly"),

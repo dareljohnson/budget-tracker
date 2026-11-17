@@ -84,6 +84,10 @@ class DebtCase(unittest.TestCase):
         values.update(overrides)
         return self.repo.add_debt(Debt(**values))
 
+    def test_debt_name_is_limited_to_80_characters(self):
+        with self.assertRaises(RepositoryError):
+            BudgetService(self.repo).create_debt("x" * 81, DebtKind.AUTO, 100_000, 490, 5_000)
+
 
 class TestDebtStorage(DebtCase):
     def test_add_get_list_update_delete(self):

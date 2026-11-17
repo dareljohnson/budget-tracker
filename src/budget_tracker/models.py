@@ -46,6 +46,16 @@ class AccountKind(StrEnum):
         return self in (AccountKind.CREDIT_CARD, AccountKind.LOAN)
 
     @property
+    def default_liquid(self) -> bool:
+        """Whether a new account of this kind starts marked liquid.
+
+        Checking, savings and cash are liquid by default. Other assets — a home, a car, a
+        brokerage account — start non-liquid; the owner can mark one liquid in the account
+        editor. Liabilities are never liquid.
+        """
+        return self in (AccountKind.CHECKING, AccountKind.SAVINGS, AccountKind.CASH)
+
+    @property
     def icon(self) -> str:
         return {
             AccountKind.CHECKING: "ACCOUNT_BALANCE",
@@ -85,6 +95,13 @@ class Account:
     color: str = "#3949AB"
     id: int | None = None
     number_last4: str | None = None
+    liquid: bool | None = None  # None -> the kind's default; liabilities are always non-liquid
+
+    def __post_init__(self) -> None:
+        if self.kind.is_liability:
+            self.liquid = False
+        elif self.liquid is None:
+            self.liquid = self.kind.default_liquid
 
 
 @dataclass(slots=True, frozen=True)

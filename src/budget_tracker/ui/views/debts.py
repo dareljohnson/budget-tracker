@@ -562,7 +562,12 @@ class DebtEditor:
             a for a in ctx.repo.list_accounts()
             if a.kind in (AccountKind.CREDIT_CARD, AccountKind.LOAN) and a.id not in linked
         ]
-        self.name = ft.TextField(label="Name", value=debt.name if debt else "", autofocus=True)
+        self.name = ft.TextField(
+            label="Name",
+            value=debt.name if debt else "",
+            max_length=80,
+            autofocus=True,
+        )
         self.kind = ft.Dropdown(
             label="Kind",
             options=[ft.DropdownOption(key=k.value, text=k.label) for k in DebtKind],

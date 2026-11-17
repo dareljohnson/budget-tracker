@@ -302,13 +302,20 @@ MIGRATIONS: list[str] = [
     """
     ALTER TABLE transactions ADD COLUMN confirmation_number TEXT;
     """,
+    # v13: liquidity per account. Checking, savings and cash are liquid by default; other assets
+    # and liabilities are not. The cash-flow forecast uses this flag, and the reports mark the
+    # difference instead of treating every asset as spendable.
+    """
+    ALTER TABLE accounts ADD COLUMN liquid INTEGER NOT NULL DEFAULT 1;
+    UPDATE accounts SET liquid = CASE WHEN kind IN ('checking', 'savings', 'cash') THEN 1 ELSE 0 END;
+    """,
 ]
 
 FOREIGN_KEYS_OFF_MIGRATIONS = {8}
 
-DEFAULT_EXTRA_ACCOUNTS: list[tuple[str, str, str]] = [
-    ("Credit Card", "credit_card", "#8E24AA"),
-    ("Cash", "cash", "#43A047"),
+DEFAULT_EXTRA_ACCOUNTS: list[tuple[str, str, str, bool]] = [
+    ("Credit Card", "credit_card", "#8E24AA", False),
+    ("Cash", "cash", "#43A047", True),
 ]
 
 
@@ -460,7 +467,16 @@ def _seed(conn: sqlite3.Connection) -> None:
             "INSERT OR IGNORE INTO categories (name, type, color, icon) VALUES (?, ?, ?, ?)",
             DEFAULT_CATEGORIES,
         )
-        conn.executemany(
-            "INSERT OR IGNORE INTO accounts (name, kind, color) VALUES (?, ?, ?)",
-            DEFAULT_EXTRA_ACCOUNTS,
-        )
+        # Migration tests seed partial schemas from before v13, where the liquid column does not
+        # exist yet. A fresh production database has it, so the extra accounts carry their flags.
+        account_columns = {row[1] for row in conn.execute("PRAGMA table_info(accounts)")}
+        if "liquid" in account_columns:
+            conn.executemany(
+                "INSERT OR IGNORE INTO accounts (name, kind, color, liquid) VALUES (?, ?, ?, ?)",
+                DEFAULT_EXTRA_ACCOUNTS,
+            )
+        else:
+            conn.executemany(
+                "INSERT OR IGNORE INTO accounts (name, kind, color) VALUES (?, ?, ?)",
+                [row[:3] for row in DEFAULT_EXTRA_ACCOUNTS],
+            )

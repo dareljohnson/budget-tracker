@@ -23,7 +23,7 @@ from ...cashflow import (
 )
 from ...formatting import format_money, parse_date, parse_money
 from ...models import AccountKind, IncomeFrequency, IncomeSchedule
-from ...repository import LIQUID_ACCOUNT_KINDS, RepositoryError
+from ...repository import RepositoryError
 from ..charts import ChartColors, line_chart_png
 from ..components import card, confirm_dialog, date_field, empty_state, section_title
 from ..context import AppContext
@@ -54,7 +54,7 @@ ASSUMPTIONS = (
 )
 NO_INCOME_CALLOUT = "Add income to make this forecast realistic"
 NO_EVENTS_CALLOUT = "Add income or a bill to see a forecast."
-NO_LIQUID_ACCOUNTS = "Add a checking, savings, or cash account to forecast cash flow"
+NO_LIQUID_ACCOUNTS = "Add an account marked Liquid to forecast cash flow"
 PREVIEW_NOTE = "Forecast only; record the real deposit when it arrives."
 _PREVIEW_HORIZON = 400  # days: enough to show three occurrences of any supported rule
 
@@ -641,7 +641,7 @@ class IncomePlanDialog:
         self.accounts = [
             account
             for account in ctx.repo.list_accounts()
-            if account.kind in LIQUID_ACCOUNT_KINDS
+            if account.liquid
         ]
         self._account_by_id = {
             account.id: account for account in self.accounts if account.id is not None
@@ -1105,9 +1105,7 @@ class IncomePlanDialog:
             self.account.error_text = "Select a deposit account"
             valid = False
         elif account_id not in self._account_by_id:
-            self.account.error_text = (
-                "Income must be deposited into a checking, savings or cash account"
-            )
+            self.account.error_text = "Income must be deposited into a liquid account"
             valid = False
 
         if frequency is not None and next_date is not None and anchor is not None:

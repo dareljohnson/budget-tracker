@@ -13,7 +13,6 @@ from datetime import date, timedelta
 
 from .models import (
     Account,
-    AccountKind,
     Bill,
     BillFrequency,
     IncomeFrequency,
@@ -23,7 +22,6 @@ from .models import (
     next_due_date,
 )
 
-LIQUID_KINDS = frozenset({AccountKind.CHECKING, AccountKind.SAVINGS, AccountKind.CASH})
 INFLOW_KINDS = frozenset({"income", "refund", "transfer_in"})
 
 # De-duplication is by transaction type and, for transfers, by the target account. A transfer is
@@ -210,7 +208,7 @@ def forecast(
     simulation_days = max(days, _FULL_HORIZON)
     simulation_end = today + timedelta(days=simulation_days)
 
-    liquid_ids = [account.id for account in accounts if account.id is not None and account.kind in LIQUID_KINDS]
+    liquid_ids = [account.id for account in accounts if account.id is not None and account.liquid]
     liquid_set = set(liquid_ids)
     account_names = {account.id: account.name for account in accounts if account.id is not None}
 

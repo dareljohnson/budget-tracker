@@ -5,11 +5,12 @@ A personal budget tracker desktop app built with **Python 3.13**, **[Flet](https
 ## Features
 
 - **Dashboard**: net worth across all accounts, monthly income and spending, savings rate, spending by category, a six-month income vs. spending trend, account balances, budget health, recent activity, and the five days in the selected month with the highest net spending.
-- **Accounts**: checking, savings, credit card, cash, and other accounts, each with a live balance. Credit cards show the amount owed, and **Pay card** records a payment from your checking account.
+- **Accounts**: checking, savings, credit card, cash, and other accounts, each with a live balance. **Other** accounts hold investments, property, vehicles, and anything else you own. Each asset account is marked **Liquid** or **Non-liquid**; checking, savings, and cash are liquid by default, and an Other account can be marked liquid if it can be spent quickly. Credit cards show the amount owed, and **Pay card** records a payment from your checking account.
 - **Goals**: savings targets with progress, a fixed monthly plan, and contributions recorded as transfers.
 - **Debts**: credit cards, auto, student, personal, mortgage and other debts, with a payoff planner
   comparing avalanche and snowball strategies at several extra monthly amounts.
 - **Year**: monthly budget versus actual spending, year-to-date totals with the same period last year, a run-rate year-end projection, and a daily cash-flow forecast for the next 30, 60, or 90 days with an income plan.
+- **Reports**: preview and export a print-ready PDF of a **monthly summary**, a **year in review**, or a **net worth statement**, built from the same ledger as the rest of the app. See [Reports](#reports).
 - **Balance checks and adjustments**: check any account against the balance your bank shows and see the difference. If they disagree, record a signed correction that changes the account balance only — adjustments are excluded from income, spending, and budgets. Earlier checks are kept in a history.
 - **Bills and reminders**: recurring bills (one-time, weekly, monthly, yearly) and credit card payments, each with a due date. Overdue and soon-due bills show on the Bills page, on the Dashboard, and in a pop-up when the app starts. **Mark paid** records the payment and moves the bill to its next due date, with an optional confirmation number saved on that payment. Windows notifications can also remind you when the app is closed (see below).
 - **Transactions**: five types, each tied to an account:
@@ -21,7 +22,7 @@ A personal budget tracker desktop app built with **Python 3.13**, **[Flet](https
 
   Search and filter by type, account, category, or month, and export the current view to CSV.
 - **Statement import**: import a US checking or savings statement — a text PDF, a scanned PDF, or a PNG/JPEG photo — from the Transactions page. The file is parsed locally, with OCR when it has no usable text layer, and verified against the statement's own summary totals; nothing is written until you review it. When exactly one saved account number ending matches, that account is preselected, and a mismatch blocks the import. Each row has its own type, category, and (for transfers) destination account; a category can be applied to all selected rows at once, duplicate rows are flagged and left unchecked, and an opening balance can be set when the account has no earlier history. You can also remember the account's last four digits and save a category rule from a row. **Imported statements…** lets you undo an import. See [Importing bank statements](#importing-bank-statements) for the supported files and limits.
-- **Excel export**: **Export Excel** on the Transactions screen saves a full `.xlsx` workbook with live formulas. It opens in Microsoft Excel, Apple Numbers, Google Sheets, and LibreOffice. See [Excel workbook](#excel-workbook).
+- **Excel export**: **Export Excel** on the Transactions screen, or **Excel workbook** on the Reports page, saves a full `.xlsx` workbook with live formulas. It opens in Microsoft Excel, Apple Numbers, Google Sheets, and LibreOffice. See [Excel workbook](#excel-workbook).
 - **Budgets**: set monthly limits per expense category. Progress bars turn amber at 80% and red when you go over. You can copy last month's budgets.
 - **Categories**: income and expense categories with custom colors and icons. Default categories are created on first run. Category rules saved from statement imports are listed under **Categories → Rules**, where they can be reviewed and deleted.
 - **Light/dark theme**: your choice is saved.
@@ -89,6 +90,9 @@ src/budget_tracker/
   statements/      statement models, PDF/image extraction, local OCR, Regions adapter + generic parser
   xlsx.py          dependency-free .xlsx writer (styles, formulas, filters)
   workbook_export.py  builds the Excel workbook sheets and formulas
+  reports.py       monthly, year, and net-worth report snapshots
+  report_pdf.py    PDF layout, page preview, and atomic export
+  report_charts.py print-ready Pillow charts for reports
   reminders.py     due-bill check + Windows toast (for Task Scheduler)
   main.py          Flet app shell (navigation rail, theme)
   ui/              theme, shared components, views
@@ -183,7 +187,7 @@ The **Year** page has two tabs: **This year** shows the budget-versus-actual sto
 
 The forecast answers "will I make it to payday?" with a daily line for the next **30, 60, or 90 days**:
 
-- **Liquid accounts only** — checking, savings, and cash. Starting balances are the balances as of today, so transactions dated today are already included.
+- **Liquid accounts only** — accounts marked **Liquid** on the Accounts page. Checking, savings, and cash are liquid by default; an Other account can be marked liquid. Starting balances are the balances as of today, so transactions dated today are already included.
 - **Known outflows** — active bills (including card and loan payments), card minimums not already covered by a card-payment bill in the same horizon, and transactions dated after today.
 - **What it shows** — today's starting total, the **lowest projected point** (in red when it goes negative), the balance in 30, 60, and 90 days, per-account ending balances, and the dated events with a running balance.
 - **Local and read-only** — viewing the forecast writes nothing. The chart is drawn with Pillow, which the app already uses for statements and receipts.
@@ -207,6 +211,30 @@ A forecast is only useful if money comes in. Click **Income plan** on the cash-f
 - An overdue bill is shown once at today, then continues on its normal schedule; there is no backlog of past occurrences.
 - Scheduled bills and income are skipped when a matching transaction dated today or later already covers them (same account, type, amount, and a date within one day).
 - **Budgets and variable spending are not included.** Budget limits are plans, not scheduled cash movements; adding them would double-count bills.
+
+## Reports
+
+Choose **Reports** in the navigation rail to turn your ledger into a document you can keep, print, or share.
+
+1. Choose **Monthly summary**, **Year in review**, or **Net worth statement**.
+2. Pick the month or year. A net worth statement is always **as of today**.
+3. The preview is the actual PDF. Use the arrows to turn its pages before exporting.
+4. **Export PDF** saves it to your Downloads folder, or to the folder you choose. The **Excel workbook** button on the same page saves the full data workbook described under [Excel workbook](#excel-workbook).
+
+### What each report includes
+
+- **Monthly summary** — income, spending, net, savings rate, and budget use; a six-month income and spending chart; spending by category; every budget with its spent, remaining, and status; the five largest expenses; and account balances with net worth as of the end of the report month, or today while that month is still in progress. Category amounts are net of refunds, so a category where refunds exceed spending appears as a negative amount, and shares use net spending.
+- **Year in review** — year-to-date income, spending, net, and savings rate; a cumulative budget-versus-spending chart with a year-end projection; month-by-month budget performance (the current month is marked **In progress**); annual category totals; a comparison with the same period last year when that data exists; and the year-end pace.
+- **Net worth statement** — net worth with changes since last month and January 1; a twelve-month trend; **liquid and non-liquid assets** listed separately, followed by liabilities by account; each debt's balance, APR, minimum, monthly interest, and payoff at its current minimum, with an avalanche comparison at $200 extra per month; and progress on each savings goal.
+
+### What the reports assume
+
+- Reports read the same local SQLite data as the Dashboard, Year, Accounts, Debts, and Goals pages. They are generated on this PC and never uploaded. Like the Excel workbook and backups, exported PDFs are **not encrypted**.
+- **Net worth is account-based**, matching the Dashboard. A debt linked to a card or loan is represented by that account. A standalone debt appears in the debt table but is not part of account net worth.
+- **Liquidity is a property of each account.** The cash-flow forecast counts only accounts marked Liquid; the net-worth statement groups assets into Liquid and Other using the same flag. A house or car remains part of net worth even though it is not spendable cash.
+- The year report includes the current month to date, and labels the period **to date** when that month is not complete. Future months in the chart use a simple run rate: spending year to date divided by the number of months elapsed, times twelve. It is an estimate, not a forecast of specific bills.
+- The monthly report's balances and aggregates are as of the end of its month, or as of today while that month is still in progress. Transactions dated after the cutoff are excluded. A balance is signed: a negative card or loan balance is money owed.
+- Debt payoff estimates assume a fixed APR, monthly compounding, the minimums currently recorded, and constant payments. A plan that cannot finish within 50 years is reported as **Does not pay off**; a minimum below the monthly interest will not reduce the balance.
 
 ## Importing bank statements
 
@@ -307,3 +335,4 @@ Every sheet has a bold header row that stays visible when you scroll and has fil
 - **Layers stay separate**: UI → services → repository. All SQL lives in the repository, and every query is parameterized.
 - **CSV export protects spreadsheets**: values that start with `=`, `+`, `-`, or `@` are escaped so they can't run as formulas.
 - **Excel export protects spreadsheets too**: text you typed is always saved as plain text, never as a formula. Only formulas the app generates are formulas. The file is written to a temporary file first and then moved into place, so a failed export can't leave a half-written file.
+- **Reports stay local**: report data comes from the same services and repository calls as the screens, and the PDF is written to a temporary file before being moved into place. The preview is the exported PDF, rendered locally with the PDF engine.

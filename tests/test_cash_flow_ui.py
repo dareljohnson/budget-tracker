@@ -376,7 +376,7 @@ class TestCashFlowPanel(_Base):
             )
         )
         labels = _texts(panel.control)
-        self.assertIn("Add a checking, savings, or cash account to forecast cash flow", labels)
+        self.assertIn("Add an account marked Liquid to forecast cash flow", labels)
         self.assertIsNone(_find(panel.control, lambda node: isinstance(node, ft.Image)))
 
     def test_liquid_accounts_without_events_show_a_flat_line_explanation(self):
@@ -713,7 +713,7 @@ class TestIncomePlanDialog(_Base):
         dialog.next_date.value = self.today.isoformat()
         dialog.account.value = str(card_id)
         dialog._save(None)
-        self.assertIn("checking, savings or cash", dialog.account.error_text)
+        self.assertIn("liquid account", dialog.account.error_text)
 
         self.assertEqual(self.ctx.service.list_income_schedules(), [])
         self.assertIn(dialog.dialog, self.page.overlay)

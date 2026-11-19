@@ -12,7 +12,7 @@ A personal budget tracker desktop app built with **Python 3.13**, **[Flet](https
 - **Year**: monthly budget versus actual spending, year-to-date totals with the same period last year, a run-rate year-end projection, and a daily cash-flow forecast for the next 30, 60, or 90 days with an income plan.
 - **Reports**: preview and export a print-ready PDF of a **monthly summary**, a **year in review**, or a **net worth statement**, built from the same ledger as the rest of the app. See [Reports](#reports).
 - **Balance checks and adjustments**: check any account against the balance your bank shows and see the difference. If they disagree, record a signed correction that changes the account balance only — adjustments are excluded from income, spending, and budgets. Earlier checks are kept in a history.
-- **Bills and reminders**: recurring bills (one-time, weekly, monthly, yearly) and credit card payments, each with a due date. Overdue and soon-due bills show on the Bills page, on the Dashboard, and in a pop-up when the app starts. **Mark paid** records the payment and moves the bill to its next due date, with an optional confirmation number saved on that payment. Windows notifications can also remind you when the app is closed (see below).
+- **Bills and reminders**: recurring bills (one-time, weekly, monthly, yearly) and credit card payments, each with a due date. Overdue and soon-due bills show on the Bills page, on the Dashboard, and in a pop-up when the app starts; the Bills page and Dashboard also refresh themselves when the date changes, so they do not need a restart. **Mark paid** records the payment and moves the bill to its next due date, with an optional confirmation number saved on that payment. Windows notifications and SMS text messages can also remind you when the app is closed (see below).
 - **Transactions**: five types, each tied to an account:
   - **Expense**: money spent, e.g. groceries paid with a credit card.
   - **Income**: money received into an account.
@@ -93,7 +93,8 @@ src/budget_tracker/
   reports.py       monthly, year, and net-worth report snapshots
   report_pdf.py    PDF layout, page preview, and atomic export
   report_charts.py print-ready Pillow charts for reports
-  reminders.py     due-bill check + Windows toast (for Task Scheduler)
+  reminders.py     due-bill check + Windows toast/SMS (for Task Scheduler)
+  sms.py           carrier email-to-SMS gateways and SMTP delivery
   main.py          Flet app shell (navigation rail, theme)
   ui/              theme, shared components, views
 src/main.py        entry point for `flet build` (native installers)
@@ -312,6 +313,27 @@ schtasks /Create /SC DAILY /ST 09:00 /TN "BudgetTracker Reminders" `
 - If you installed the app with `pip install -e .`, you can run `.venv\Scripts\budget-tracker-remind.exe` instead.
 - To test without showing a notification, run `python -m budget_tracker.reminders --print`.
 - To remove the scheduled task, run `schtasks /Delete /TN "BudgetTracker Reminders"`.
+- If text alerts are configured, the same command also sends the SMS summary. The `--print` option never sends a text.
+
+### Text message alerts
+
+Budget Tracker can text you a short due-bill summary through your carrier's email-to-SMS gateway. It does **not** include an email service: the messages are sent from an SMTP account you already control.
+
+1. On the **Bills** page, click **Text alerts**.
+2. Choose your **Carrier** and enter your **Mobile number** (10 digits; spaces, dashes and a leading `+1` are accepted). The dialog shows the gateway address it will use.
+3. Enter the **Email server**, **Port**, **Security**, **Email address** and **Email password** for the account that sends the text. **From address** is optional and defaults to the email address.
+4. Turn on **Text me when payments are due** and click **Save**. Use **Send test text** to verify the carrier and email settings.
+
+The automatic summary is sent at most once a day. In the app it is sent at startup and on the first check after 8:00 AM local time, so leaving the app open overnight does not text you at midnight. The scheduled reminder command above sends at whatever time you register. The summary lists up to three bills with their amounts and due dates.
+
+The carrier list includes AT&T, T-Mobile, Verizon, Sprint, Xfinity Mobile, Virgin Mobile, Tracfone, Metro PCS, Boost Mobile, Cricket, Republic Wireless, StraightTalk, Google Fi, U.S. Cellular, Ting, Consumer Cellular, C-Spire and Page Plus. When a carrier publishes both an SMS and an MMS gateway, Budget Tracker uses the SMS gateway; carriers with only an MMS gateway use that instead.
+
+Notes:
+
+- Use an **app password** if your email provider offers one (for example, Gmail, Yahoo and Outlook require one when two-step verification is on). Do not use your main email password. Typical settings are `smtp.gmail.com` on port 587 with STARTTLS, `smtp.mail.yahoo.com` on port 465 with SSL/TLS or port 587 with STARTTLS, or `smtp.office365.com` on port 587 with STARTTLS; check your provider's help page if its policy has changed.
+- The mobile number, email address and app password are stored in the local SQLite database, which is not encrypted. Protect the PC with disk encryption such as BitLocker or FileVault.
+- Carrier email-to-SMS gateways are best-effort: messages may be delayed, split, filtered as spam, or blocked, and carriers occasionally change the gateway address. Send a test after setting it up.
+- The automatic text is sent only while the app is running, or when the scheduled reminder command runs. It is not a separate cloud service.
 
 ## Excel workbook
 

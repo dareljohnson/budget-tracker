@@ -469,16 +469,19 @@ class TestMainWiring(unittest.TestCase):
 
         self.assertEqual(len(opened), 1)
 
-    def test_main_starts_the_auto_backup_task(self):
+    def test_main_starts_the_auto_backup_and_payment_alert_tasks(self):
         from budget_tracker import main as shell
 
         page = _PageStub()
 
         self._run_main(page)
 
-        page.run_task.assert_called_once_with(shell.auto_backup_task)
+        page.run_task.assert_any_call(shell.auto_backup_task)
+        self.assertTrue(
+            any(call.args and call.args[0] is shell.payment_alert_task for call in page.run_task.call_args_list)
+        )
 
-    def test_disconnect_cancels_the_auto_backup_task_and_closes_the_repository(self):
+    def test_disconnect_cancels_background_tasks_and_closes_the_repository(self):
         page = _PageStub()
         future = page.run_task.return_value
 
@@ -486,7 +489,8 @@ class TestMainWiring(unittest.TestCase):
             self._run_main(page)
             page.on_disconnect(None)
 
-        future.cancel.assert_called_once()
+        # Both the backup task and the payment-alert task were cancelled.
+        self.assertEqual(future.cancel.call_count, 2)
         close.assert_called_once()
 
 

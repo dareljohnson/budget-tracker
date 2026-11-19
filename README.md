@@ -300,6 +300,8 @@ A matched statement row counts toward the statement's ending balance through its
 2. Choose how far ahead you want to be reminded with **Remind me** (on the due date up to 14 days before; the default is 3 days).
 3. When you've paid, click **Mark paid**. Bills are recorded as expenses, and card payments as transfers. A **Confirmation number** is optional: paste the reference the bank or payment site gave you, and it is saved with that payment, shown under it in Transactions, and included in the Excel export. The bill then moves to its next due date. Monthly bills keep their day of the month, so a bill due on the 31st is due on Feb 28 and then Mar 31. **Skip** moves to the next due date without recording a payment.
 
+The due pop-up appears only when the app starts. The Dashboard and Bills page also compare the local date every minute and refresh after midnight, so statuses such as “due tomorrow” or “overdue” update without restarting the app.
+
 ### Notifications when the app is closed (Windows)
 
 `budget_tracker.reminders` checks your bills and shows a Windows toast notification if any are due. To run it every morning at 9:00, register a scheduled task yourself (replace the path with your project folder):
@@ -321,7 +323,7 @@ Budget Tracker can text you a short due-bill summary through your carrier's emai
 
 1. On the **Bills** page, click **Text alerts**.
 2. Choose your **Carrier** and enter your **Mobile number** (10 digits; spaces, dashes and a leading `+1` are accepted). The dialog shows the gateway address it will use.
-3. Enter the **Email server**, **Port**, **Security**, **Email address** and **Email password** for the account that sends the text. **From address** is optional and defaults to the email address.
+3. Enter the **Email server**, **Port**, **Security**, **Email address** and **Email password** for the account that sends the text. **From address** is optional and defaults to the email address. Match the security setting to the port: **SSL/TLS** for port **465**, or **STARTTLS** for port **587**. The dialog labels the options with those ports and warns about a mismatch.
 4. Turn on **Text me when payments are due** and click **Save**. Use **Send test text** to verify the carrier and email settings.
 
 The automatic summary is sent at most once a day. In the app it is sent at startup and on the first check after 8:00 AM local time, so leaving the app open overnight does not text you at midnight. The scheduled reminder command above sends at whatever time you register. The summary lists up to three bills with their amounts and due dates.
@@ -334,6 +336,13 @@ Notes:
 - The mobile number, email address and app password are stored in the local SQLite database, which is not encrypted. Protect the PC with disk encryption such as BitLocker or FileVault.
 - Carrier email-to-SMS gateways are best-effort: messages may be delayed, split, filtered as spam, or blocked, and carriers occasionally change the gateway address. Send a test after setting it up.
 - The automatic text is sent only while the app is running, or when the scheduled reminder command runs. It is not a separate cloud service.
+
+#### Text alert troubleshooting
+
+- **`[SSL: WRONG_VERSION_NUMBER]`** — the port and security setting do not match. Use port **465** with **SSL/TLS**, or port **587** with **STARTTLS**. The dialog blocks a mismatch before connecting and its Security menu names the usual port for each option.
+- **The email server rejected the sign-in** — use an **app password** from your email provider. Yahoo, Gmail and Outlook require one when two-step verification is on; a normal account password usually fails.
+- **The email server rejected the message address** — check the mobile number, carrier and optional From address. Carrier gateways occasionally change.
+- **A test arrives but no automatic text does** — automatic texts are sent only when there are due bills, at most once a day, and not before 8:00 AM in-app. The scheduled reminder command sends at the time you register it. Confirm **Text me when payments are due** is on and click **Save**.
 
 ## Excel workbook
 

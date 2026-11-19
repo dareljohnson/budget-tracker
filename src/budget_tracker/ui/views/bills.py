@@ -13,6 +13,7 @@ from ...repository import RepositoryError
 from ..components import card, category_avatar, confirm_dialog, date_field, empty_state, page_header, stat_card
 from ..context import AppContext
 from ..theme import EXPENSE_COLOR, GAP, INCOME_COLOR, SEED_COLOR, WARNING_COLOR, fs
+from .text_alerts import TextAlertsDialog
 
 REMINDER_CHOICES = (0, 1, 2, 3, 5, 7, 14)
 STATUS_COLORS = {"overdue": EXPENSE_COLOR, "today": WARNING_COLOR, "soon": WARNING_COLOR}
@@ -78,7 +79,15 @@ class BillsView:
                 page_header(
                     "Bills",
                     "Recurring payments and due-date reminders",
-                    [self.reminder, ft.FilledButton(content="Add Bill", icon=ft.Icons.ADD, on_click=lambda _: BillEditor(ctx, None).open())],
+                    [
+                        self.reminder,
+                        ft.OutlinedButton(
+                            content="Text alerts",
+                            icon=ft.Icons.SMS_OUTLINED,
+                            on_click=lambda _: TextAlertsDialog(ctx).open(),
+                        ),
+                        ft.FilledButton(content="Add Bill", icon=ft.Icons.ADD, on_click=lambda _: BillEditor(ctx, None).open()),
+                    ],
                 ),
                 self.stats,
                 card(self.list, padding=8),

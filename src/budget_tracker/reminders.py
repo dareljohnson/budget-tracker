@@ -1,7 +1,8 @@
 """Background payment reminders that work while the app is closed.
 
 Run ``budget-tracker-remind`` (or ``python -m budget_tracker.reminders``) to show a Windows toast notification
-for bills that are overdue or due soon. Schedule it with Windows Task Scheduler to get daily reminders; see README.
+for bills that are overdue or due soon, and to send the configured email-to-SMS text. Schedule it with Windows
+Task Scheduler to get daily reminders; see README.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from .db import connect
 from .formatting import format_money
 from .models import DueBill
 from .repository import Repository
+from .sms import SmsError, send_due_sms
 
 log = logging.getLogger(__name__)
 
@@ -89,18 +91,30 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
     repo = Repository(connect(db_path()))
+    toast_ok = True
+    sms_sent = False
     try:
         window = repo.reminder_days()
         notifier = (lambda title, body: print(f"{title}\n{body}")) if args.print else show_windows_toast
-        due = check_and_notify(repo, notifier=notifier)
-    except (OSError, subprocess.SubprocessError) as exc:
-        log.error("Could not show notification: %s", exc)
-        return 1
+        try:
+            due = check_and_notify(repo, notifier=notifier)
+        except (OSError, subprocess.SubprocessError) as exc:
+            # A missing toast host must not stop a configured text message.
+            log.error("Could not show notification: %s", exc)
+            toast_ok = False
+            due = repo.due_bills(date.today(), window)
+        if not args.print:
+            try:
+                sms_sent = send_due_sms(repo, due)
+                if sms_sent:
+                    log.info("Sent a text message about due bills")
+            except SmsError as exc:
+                log.error("Could not send a text message: %s", exc)
     finally:
         repo.close()
     if not due:
         log.info("No payments due in the next %d day(s)", window)
-    return 0
+    return 1 if due and not toast_ok and not sms_sent else 0
 
 
 if __name__ == "__main__":

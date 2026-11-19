@@ -7,6 +7,7 @@ import logging
 import os
 import sys
 from collections.abc import Callable
+from datetime import date, datetime
 from pathlib import Path
 
 import flet as ft
@@ -22,6 +23,7 @@ from .db import connect
 from .formatting import format_money
 from .repository import Repository
 from .services import BudgetService
+from .sms import SmsError, send_due_sms_for_today
 from .ui.context import AppContext
 from .ui.theme import (
     EXPENSE_COLOR,
@@ -69,6 +71,8 @@ BILLS_INDEX = 7
 BUDGETS_INDEX = 8
 ALERT_MAX_ROWS = 6
 AUTO_BACKUP_INTERVAL_SECONDS = 6 * 60 * 60
+DAY_CHECK_INTERVAL_SECONDS = 60
+TEXT_NOT_BEFORE_HOUR = 8
 
 
 async def auto_backup_task() -> None:
@@ -86,6 +90,55 @@ async def auto_backup_task() -> None:
         except Exception:  # noqa: BLE001 - a failed automatic backup must not stop the timer
             log.exception("Automatic backup failed")
         await asyncio.sleep(AUTO_BACKUP_INTERVAL_SECONDS)
+
+
+async def payment_alert_task(
+    ctx: AppContext,
+    *,
+    interval: float = DAY_CHECK_INTERVAL_SECONDS,
+    today=date.today,
+    now=datetime.now,
+    sleep=asyncio.sleep,
+    send_due=send_due_sms_for_today,
+) -> None:
+    """Keep due-date alerts current across midnight and send the daily text.
+
+    Views only recompute "due soon" when something tells them data changed. A bill's
+    status also changes with the calendar, so a long-running window would otherwise keep
+    yesterday's "due in 2 days" until the app restarted. The tick compares the local date;
+    only a real date change refreshes the views.
+
+    The optional text is sent once per day, but not before ``TEXT_NOT_BEFORE_HOUR``: a
+    window left open overnight should not text at midnight, and a window opened before
+    breakfast should wait until the morning check. The scheduled reminder command still
+    uses whatever time the owner registered.
+    """
+    async def send_due_text() -> None:
+        try:
+            if await asyncio.to_thread(send_due):
+                log.info("Sent the due-bill text message")
+        except SmsError as exc:
+            log.warning("Could not send the due-bill text: %s", exc)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 - a text failure must not stop the refresh timer
+            log.exception("Could not send the due-bill text")
+
+    last = today()
+    checked_for: date | None = None
+    if now().hour >= TEXT_NOT_BEFORE_HOUR:
+        checked_for = last
+        await send_due_text()
+    while True:
+        await sleep(interval)
+        current = today()
+        if current != last:
+            last = current
+            checked_for = None
+            ctx.data_changed()
+        if checked_for != current and now().hour >= TEXT_NOT_BEFORE_HOUR:
+            checked_for = current
+            await send_due_text()
 
 
 def _icon_path() -> Path:
@@ -364,11 +417,13 @@ def main(page: ft.Page) -> None:
 
     def on_disconnect(_: ft.Event) -> None:
         auto_backup.cancel()
+        payment_alerts.cancel()
         repo.close()
 
     page.on_disconnect = on_disconnect
     page.add(ft.Row([rail, ft.VerticalDivider(width=1), content], expand=True, spacing=0))
     auto_backup = page.run_task(auto_backup_task)
+    payment_alerts = page.run_task(payment_alert_task, ctx)
     if restore_message:
         ctx.notify(
             restore_message,

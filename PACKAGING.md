@@ -108,10 +108,11 @@ Statement import runs entirely locally and uses these runtime dependencies:
 - **RapidOCR (`rapidocr-onnxruntime`) on ONNX Runtime (`onnxruntime`)** — the bundled OCR engine for
   scans, photos, and PDFs with no usable text layer.
 
-The macOS build is universal (arm64 + x86_64), so every compiled dependency needs a wheel for both
-architectures. Newer `onnxruntime` releases have no x86_64 macOS wheel, and `cryptography` 47+ is
-arm64-only; `pyproject.toml` therefore keeps `onnxruntime>=1.23` and a Darwin-only `cryptography<47`.
-Raising those floors makes Flet try to compile the dependency for Intel and fail.
+The packaged macOS build is **Apple Silicon (arm64) only**. Upstream `cryptography` 47+ and
+`onnxruntime` 1.31+ no longer publish x86_64 macOS wheels, so a universal build cannot install its
+Intel slice without compiling those dependencies. `packaging/macos/build.sh` builds the arm64 slice
+with `--arch arm64`; `onnxruntime` keeps a `>=1.23` floor, which pip resolves to the latest release on
+Apple Silicon.
 
 All of them are normal runtime dependencies in `pyproject.toml`, so `flet build` bundles them
 automatically. Receipt capture reuses this same stack, so it needs no new dependency. Expect the OCR
@@ -174,8 +175,9 @@ CocoaPods (`brew install cocoapods`).
 bash packaging/macos/build.sh
 ```
 
-**Output:** `build/installer/BudgetTracker-<version>-macos.dmg`. The user opens it and drags *Budget Tracker* to
-*Applications*.
+**Output:** `build/installer/BudgetTracker-<version>-macos-arm64.dmg`. The user opens it and drags *Budget Tracker* to
+*Applications*. The packaged app runs on Apple Silicon Macs; no Intel build is produced (see
+[Runtime dependencies](#runtime-dependencies)).
 
 **Signing and notarization.** Without them, Gatekeeper blocks the first launch and the user must right-click and
 choose *Open*. With an Apple Developer ID, set these before building:

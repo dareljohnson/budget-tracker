@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # Build the standalone macOS app (flet build macos) and package it as a drag-to-install .dmg.
 #
-# Output: build/macos/Budget Tracker.app and build/installer/BudgetTracker-<ver>-macos.dmg
+# Output: build/macos/Budget Tracker.app and build/installer/BudgetTracker-<ver>-macos-arm64.dmg
+# The packaged app is Apple Silicon (arm64) only: upstream cryptography 47+ and
+# onnxruntime 1.31+ no longer publish x86_64 macOS wheels, so a universal build
+# cannot install its Intel slice without compiling those dependencies.
+#
 # Prerequisites: Xcode (from the App Store) + `sudo xcode-select -s /Applications/Xcode.app`, and CocoaPods
 # (`brew install cocoapods`). Flutter is downloaded automatically by flet on first build.
 #
@@ -14,12 +18,12 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 VERSION="$(sed -nE 's/^version *= *"([^"]+)"/\1/p' pyproject.toml | head -1)"
 APP="build/macos/Budget Tracker.app"
-DMG="build/installer/BudgetTracker-$VERSION-macos.dmg"
+DMG="build/installer/BudgetTracker-$VERSION-macos-arm64.dmg"
 
 FLET="$ROOT/.venv/bin/flet"; [[ -x "$FLET" ]] || FLET=flet
 if [[ "${1:-}" != "--skip-build" ]]; then
   # --no-compile-packages keeps cv2/config.py; compiling it to .pyc breaks the OCR import.
-  "$FLET" build macos --python-version 3.13 --no-compile-packages --yes --no-rich-output
+  "$FLET" build macos --arch arm64 --python-version 3.13 --no-compile-packages --yes --no-rich-output
 fi
 [[ -d "$APP" ]] || { echo "$APP not found" >&2; exit 1; }
 

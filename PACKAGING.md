@@ -108,6 +108,11 @@ Statement import runs entirely locally and uses these runtime dependencies:
 - **RapidOCR (`rapidocr-onnxruntime`) on ONNX Runtime (`onnxruntime`)** — the bundled OCR engine for
   scans, photos, and PDFs with no usable text layer.
 
+The macOS build is universal (arm64 + x86_64), so every compiled dependency needs a wheel for both
+architectures. Newer `onnxruntime` releases have no x86_64 macOS wheel, and `cryptography` 47+ is
+arm64-only; `pyproject.toml` therefore keeps `onnxruntime>=1.23` and a Darwin-only `cryptography<47`.
+Raising those floors makes Flet try to compile the dependency for Intel and fail.
+
 All of them are normal runtime dependencies in `pyproject.toml`, so `flet build` bundles them
 automatically. Receipt capture reuses this same stack, so it needs no new dependency. Expect the OCR
 models and ONNX Runtime to add **roughly 200 MB** to the installer and portable payload. The build

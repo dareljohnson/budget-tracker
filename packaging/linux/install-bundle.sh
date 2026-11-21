@@ -7,7 +7,7 @@
 set -eu
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-ID="com.budgettracker.budget_tracker"
+ID="com.budgettracker.budget-tracker"
 DATA="${XDG_DATA_HOME:-$HOME/.local/share}"
 
 if [ "${1:-}" = "--uninstall" ]; then
@@ -20,6 +20,11 @@ fi
 
 mkdir -p "$DATA"
 cp -r "$HERE/share/." "$DATA/"
-sed -i "s|^Exec=.*|Exec=\"$HERE/BudgetTracker\" %U|" "$DATA/applications/$ID.desktop"
+ENTRY="$DATA/applications/$ID.desktop"
+if [ ! -f "$ENTRY" ]; then
+  echo "Desktop entry $ENTRY was not installed; the bundle is incomplete." >&2
+  exit 1
+fi
+sed -i "s|^Exec=.*|Exec=\"$HERE/BudgetTracker\" %U|" "$ENTRY"
 update-desktop-database "$DATA/applications" 2>/dev/null || true
 echo "Budget Tracker added to the application menu."

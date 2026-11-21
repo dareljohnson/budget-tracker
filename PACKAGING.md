@@ -294,6 +294,17 @@ python packaging/make_icons.py
 To use your own artwork instead, replace those icon files with a square image that has a transparent
 background (and regenerate `src/assets/icon.ico`, which must stay an `.ico`).
 
+The icon shown on the downloaded file differs by platform:
+
+- **Windows:** `packaging/windows/installer.iss` sets `SetupIconFile`, so `setup.exe` and its shortcuts
+  carry `packaging/windows/budget_tracker.ico`.
+- **macOS:** the `.app` gets its icon from `src/assets/icon.png` during `flet build`; `packaging/macos/build.sh`
+  also writes a `.VolumeIcon.icns`, so the mounted **.dmg volume** shows the app icon. The `.dmg` file itself
+  still uses Finder's standard disk-image icon, which macOS does not let the build set with the built-in tools.
+- **Linux:** the `.tar.gz` is a compressed archive and uses the file manager's generic archive icon. Its
+  `share/applications` entry and hicolor icons are installed by `install.sh`, so the **application menu**
+  shows the app icon. The AppImage embeds the same desktop entry and icon.
+
 ## Troubleshooting
 
 | Problem | Fix |

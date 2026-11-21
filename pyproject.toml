@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "budget-tracker"
-version = "1.10.0"
+version = "1.10.1"
 description = "A personal budget tracker desktop app built with Flet and SQLite"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -21,10 +21,6 @@ dependencies = [
     "onnxruntime>=1.23,<2",
     "Pillow>=13,<14",
     "pypdfium2>=5.15,<6",
-    # Keep the universal macOS build on a cryptography release that still ships a
-    # universal2 wheel. 47+ is arm64-only, so the Intel slice would compile it from
-    # source and fail. pdfminer.six requires only cryptography>=36.
-    "cryptography>=44,<47; sys_platform == 'darwin'",
 ]
 
 [project.optional-dependencies]

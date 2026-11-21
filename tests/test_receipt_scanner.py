@@ -36,6 +36,7 @@ class TestScanner(unittest.TestCase):
                 return mock.Mock(returncode=0, stdout="", stderr="")
             with mock.patch.object(scanner, "IS_WINDOWS", True), \
                  mock.patch.object(scanner, "_powershell", return_value="powershell"), \
+                 mock.patch.object(scanner, "CREATE_NO_WINDOW", 0x08000000), \
                  mock.patch.object(scanner.subprocess, "run", side_effect=fake_run):
                 self.assertEqual(scanner.scan_receipt(target), target)
                 self.assertEqual(list(Path(tmp).glob("*.ps1")), [])
@@ -47,7 +48,7 @@ class TestScanner(unittest.TestCase):
         self.assertEqual(fake_run.kwargs.get("timeout"), 60)
         self.assertTrue(fake_run.kwargs.get("capture_output"))
         self.assertTrue(fake_run.kwargs.get("text"))
-        self.assertNotEqual(fake_run.kwargs.get("creationflags", 0), 0)
+        self.assertEqual(fake_run.kwargs.get("creationflags"), 0x08000000)
 
     def test_scan_without_scanner_raises(self):
         with tempfile.TemporaryDirectory() as tmp:

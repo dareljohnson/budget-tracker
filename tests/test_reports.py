@@ -220,11 +220,11 @@ class TestYearReport(Base):
         self.assertAlmostEqual(report.savings_rate, 0.4)
         self.assertEqual(report.budget_cents, 450_000)
         self.assertEqual(report.budget_difference_cents, 90_000)
-        self.assertEqual(report.projected_year_end_cents, 1_440_000)
+        self.assertEqual(report.projected_year_end_cents, 1_739_221)
         self.assertTrue(report.has_projection)
         self.assertEqual(report.full_year_budget_cents, 450_000)
-        self.assertEqual(report.projected_difference_cents, 450_000 - 1_440_000)
-        self.assertEqual(report.cumulative_spending[-1], 1_440_000)
+        self.assertEqual(report.projected_difference_cents, 450_000 - 1_739_221)
+        self.assertEqual(report.cumulative_spending[-1], 1_739_221)
         self.assertEqual(report.cumulative_budget[-1], 450_000)
         self.assertEqual([item.name for item in report.categories], ["Groceries"])
         self.assertEqual(report.categories[0].amount_cents, 360_000)
@@ -256,7 +256,7 @@ class TestYearReport(Base):
 
         self.assertEqual(report.spending_cents, 360_000)
         self.assertEqual(report.overview.months[2].spending_cents, 130_000)
-        self.assertEqual(report.projected_year_end_cents, 1_440_000)
+        self.assertEqual(report.projected_year_end_cents, 1_739_221)
         self.assertEqual(report.categories[0].amount_cents, 360_000)
 
     def test_prior_year_comparison_uses_the_same_cutoff(self) -> None:

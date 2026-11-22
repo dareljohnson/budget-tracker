@@ -174,6 +174,20 @@ class TestCashFlowPanel(_Base):
         self.assertTrue(chart.image.src.startswith("data:image/png;base64,"))
         self.assertEqual(chart.height, 220)
 
+    def test_chart_hover_bands_show_each_days_projected_balance(self):
+        from budget_tracker.formatting import format_money
+
+        panel = self._panel(_forecast(checking_id=self.checking_id, cash_id=self.cash_id))
+        overlay = panel._chart_image.content
+        self.assertIsInstance(overlay, ft.Row)
+        self.assertEqual(len(overlay.controls), len(panel._points))
+        first = panel._points[0]
+        self.assertIn(f"{first.date:%b} {first.date.day}", overlay.controls[0].tooltip)
+        self.assertIn(format_money(first.balance_cents), overlay.controls[0].tooltip)
+        self.assertTrue(
+            all(column.bgcolor == ft.Colors.TRANSPARENT for column in overlay.controls)
+        )
+
     def test_horizon_changes_kpis_chart_points_events_and_lowest(self):
         first = CashEvent(TODAY + timedelta(days=1), "Payroll", self.checking_id, 50_000, "income")
         bill = CashEvent(TODAY + timedelta(days=2), "Rent", self.checking_id, -30_000, "bill")

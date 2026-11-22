@@ -288,6 +288,7 @@ class CashFlowPanel:
                 ),
                 fit=ft.BoxFit.FILL,
             ),
+            content=self._chart_hover_overlay(self._points),
         )
         self._chart_image = chart
         labels = [self._today] + [
@@ -313,6 +314,11 @@ class CashFlowPanel:
                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                 ),
                 ft.Text(
+                    "Hover a day to see its projected balance.",
+                    size=fs(12),
+                    color=ft.Colors.ON_SURFACE_VARIANT,
+                ),
+                ft.Text(
                     f"Lowest point: {format_money(self._lowest_cents)} on {_date_label(self._lowest_date)}",
                     size=fs(12),
                     color=lowest_color,
@@ -320,6 +326,26 @@ class CashFlowPanel:
             ],
             spacing=8,
             horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
+        )
+
+    @staticmethod
+    def _chart_hover_overlay(points: list[CashFlowPoint]) -> ft.Row:
+        """One transparent band per projected day, with its date and balance in a tooltip."""
+        return ft.Row(
+            [
+                ft.Container(
+                    expand=True,
+                    height=CHART_HEIGHT,
+                    bgcolor=ft.Colors.TRANSPARENT,
+                    tooltip=(
+                        f"{_date_label(point.date)}\n"
+                        f"Projected balance {format_money(point.balance_cents)}"
+                    ),
+                )
+                for point in points
+            ],
+            spacing=0,
+            expand=True,
         )
 
     def _callout_control(self) -> ft.Control | None:

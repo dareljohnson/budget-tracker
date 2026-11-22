@@ -49,6 +49,13 @@ def _months_label(count: int) -> str:
     return "1 month" if count == 1 else f"{count} months"
 
 
+def _elapsed_label(value: float) -> str:
+    """Describe a fractional month count without turning a whole month into ``1.0 months``."""
+    if abs(value - round(value)) < 0.05:
+        return _months_label(round(value))
+    return f"{value:.1f} months"
+
+
 class YearView:
     def __init__(
         self,
@@ -154,7 +161,7 @@ class YearView:
             self.ctx.page.update()
             return
         self.year.visible = True
-        overview = self.ctx.service.year_overview(int(self.year.value))
+        overview = self.ctx.service.year_overview(int(self.year.value), through=date.today())
         if not overview.has_data:
             self.body.controls = [
                 card(
@@ -206,7 +213,7 @@ class YearView:
         else:
             forecast_title = "Year-end pace"
             forecast_value = format_money(overview.forecast_spending_cents)
-            forecast_caption = f"Estimate · {_months_label(overview.elapsed_months)} elapsed"
+            forecast_caption = f"Estimate · {_elapsed_label(overview.elapsed_fraction)} elapsed"
         return ft.ResponsiveRow(
             [
                 summary_tile(
@@ -299,6 +306,7 @@ class YearView:
                 ),
                 fit=ft.BoxFit.CONTAIN,
             ),
+            content=self._chart_hover_overlay(months),
         )
 
         def legend(color: str, text: str) -> ft.Row:
@@ -325,9 +333,38 @@ class YearView:
                     size=fs(12),
                     color=ft.Colors.ON_SURFACE_VARIANT,
                 ),
+                ft.Text(
+                    "Hover a month to see its cumulative budget and spending.",
+                    size=fs(12),
+                    color=ft.Colors.ON_SURFACE_VARIANT,
+                ),
             ],
             spacing=8,
         )
+
+    @staticmethod
+    def _chart_hover_overlay(months: list[CumulativeMonth]) -> ft.Row:
+        """Transparent month-wide bands whose tooltips carry the plotted cumulative values."""
+        columns: list[ft.Control] = []
+        running_budget = 0
+        running_spending = 0
+        for month in months:
+            running_budget += month.budget_cents
+            running_spending += month.spending_cents
+            progress = " · in progress" if month.is_current else ""
+            columns.append(
+                ft.Container(
+                    expand=True,
+                    height=CHART_HEIGHT,
+                    bgcolor=ft.Colors.TRANSPARENT,
+                    tooltip=(
+                        f"{month.label}{progress}\n"
+                        f"Cumulative budget {format_money(running_budget)}\n"
+                        f"Cumulative spending {format_money(running_spending)}"
+                    ),
+                )
+            )
+        return ft.Row(columns, spacing=0, expand=True)
 
     def _cumulative_months(self, overview: YearOverview) -> list[CumulativeMonth]:
         current = self.ctx.service.current_month()
@@ -460,14 +497,14 @@ class YearView:
     def _focus_categories(self, month: YearMonth) -> list[tuple[str, int, int | None, str]]:
         """Merge budgeted and unbudgeted spend, so the largest category always appears."""
         entries: dict[int, dict[str, object]] = {}
-        for total in self.ctx.repo.totals_by_category(month.month):
+        for total in self.ctx.repo.totals_by_category(month.month, through=date.today()):
             entries[total.category_id] = {
                 "name": total.name,
                 "spent": total.total_cents,
                 "limit": None,
                 "color": total.color,
             }
-        for progress in self.ctx.repo.budget_progress(month.month):
+        for progress in self.ctx.repo.budget_progress(month.month, through=date.today()):
             entry = entries.setdefault(
                 progress.category_id,
                 {

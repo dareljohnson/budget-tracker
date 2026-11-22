@@ -1,6 +1,7 @@
 import unittest
 from datetime import date
 from types import SimpleNamespace
+from unittest import mock
 
 try:
     import flet as ft
@@ -141,8 +142,21 @@ class TestYearOverview(Base):
         self.assertEqual((overview.ytd_budget_cents, overview.ytd_spending_cents, overview.ytd_income_cents), (220_000, 200_000, 400_000))
         self.assertEqual(overview.ytd_difference_cents, 20_000)
         self.assertEqual(overview.budgeted_months, 2)
-        self.assertEqual(overview.forecast_spending_cents, 1_200_000)
+        self.assertAlmostEqual(overview.elapsed_fraction, 1 + 15 / 28)
+        # February 15 is 1.536 months elapsed, not two whole months.
+        self.assertEqual(overview.forecast_spending_cents, 1_562_791)
         self.assertIsNone(overview.prior_spending_cents)
+
+    def test_through_excludes_future_dated_transactions(self):
+        self.spend(100_000, date(2026, 2, 10))
+        self.spend(50_000, date(2026, 2, 20))
+
+        overview = self.service.year_overview(
+            2026, today=date(2026, 2, 15), through=date(2026, 2, 15)
+        )
+
+        self.assertEqual(overview.ytd_spending_cents, 100_000)
+        self.assertEqual(overview.months[1].spending_cents, 100_000)
 
     def test_compares_with_the_same_period_last_year(self):
         self.spend(50_000, date(2025, 1, 10))
@@ -285,9 +299,10 @@ class TestYearViewComposition(Base):
             ["YTD budget", "YTD spending", "Year-end pace"],
         )
         self.assertIn(titles[2], {"Under budget", "Over budget"})
-        from budget_tracker.ui.views.year import YearView, _months_label
+        from budget_tracker.ui.views.year import YearView, _elapsed_label
 
-        self.assertIn(f"Estimate · {_months_label(date.today().month)} elapsed", _texts(kpis))
+        overview = self.service.year_overview(date.today().year, through=date.today())
+        self.assertIn(f"Estimate · {_elapsed_label(overview.elapsed_fraction)} elapsed", _texts(kpis))
 
     def test_summary_tile_helper_is_compact(self):
         from budget_tracker.ui.components import summary_tile
@@ -466,6 +481,31 @@ class TestYearViewComposition(Base):
         view.refresh()
         large_src = view._chart_image.image.src
         self.assertNotEqual(large_src, dark_src)
+
+    def test_chart_hover_bands_show_cumulative_amounts(self):
+        self.budget(f"{self.year}-01", 100_000)
+        self.spend(70_000, date(self.year, 1, 10))
+        self.budget(f"{self.year}-02", 50_000)
+        self.spend(40_000, date(self.year, 2, 10))
+        view = self.view()
+
+        overlay = view._chart_image.content
+        self.assertIsInstance(overlay, ft.Row)
+        self.assertEqual(len(overlay.controls), 12)
+        january, february = overlay.controls[:2]
+        self.assertIn("Cumulative budget $1,000.00", january.tooltip)
+        self.assertIn("Cumulative spending $700.00", january.tooltip)
+        self.assertIn("Cumulative budget $1,500.00", february.tooltip)
+        self.assertIn("Cumulative spending $1,100.00", february.tooltip)
+        self.assertTrue(all(column.bgcolor == ft.Colors.TRANSPARENT for column in overlay.controls))
+
+    def test_year_view_limits_the_projection_to_transactions_through_today(self):
+        self.seed_current_month()
+        with mock.patch.object(self.service, "year_overview", wraps=self.service.year_overview) as overview:
+            self.view()
+
+        self.assertTrue(overview.called)
+        self.assertEqual(overview.call_args.kwargs.get("through"), date.today())
 
     # ---------- focus card ----------
     def test_focus_card_names_the_current_month_and_shows_budget_spent_and_categories(self):

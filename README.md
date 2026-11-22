@@ -177,9 +177,9 @@ The **Year** page has two tabs: **This year** shows the budget-versus-actual sto
 ### This year
 
 - **One toolbar:** the year picker and the This year / Next 90 days switch sit together, so they do not stack over the page.
-- **Four compact summary tiles:** YTD budget, YTD spending, over/under budget, and year-end pace.
+- **Four compact summary tiles:** YTD budget, YTD spending, over/under budget, and year-end pace. YTD counts only transactions dated today or earlier, and the pace uses the fraction of the year elapsed rather than whole months.
 - **Coverage banner:** when fewer than three months have a budget, the page says how many do, and labels the year-end pace as an estimate only when a pace projection applies.
-- **Cumulative chart:** the budget and spending lines accumulate across the year, with a scale and month labels; the current month is emphasized.
+- **Cumulative chart:** the budget and spending lines accumulate across the year, with a scale and month labels; the current month is emphasized. Hover over a month to see its cumulative budget and spending.
 - **Current-month focus:** budget vs spent, the over/under amount, and the top categories for the active month.
 - **Monthly detail:** only months with activity, the current month, and the YTD total are shown by default. **Show all 12 months** reveals the full year.
 
@@ -233,7 +233,7 @@ Choose **Reports** in the navigation rail to turn your ledger into a document yo
 - Reports read the same local SQLite data as the Dashboard, Year, Accounts, Debts, and Goals pages. They are generated on this PC and never uploaded. Like the Excel workbook and backups, exported PDFs are **not encrypted**.
 - **Net worth is account-based**, matching the Dashboard. A debt linked to a card or loan is represented by that account. A standalone debt appears in the debt table but is not part of account net worth.
 - **Liquidity is a property of each account.** The cash-flow forecast counts only accounts marked Liquid; the net-worth statement groups assets into Liquid and Other using the same flag. A house or car remains part of net worth even though it is not spendable cash.
-- The year report includes the current month to date, and labels the period **to date** when that month is not complete. Future months in the chart use a simple run rate: spending year to date divided by the number of months elapsed, times twelve. It is an estimate, not a forecast of specific bills.
+- The year report includes the current month to date, and labels the period **to date** when that month is not complete. Future months in the chart use a simple run rate: spending year to date divided by the fraction of the year elapsed (the current month counts only its elapsed days), times twelve. Only transactions through today count as actual spending. It is an estimate, not a forecast of specific bills.
 - The monthly report's balances and aggregates are as of the end of its month, or as of today while that month is still in progress. Transactions dated after the cutoff are excluded. A balance is signed: a negative card or loan balance is money owed.
 - Debt payoff estimates assume a fixed APR, monthly compounding, the minimums currently recorded, and constant payments. A plan that cannot finish within 50 years is reported as **Does not pay off**; a minimum below the monthly interest will not reduce the balance.
 

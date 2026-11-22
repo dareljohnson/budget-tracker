@@ -119,6 +119,7 @@ class YearOverview:
     year: int
     months: list[YearMonth]
     elapsed_months: int
+    elapsed_fraction: float
     ytd_budget_cents: int
     ytd_spending_cents: int
     ytd_income_cents: int
@@ -207,17 +208,24 @@ class BudgetService:
 
         The YTD figures cover January through the chosen month for the current year, all twelve
         months for a past year, and nothing for a future year. The year-end projection is a simple
-        run-rate: YTD spending divided by the months elapsed, times twelve. ``through`` limits the
-        aggregates to transactions on or before that date; reports use it so a future-dated
-        transaction in the current month does not appear as actual spending.
+        run-rate: YTD spending divided by the fraction of the year elapsed, times twelve. The
+        current month counts only its elapsed days, so a mid-month estimate is not divided by a
+        whole month. ``through`` limits the aggregates to transactions on or before that date;
+        callers use it so a future-dated transaction in the current month does not appear as
+        actual spending.
         """
         today = today or date.today()
         if year < today.year:
             elapsed = 12
+            elapsed_fraction = 12.0
         elif year == today.year:
             elapsed = today.month
+            elapsed_fraction = (today.month - 1) + today.day / calendar.monthrange(
+                today.year, today.month
+            )[1]
         else:
             elapsed = 0
+            elapsed_fraction = 0.0
         months = [f"{year:04d}-{month:02d}" for month in range(1, 13)]
         totals = {total.month: total for total in self.repo.monthly_totals(months, through=through)}
         budgets = self.repo.budget_totals(months)
@@ -240,8 +248,8 @@ class BudgetService:
         ytd_income = sum(month.income_cents for month in elapsed_months)
         budgeted_months = sum(1 for month in elapsed_months if month.has_budget)
         forecast = None
-        if elapsed and year == today.year and (ytd_budget or ytd_spending or ytd_income):
-            forecast = round(ytd_spending / elapsed * 12)
+        if elapsed and year == today.year and elapsed_fraction and (ytd_budget or ytd_spending or ytd_income):
+            forecast = round(ytd_spending / elapsed_fraction * 12)
         prior_spending = prior_income = None
         if elapsed:
             prior_months = [f"{year - 1:04d}-{month:02d}" for month in range(1, elapsed + 1)]
@@ -259,6 +267,7 @@ class BudgetService:
             year=year,
             months=year_months,
             elapsed_months=elapsed,
+            elapsed_fraction=elapsed_fraction,
             ytd_budget_cents=ytd_budget,
             ytd_spending_cents=ytd_spending,
             ytd_income_cents=ytd_income,

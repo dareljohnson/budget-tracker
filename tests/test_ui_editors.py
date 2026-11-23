@@ -205,7 +205,8 @@ class TestEditors(unittest.TestCase):
         [card] = [b for b in self.repo.account_balances() if b.account.kind.is_liability]
         view._pay_card(card)
         [dialog] = self.page.open_dialogs
-        _, _, amount, account_row, category, *_ = dialog.content.content.controls
+        _, _, amount_row, account_row, category, *_ = dialog.content.content.controls
+        amount = amount_row.controls[0]
         from_account, to_account = account_row.controls
         self.assertEqual((amount.value, from_account.label), ("100.00", "From account"))
         self.assertEqual(to_account.value, str(card.account.id))

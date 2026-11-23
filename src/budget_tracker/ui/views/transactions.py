@@ -16,6 +16,7 @@ from ...repository import RepositoryError
 from ..components import card, confirm_dialog, date_field, empty_state, page_header, transaction_row
 from ..context import AppContext
 from ..theme import EXPENSE_COLOR, GAP, INCOME_COLOR, fs
+from .currency import CurrencyConverterDialog
 from .receipts import ReceiptAttachmentDialog, ReceiptImportDialog
 from .statement_import import StatementImportDialog, open_imported_statements
 
@@ -89,6 +90,12 @@ class TransactionsView:
                             icon=ft.Icons.TABLE_CHART_OUTLINED,
                             tooltip="Full workbook with formulas: summary, transactions, accounts, budgets, bills",
                             on_click=self._export_excel,
+                        ),
+                        ft.OutlinedButton(
+                            content="JMD → USD",
+                            icon=ft.Icons.CURRENCY_EXCHANGE,
+                            tooltip="Convert Jamaican dollars to US dollars",
+                            on_click=lambda _: CurrencyConverterDialog(self.ctx).open(),
                         ),
                         ft.FilledButton(content="Add Transaction", icon=ft.Icons.ADD, on_click=lambda _: self.open_editor()),
                     ],
@@ -340,6 +347,20 @@ class TransactionEditor:
             keyboard_type=ft.KeyboardType.NUMBER,
             autofocus=True,
             on_submit=self._save,
+            expand=True,
+        )
+        self.amount_row = ft.Row(
+            [
+                self.amount,
+                ft.OutlinedButton(
+                    content="JMD",
+                    icon=ft.Icons.CURRENCY_EXCHANGE,
+                    tooltip="Convert a JMD amount to USD",
+                    on_click=self._open_converter,
+                ),
+            ],
+            spacing=8,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
         )
         account_options = [ft.DropdownOption(key=str(a.id), text=f"{a.name} ({a.kind.label})") for a in accounts]
         self.account = ft.Dropdown(
@@ -408,7 +429,7 @@ class TransactionEditor:
                     [
                         self.adjustment_label if self.is_adjustment else self.type_toggle,
                         self.hint,
-                        self.amount,
+                        self.amount_row,
                         self.account_row,
                         self.category,
                         self.date,
@@ -436,6 +457,19 @@ class TransactionEditor:
 
     def open(self) -> None:
         self.ctx.page.show_dialog(self.dialog)
+
+    def _open_converter(self, _: ft.Event | None = None) -> None:
+        CurrencyConverterDialog(self.ctx, on_use=self._apply_usd_amount).open()
+
+    def _apply_usd_amount(self, usd_cents: int) -> None:
+        """Fill the amount field with a converted USD value; the ledger still stores USD."""
+        self.amount.value = f"{usd_cents / 100:.2f}"
+        self.amount.error = None
+        try:
+            self.amount.update()
+        except RuntimeError:
+            # Direct tests build the editor without a page; the value still matters.
+            pass
 
     def _setup_adjustment(self) -> None:
         """A signed balance correction: no type toggle or category, just account/date/amount."""

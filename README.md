@@ -21,6 +21,7 @@ A personal budget tracker desktop app built with **Python 3.13**, **[Flet](https
   - **Adjustment**: a signed correction recorded from a balance check. It changes the account balance only and is excluded from income, spending, and budgets.
 
   Search and filter by type, account, category, or month, and export the current view to CSV.
+- **JMD → USD conversion**: convert Jamaican dollars at the current daily rate from the Transactions page or beside a transaction's amount. The rate is cached for 12 hours, can be entered manually when offline, and only the converted USD amount is stored in the ledger. See [Converting JMD to USD](#converting-jmd-to-usd).
 - **Statement import**: import a US checking or savings statement — a text PDF, a scanned PDF, or a PNG/JPEG photo — from the Transactions page. The file is parsed locally, with OCR when it has no usable text layer, and verified against the statement's own summary totals; nothing is written until you review it. When exactly one saved account number ending matches, that account is preselected, and a mismatch blocks the import. Each row has its own type, category, and (for transfers) destination account; a category can be applied to all selected rows at once, duplicate rows are flagged and left unchecked, and an opening balance can be set when the account has no earlier history. You can also remember the account's last four digits and save a category rule from a row. **Imported statements…** lets you undo an import. See [Importing bank statements](#importing-bank-statements) for the supported files and limits.
 - **Excel export**: **Export Excel** on the Transactions screen, or **Excel workbook** on the Reports page, saves a full `.xlsx` workbook with live formulas. It opens in Microsoft Excel, Apple Numbers, Google Sheets, and LibreOffice. See [Excel workbook](#excel-workbook).
 - **Budgets**: set monthly limits per expense category. Progress bars turn amber at 80% and red when you go over. You can copy last month's budgets.
@@ -95,6 +96,7 @@ src/budget_tracker/
   report_charts.py print-ready Pillow charts for reports
   reminders.py     due-bill check + Windows toast/SMS (for Task Scheduler)
   sms.py           carrier email-to-SMS gateways and SMTP delivery
+  currency.py      JMD/USD live rate, cache, and conversion
   main.py          Flet app shell (navigation rail, theme)
   ui/              theme, shared components, views
 src/main.py        entry point for `flet build` (native installers)
@@ -212,6 +214,17 @@ A forecast is only useful if money comes in. Click **Income plan** on the cash-f
 - An overdue bill is shown once at today, then continues on its normal schedule; there is no backlog of past occurrences.
 - Scheduled bills and income are skipped when a matching transaction dated today or later already covers them (same account, type, amount, and a date within one day).
 - **Budgets and variable spending are not included.** Budget limits are plans, not scheduled cash movements; adding them would double-count bills.
+
+## Converting JMD to USD
+
+Use **JMD → USD** on the Transactions page for a standalone conversion, or the **JMD** button beside a transaction's **Amount** to fill that amount.
+
+- **Live rate:** the dialog fetches the daily JMD-per-USD rate from [exchangerate-api.com](https://www.exchangerate-api.com). The request contains only the USD base currency; no account, transaction, or personal data is sent.
+- **Cached:** the last rate is kept locally for 12 hours. The dialog shows when it was fetched; the refresh button fetches again.
+- **Manual fallback:** if the service is unreachable, the saved rate is used. You can also edit the **JMD per USD** field directly and convert with that rate.
+- **Result:** enter an amount in JMD to see the USD result. **Use $X** fills the transaction amount; **Copy USD** copies the numeric value.
+- **What is stored:** the ledger remains USD-only. The JMD amount and the rate are not saved with the transaction, so add them to the description if you need a record.
+- Exchange rates are daily reference rates, not a bank's buy/sell rate; your bank or card may apply a different rate and fees.
 
 ## Reports
 

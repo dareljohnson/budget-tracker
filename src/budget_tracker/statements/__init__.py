@@ -21,6 +21,7 @@ from budget_tracker.statements.model import (
 )
 from budget_tracker.statements.ocr import ocr_available, ocr_document, ocr_images
 from budget_tracker.statements.regions_checking import parse_statement
+from budget_tracker.statements.wise import claims_wise, parse_wise
 
 # OCR returns flat positioned words, exactly like the PDF text extractor does.
 OcrPages = Callable[[Path], list[Word]]
@@ -43,6 +44,20 @@ def _parse_adapters(words: list[Word], *, source: str = "text") -> ParsedStateme
     words reach the adapters untouched.
     """
     lines = group_lines(words)
+    if claims_wise(lines):
+        try:
+            return replace(parse_wise(words), source=source)
+        except UnsupportedStatementError as wise_error:
+            try:
+                return parse_generic(words, source=source)
+            except (UnsupportedStatementError, StatementValidationError):
+                raise wise_error from None
+        except StatementValidationError as wise_error:
+            try:
+                return parse_generic(words, source=source)
+            except (UnsupportedStatementError, StatementValidationError):
+                raise wise_error from None
+
     claimed_regions = any("REGIONS BANK" in collapsed(line).upper() for line in lines)
     try:
         return replace(parse_statement(words), source=source)

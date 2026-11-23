@@ -22,7 +22,7 @@ A personal budget tracker desktop app built with **Python 3.13**, **[Flet](https
 
   Search and filter by type, account, category, or month, and export the current view to CSV.
 - **JMD → USD conversion**: convert Jamaican dollars at the current daily rate from the Transactions page or beside a transaction's amount. The rate is cached for 12 hours, can be entered manually when offline, and only the converted USD amount is stored in the ledger. See [Converting JMD to USD](#converting-jmd-to-usd).
-- **Statement import**: import a US checking or savings statement — a text PDF, a scanned PDF, or a PNG/JPEG photo — from the Transactions page. The file is parsed locally, with OCR when it has no usable text layer, and verified against the statement's own summary totals; nothing is written until you review it. When exactly one saved account number ending matches, that account is preselected, and a mismatch blocks the import. Each row has its own type, category, and (for transfers) destination account; a category can be applied to all selected rows at once, duplicate rows are flagged and left unchecked, and an opening balance can be set when the account has no earlier history. You can also remember the account's last four digits and save a category rule from a row. **Imported statements…** lets you undo an import. See [Importing bank statements](#importing-bank-statements) for the supported files and limits.
+- **Statement import**: import a US checking or savings statement, or a Wise USD account statement — a text PDF, a scanned PDF, or a PNG/JPEG photo — from the Transactions page. The file is parsed locally, with OCR when it has no usable text layer, and verified against the statement's own summary totals or running balance; nothing is written until you review it. When exactly one saved account number ending matches, that account is preselected, and a mismatch blocks the import. Each row has its own type, category, and (for transfers) destination account; a category can be applied to all selected rows at once, duplicate rows are flagged and left unchecked, and an opening balance can be set when the account has no earlier history. You can also remember the account's last four digits and save a category rule from a row. **Imported statements…** lets you undo an import. See [Importing bank statements](#importing-bank-statements) for the supported files and limits.
 - **Excel export**: **Export Excel** on the Transactions screen, or **Excel workbook** on the Reports page, saves a full `.xlsx` workbook with live formulas. It opens in Microsoft Excel, Apple Numbers, Google Sheets, and LibreOffice. See [Excel workbook](#excel-workbook).
 - **Budgets**: set monthly limits per expense category. Progress bars turn amber at 80% and red when you go over. You can copy last month's budgets.
 - **Categories**: income and expense categories with custom colors and icons. Default categories are created on first run. Category rules saved from statement imports are listed under **Categories → Rules**, where they can be reviewed and deleted.
@@ -88,7 +88,7 @@ src/budget_tracker/
   db.py            connection, versioned migrations, seed data
   repository.py    parameterized SQL data access
   services.py      dashboard aggregation, CSV/Excel export, statement import, balance checks
-  statements/      statement models, PDF/image extraction, local OCR, Regions adapter + generic parser
+  statements/      statement models, PDF/image extraction, local OCR, Regions + Wise adapters + generic parser
   xlsx.py          dependency-free .xlsx writer (styles, formulas, filters)
   workbook_export.py  builds the Excel workbook sheets and formulas
   reports.py       monthly, year, and net-worth report snapshots
@@ -252,7 +252,7 @@ Choose **Reports** in the navigation rail to turn your ledger into a document yo
 
 ## Importing bank statements
 
-On the **Transactions** page, choose **Import statement** and pick a US checking or savings statement: a PDF, PNG, or JPEG. The app reads it on your PC — from the PDF's text layer when there is one, and with the built-in local OCR engine for scans, photos, and PDFs with no usable text — checks the transactions against the statement's own summary totals, and shows a review before anything is written.
+On the **Transactions** page, choose **Import statement** and pick a US checking or savings statement, or a Wise USD account statement: a PDF, PNG, or JPEG. The app reads it on your PC — from the PDF's text layer when there is one, and with the built-in local OCR engine for scans, photos, and PDFs with no usable text — checks the transactions against the statement's own summary totals or running balance, and shows a review before anything is written.
 
 - The **account** is preselected when a single saved account number ending matches the statement's. If the statement's digits conflict with the selected account, the import is blocked until the right account is chosen. Statements can be imported into checking, savings, cash, or other asset accounts; credit cards and loans are refused, because a statement balance is an asset balance.
 - When a statement prints a fee separately from its withdrawals total, the fee is added to the review as one editable **Statement fees** expense, so the imported ledger still matches the printed ending balance.
@@ -260,8 +260,9 @@ On the **Transactions** page, choose **Import statement** and pick a US checking
 - Rows that look like transactions you already have are flagged **Duplicate** and left unchecked. You can still include one deliberately.
 - If the account has no transactions before the statement period, you can set its **opening balance** to the statement's beginning balance.
 - You can remember the account's last four digits for future matching, and save a **category rule** from a row so later imports categorize that description automatically.
+- **Wise USD statements** use their own adapter. It reads the `Description / Incoming / Outgoing / Amount` table, pairs each transaction with its date line, and verifies the running `Amount` column against the printed ending balance before showing the review. Wise statements in other currencies are refused. Wise's separate **Fees Summary** is informational; only the listed transactions are imported, because they already reconcile to the ending balance.
 
-The import is rejected — and nothing is written — if the parsed rows don't add up to the statement's summary, or if a row falls outside the statement period. The same file can't be imported twice. **Imported statements…** lists past imports so you can delete one and import it again.
+The import is rejected — and nothing is written — if the parsed rows don't add up to the statement's summary or running balance, or if a row falls outside the statement period. The same file can't be imported twice. **Imported statements…** lists past imports so you can delete one and import it again.
 
 ### Supported statements and limits
 

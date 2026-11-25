@@ -497,6 +497,30 @@ class DebtsView:
         ]
         if summary.account_name:
             details.append(ft.Text(f"Linked to {summary.account_name}", size=fs(13), color=SEED_COLOR))
+        if summary.property_name:
+            details.append(
+                ft.Text(
+                    f"Property: {summary.property_name}", size=fs(13), color=SEED_COLOR
+                )
+            )
+            if summary.property_value_cents is not None:
+                equity = summary.property_value_cents - summary.balance_cents
+                details.append(
+                    ft.Text(
+                        f"Market value {format_money(summary.property_value_cents)}  ·  "
+                        f"Equity {format_money(equity)}",
+                        size=fs(13),
+                        color=ft.Colors.ON_SURFACE_VARIANT,
+                    )
+                )
+        if debt.is_secured_by_property and debt.account_id is None:
+            details.append(
+                ft.Text(
+                    "Not linked to a loan account, so this balance is not in net worth",
+                    size=fs(12),
+                    color=EXPENSE_COLOR,
+                )
+            )
         if payoff_month is not None:
             details.append(ft.Text(
                 f"Payoff: {month_label(shift_month(self._start_month, payoff_month))} at this plan",
@@ -562,6 +586,7 @@ class DebtEditor:
             a for a in ctx.repo.list_accounts()
             if a.kind in (AccountKind.CREDIT_CARD, AccountKind.LOAN) and a.id not in linked
         ]
+        properties = [a for a in ctx.repo.list_accounts() if a.kind.is_real_estate]
         self.name = ft.TextField(
             label="Name",
             value=debt.name if debt else "",
@@ -573,6 +598,7 @@ class DebtEditor:
             options=[ft.DropdownOption(key=k.value, text=k.label) for k in DebtKind],
             value=(debt.kind.value if debt else DebtKind.CREDIT_CARD.value),
         )
+        self.kind.on_select = lambda _: self._kind_selected()
         self.balance = ft.TextField(label="Balance owed", prefix_icon=ft.Icons.ATTACH_MONEY,
                                     value=f"{debt.balance_cents / 100:.2f}" if debt else "")
         self.apr = ft.TextField(label="APR (%)", value=format_percent(debt.apr_bps).rstrip("%") if debt else "")
@@ -589,14 +615,32 @@ class DebtEditor:
             + [ft.DropdownOption(key=str(a.id), text=a.name) for a in linkable],
             value=str(debt.account_id) if debt and debt.account_id else "none",
         )
-        self.link.on_select = lambda _: self._link_changed()
+        self.link.on_select = lambda _: self._link_selected()
+        self.property = ft.Dropdown(
+            label="Property (optional)",
+            options=[ft.DropdownOption(key="none", text="None linked")]
+            + [ft.DropdownOption(key=str(a.id), text=a.name) for a in properties],
+            value=(
+                str(debt.property_account_id)
+                if debt and debt.property_account_id
+                else "none"
+            ),
+        )
+        self.property_note = ft.Text(
+            "Link the Real Estate account this mortgage is secured by, so the property's "
+            "market value and equity appear with it."
+            if properties
+            else "Add a Real Estate account on the Accounts page to link this property.",
+            size=fs(12),
+            color=ft.Colors.ON_SURFACE_VARIANT,
+        )
         self.error = ft.Text("", size=fs(13), color=EXPENSE_COLOR, visible=False)
         self.dialog = ft.AlertDialog(
             modal=True,
             title=ft.Text("Edit Debt" if debt else "New Debt"),
             content=ft.Container(width=460, content=ft.Column(
                 [self.name, self.kind, self.balance, self.apr, self.minimum, self.minimum_note,
-                 self.original, self.link, self.error],
+                 self.original, self.link, self.property, self.property_note, self.error],
                 spacing=14, tight=True, horizontal_alignment=ft.CrossAxisAlignment.STRETCH)),
             actions=[
                 ft.TextButton(content="Cancel", on_click=lambda _: ctx.page.pop_dialog()),
@@ -605,6 +649,20 @@ class DebtEditor:
             actions_alignment=ft.MainAxisAlignment.END,
         )
         self._link_changed()
+
+    def _kind_selected(self) -> None:
+        self._property_visibility()
+        self.dialog.update()
+
+    def _link_selected(self) -> None:
+        self._link_changed()
+        self.dialog.update()
+
+    def _property_visibility(self) -> None:
+        """Only a mortgage can point at the property that secures it."""
+        visible = self.kind.value == DebtKind.MORTGAGE.value
+        self.property.visible = visible
+        self.property_note.visible = visible
 
     def _stored_minimum_value(self) -> str:
         if self.debt is not None and self.debt.minimum_cents:
@@ -650,6 +708,7 @@ class DebtEditor:
                 self.minimum.value = self._stored_minimum_value()
             self.minimum.disabled = False
             self.minimum_note.visible = False
+        self._property_visibility()
 
     def open(self) -> None:
         self.ctx.page.show_dialog(self.dialog)
@@ -711,6 +770,11 @@ class DebtEditor:
         else:
             # A loan link keeps the chosen loan kind; the service rejects a credit-card kind.
             kind = DebtKind(self.kind.value)
+        property_link = (
+            int(self.property.value)
+            if kind is DebtKind.MORTGAGE and self.property.value not in (None, "", "none")
+            else None
+        )
         if not valid:
             self._refresh_dialog()
             return
@@ -719,11 +783,13 @@ class DebtEditor:
                 self.ctx.service.update_debt(
                     self.debt.id, name=name, kind=kind, balance_cents=balance, apr_bps=apr,
                     minimum_cents=minimum, original_balance_cents=original, account_id=link,
+                    property_account_id=property_link,
                 )
             else:
                 self.ctx.service.create_debt(
                     name, kind, balance, apr, minimum,
                     original_balance_cents=original, account_id=link,
+                    property_account_id=property_link,
                 )
         except RepositoryError as exc:
             self.error.value = str(exc)

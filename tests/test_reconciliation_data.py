@@ -79,8 +79,8 @@ class Base(unittest.TestCase):
 
 class TestSchemaV11(Base):
     def test_schema_version_and_source_column(self):
-        self.assertEqual(len(MIGRATIONS), 13)
-        self.assertEqual(schema_version(self.repo.conn), 13)
+        self.assertEqual(len(MIGRATIONS), 14)
+        self.assertEqual(schema_version(self.repo.conn), 14)
         columns = {
             row["name"]: row
             for row in self.repo.conn.execute("PRAGMA table_info(transactions)")
@@ -124,7 +124,7 @@ class TestSchemaV11(Base):
 
             migrate(conn)
 
-            self.assertEqual(schema_version(conn), 13)
+            self.assertEqual(schema_version(conn), 14)
             sources = [
                 row["source"]
                 for row in conn.execute("SELECT source FROM transactions ORDER BY id")

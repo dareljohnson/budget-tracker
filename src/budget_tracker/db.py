@@ -309,9 +309,32 @@ MIGRATIONS: list[str] = [
     ALTER TABLE accounts ADD COLUMN liquid INTEGER NOT NULL DEFAULT 1;
     UPDATE accounts SET liquid = CASE WHEN kind IN ('checking', 'savings', 'cash') THEN 1 ELSE 0 END;
     """,
+    # v14: real estate. A property is an account whose balance is its market value, and a debt
+    # (usually a mortgage) can name the property that secures it. Net worth therefore counts the
+    # full market value as an asset and the loan account's unpaid principal as a liability.
+    # SQLite cannot alter the accounts CHECK constraint in place, so the table is rebuilt.
+    """
+    CREATE TABLE accounts_new (
+        id                    INTEGER PRIMARY KEY,
+        name                  TEXT NOT NULL UNIQUE COLLATE NOCASE,
+        kind                  TEXT NOT NULL CHECK (kind IN ('checking','savings','credit_card','cash','other','loan','real_estate')),
+        opening_balance_cents INTEGER NOT NULL DEFAULT 0,
+        color                 TEXT NOT NULL DEFAULT '#3949AB',
+        created_at            TEXT NOT NULL DEFAULT (datetime('now')),
+        number_last4          TEXT,
+        liquid                INTEGER NOT NULL DEFAULT 1
+    );
+    INSERT INTO accounts_new (id, name, kind, opening_balance_cents, color, created_at, number_last4, liquid)
+        SELECT id, name, kind, opening_balance_cents, color, created_at, number_last4, liquid FROM accounts;
+    DROP TABLE accounts;
+    ALTER TABLE accounts_new RENAME TO accounts;
+
+    ALTER TABLE debts ADD COLUMN property_account_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL;
+    CREATE INDEX ix_debts_property ON debts(property_account_id) WHERE property_account_id IS NOT NULL;
+    """,
 ]
 
-FOREIGN_KEYS_OFF_MIGRATIONS = {8}
+FOREIGN_KEYS_OFF_MIGRATIONS = {8, 14}
 
 DEFAULT_EXTRA_ACCOUNTS: list[tuple[str, str, str, bool]] = [
     ("Credit Card", "credit_card", "#8E24AA", False),

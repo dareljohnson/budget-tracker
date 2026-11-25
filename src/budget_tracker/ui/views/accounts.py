@@ -17,6 +17,22 @@ from .reconcile import BalanceCheckDialog
 from .transactions import TransactionEditor
 
 
+def _equity_row(label: str, value: str, *, emphasize: bool = False) -> ft.Row:
+    """One market-value / mortgage / equity line on a real-estate account card."""
+    return ft.Row(
+        [
+            ft.Text(label, size=fs(12), color=ft.Colors.ON_SURFACE_VARIANT),
+            ft.Text(
+                value,
+                size=fs(13),
+                weight=ft.FontWeight.W_600 if emphasize else ft.FontWeight.W_500,
+                color=SEED_COLOR if emphasize else None,
+            ),
+        ],
+        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+    )
+
+
 class AccountsView:
     def __init__(self, ctx: AppContext) -> None:
         self.ctx = ctx
@@ -70,7 +86,7 @@ class AccountsView:
         self.stats.controls = [
             stat_card("Net Worth", format_money(net_worth), ft.Icons.ACCOUNT_BALANCE_WALLET, SEED_COLOR, "Assets minus debts"),
             stat_card("Liquid Assets", format_money(liquid_assets), ft.Icons.PAYMENTS, INCOME_COLOR, "Checking, savings and cash"),
-            stat_card("Other Assets", format_money(other_assets), ft.Icons.ACCOUNT_BALANCE, SEED_COLOR, "Investments, property and other"),
+            stat_card("Other Assets", format_money(other_assets), ft.Icons.ACCOUNT_BALANCE, SEED_COLOR, "Investments, vehicles and other"),
             stat_card("Debts", format_money(debts), ft.Icons.CREDIT_CARD, EXPENSE_COLOR, "Credit card and loan balances owed"),
         ]
         for control in self.stats.controls:
@@ -80,7 +96,8 @@ class AccountsView:
                 empty_state(
                     ft.Icons.ACCOUNT_BALANCE,
                     "No accounts",
-                    "Add checking, savings, cash, or an Other account for investments and property.",
+                    "Add checking, savings, cash, a Real Estate account for property, "
+                    "or an Other account for investments and vehicles.",
                 ),
                 col=12,
             )
@@ -90,8 +107,10 @@ class AccountsView:
         account = balance.account
         usage = self.ctx.repo.account_usage(account.id)
         transactions = self.ctx.repo.transaction_count(account.id)
+        linked_debts = self.ctx.repo.debt_usage(account.id)
         is_liability = account.kind.is_liability
         is_credit_card = account.kind is AccountKind.CREDIT_CARD
+        is_real_estate = account.kind.is_real_estate
         actions: list[ft.Control] = []
         if is_liability:
             actions.append(
@@ -119,10 +138,16 @@ class AccountsView:
                 on_click=lambda _: self._confirm_delete(account),
             ),
         ]
-        caption = "Owed" if is_liability and balance.owed_cents else "Balance"
+        caption = (
+            "Market value"
+            if is_real_estate
+            else ("Owed" if is_liability and balance.owed_cents else "Balance")
+        )
         mode = "Liability" if is_liability else ("Liquid" if account.liquid else "Non-liquid")
         if transactions:
             details = f"{account.kind.label}  •  {mode}  •  {transactions} transaction(s)"
+        elif linked_debts:
+            details = f"{account.kind.label}  •  {mode}  •  linked to a debt"
         elif usage:
             details = f"{account.kind.label}  •  {mode}  •  in use by an income schedule"
         else:
@@ -161,6 +186,30 @@ class AccountsView:
                 spacing=0,
             ),
         ]
+        if is_real_estate:
+            property_debt = self.ctx.repo.debt_for_property(account.id)
+            if property_debt is not None:
+                summary = self.ctx.service.debt_summary(property_debt.id)
+                equity = balance.balance_cents - summary.balance_cents
+                equity_rows = [
+                    _equity_row("Mortgage owed", format_money(summary.balance_cents)),
+                    _equity_row("Equity", format_money(equity), emphasize=True),
+                ]
+                if property_debt.original_balance_cents:
+                    equity_rows.append(
+                        _equity_row(
+                            "Original principal",
+                            format_money(property_debt.original_balance_cents),
+                        )
+                    )
+                children.append(
+                    ft.Container(
+                        content=ft.Column(equity_rows, spacing=4),
+                        padding=ft.Padding.symmetric(horizontal=12, vertical=8),
+                        border_radius=10,
+                        bgcolor=ft.Colors.with_opacity(0.05, ft.Colors.ON_SURFACE),
+                    )
+                )
         if is_credit_card:
             minimum_controls: list[ft.Control] = [
                 ft.Text("Minimum", size=fs(13), color=ft.Colors.ON_SURFACE_VARIANT)
@@ -307,6 +356,9 @@ class AccountEditor:
         if self.kind.is_liability:
             self.opening.label = "Amount currently owed"
             self.opening.hint_text = "Balance before your first tracked transaction"
+        elif self.kind.is_real_estate:
+            self.opening.label = "Market value"
+            self.opening.hint_text = "Current market value of the property"
         else:
             self.opening.label = "Opening balance"
             self.opening.hint_text = "Balance before your first tracked transaction"

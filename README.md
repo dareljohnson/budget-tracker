@@ -5,7 +5,7 @@ A personal budget tracker desktop app built with **Python 3.13**, **[Flet](https
 ## Features
 
 - **Dashboard**: net worth across all accounts, monthly income and spending, savings rate, spending by category, a six-month income vs. spending trend, account balances, budget health, recent activity, and the five days in the selected month with the highest net spending.
-- **Accounts**: checking, savings, credit card, cash, and other accounts, each with a live balance. **Other** accounts hold investments, property, vehicles, and anything else you own. Each asset account is marked **Liquid** or **Non-liquid**; checking, savings, and cash are liquid by default, and an Other account can be marked liquid if it can be spent quickly. Credit cards show the amount owed, and **Pay card** records a payment from your checking account.
+- **Accounts**: checking, savings, credit card, cash, real estate, and other accounts, each with a live balance. A **Real Estate** account holds a property's market value; **Other** accounts hold investments, vehicles, and anything else you own. Each asset account is marked **Liquid** or **Non-liquid**; checking, savings, and cash are liquid by default, and an Other account can be marked liquid if it can be spent quickly. Credit cards show the amount owed, and **Pay card** records a payment from your checking account.
 - **Goals**: savings targets with progress, a fixed monthly plan, and contributions recorded as transfers.
 - **Debts**: credit cards, auto, student, personal, mortgage and other debts, with a payoff planner
   comparing avalanche and snowball strategies at several extra monthly amounts.
@@ -150,6 +150,16 @@ To track a mortgage, auto, student, or personal loan alongside your other accoun
 - Pay the loan with **Log payment** on the debt's card, **Pay loan** on the Accounts page, or a bill whose target is the loan account. Each payment is a transfer into the loan, so the owed balance drops without counting it as spending.
 - Loan payments are tracked as a single amount: the app does not split them into principal and interest.
 
+### Real estate and mortgages
+
+A property is an account whose balance is its **market value**, and its mortgage is a Loan account liability. Net worth then counts both sides: market value minus the unpaid principal balance.
+
+1. On **Accounts**, add an account with the **Real Estate** kind and enter the property's market value.
+2. Track the mortgage as a **Loan** account with the unpaid principal as its opening balance, and create a **Mortgage** debt linked to it.
+3. In the debt editor, set **Kind** to **Mortgage** and choose the property under **Property (optional)**.
+
+The property's account card shows the market value, mortgage owed, equity, and — when you record it — the original principal. The debt card shows the same linked property and equity. If a mortgage has a property but is not linked to a Loan account, its balance is not part of account-based net worth, and the debt card says so.
+
 ### Logging payments
 
 Every payment moves real money and appears on the **Transactions** page.
@@ -239,13 +249,14 @@ Choose **Reports** in the navigation rail to turn your ledger into a document yo
 
 - **Monthly summary** — income, spending, net, savings rate, and budget use; a six-month income and spending chart; spending by category; every budget with its spent, remaining, and status; the five largest expenses; and account balances with net worth as of the end of the report month, or today while that month is still in progress. Category amounts are net of refunds, so a category where refunds exceed spending appears as a negative amount, and shares use net spending.
 - **Year in review** — year-to-date income, spending, net, and savings rate; a cumulative budget-versus-spending chart with a year-end projection; month-by-month budget performance (the current month is marked **In progress**); annual category totals; a comparison with the same period last year when that data exists; and the year-end pace.
-- **Net worth statement** — net worth with changes since last month and January 1; a twelve-month trend; **liquid and non-liquid assets** listed separately, followed by liabilities by account; each debt's balance, APR, minimum, monthly interest, and payoff at its current minimum, with an avalanche comparison at $200 extra per month; and progress on each savings goal.
+- **Net worth statement** — net worth with changes since last month and January 1; a twelve-month trend; **liquid, real estate, and other non-liquid assets** listed separately, followed by liabilities by account; each debt's balance, APR, minimum, monthly interest, and payoff at its current minimum, with an avalanche comparison at $200 extra per month; and progress on each savings goal.
 
 ### What the reports assume
 
 - Reports read the same local SQLite data as the Dashboard, Year, Accounts, Debts, and Goals pages. They are generated on this PC and never uploaded. Like the Excel workbook and backups, exported PDFs are **not encrypted**.
 - **Net worth is account-based**, matching the Dashboard. A debt linked to a card or loan is represented by that account. A standalone debt appears in the debt table but is not part of account net worth.
-- **Liquidity is a property of each account.** The cash-flow forecast counts only accounts marked Liquid; the net-worth statement groups assets into Liquid and Other using the same flag. A house or car remains part of net worth even though it is not spendable cash.
+- **Liquidity is a property of each account.** The cash-flow forecast counts only accounts marked Liquid; the net-worth statement groups assets into Liquid, Real estate, and Other non-liquid using the same flag. A house or car remains part of net worth even though it is not spendable cash.
+- **A property's balance is its market value.** A Real Estate account counts at that value; the mortgage on it is a separate Loan account whose owed balance is a liability. Linking the mortgage debt to the property only ties the two together for display — it does not change either balance.
 - The year report includes the current month to date, and labels the period **to date** when that month is not complete. Future months in the chart use a simple run rate: spending year to date divided by the fraction of the year elapsed (the current month counts only its elapsed days), times twelve. Only transactions through today count as actual spending. It is an estimate, not a forecast of specific bills.
 - The monthly report's balances and aggregates are as of the end of its month, or as of today while that month is still in progress. Transactions dated after the cutoff are excluded. A balance is signed: a negative card or loan balance is money owed.
 - Debt payoff estimates assume a fixed APR, monthly compounding, the minimums currently recorded, and constant payments. A plan that cannot finish within 50 years is reported as **Does not pay off**; a minimum below the monthly interest will not reduce the balance.

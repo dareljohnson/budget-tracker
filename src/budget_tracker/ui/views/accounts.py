@@ -16,20 +16,27 @@ from .minimum_payments import MinimumPaymentDialog, minimum_status_chip
 from .reconcile import BalanceCheckDialog
 from .transactions import TransactionEditor
 
+# Every account card gets the same height so the grid stays on a single rhythm.
+# Scaled with the text-size setting so larger text cannot clip the content.
+ACCOUNT_CARD_HEIGHT = 250
 
-def _equity_row(label: str, value: str, *, emphasize: bool = False) -> ft.Row:
-    """One market-value / mortgage / equity line on a real-estate account card."""
-    return ft.Row(
+
+def _equity_metric(label: str, value: str, *, emphasize: bool = False) -> ft.Column:
+    """One compact label-over-value metric in a real-estate card's equity strip."""
+    return ft.Column(
         [
-            ft.Text(label, size=fs(12), color=ft.Colors.ON_SURFACE_VARIANT),
+            ft.Text(label, size=fs(11), color=ft.Colors.ON_SURFACE_VARIANT),
             ft.Text(
                 value,
                 size=fs(13),
                 weight=ft.FontWeight.W_600 if emphasize else ft.FontWeight.W_500,
                 color=SEED_COLOR if emphasize else None,
+                max_lines=1,
+                overflow=ft.TextOverflow.ELLIPSIS,
             ),
         ],
-        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+        spacing=0,
+        expand=True,
     )
 
 
@@ -37,11 +44,9 @@ class AccountsView:
     def __init__(self, ctx: AppContext) -> None:
         self.ctx = ctx
         self.stats = ft.ResponsiveRow(spacing=GAP, run_spacing=GAP)
-        self.grid = ft.ResponsiveRow(
-            spacing=GAP,
-            run_spacing=GAP,
-            vertical_alignment=ft.CrossAxisAlignment.STRETCH,
-        )
+        # ResponsiveRow treats STRETCH like START when its rows wrap, so equal card
+        # heights come from ACCOUNT_CARD_HEIGHT on each card instead.
+        self.grid = ft.ResponsiveRow(spacing=GAP, run_spacing=GAP)
         self.control = ft.Column(
             [
                 page_header(
@@ -145,71 +150,77 @@ class AccountsView:
         )
         mode = "Liability" if is_liability else ("Liquid" if account.liquid else "Non-liquid")
         if transactions:
-            details = f"{account.kind.label}  •  {mode}  •  {transactions} transaction(s)"
+            count = f"{transactions} transaction" + ("" if transactions == 1 else "s")
+            details = f"{account.kind.label} • {mode} • {count}"
         elif linked_debts:
-            details = f"{account.kind.label}  •  {mode}  •  linked to a debt"
+            details = f"{account.kind.label} • {mode} • linked to a debt"
         elif usage:
-            details = f"{account.kind.label}  •  {mode}  •  in use by an income schedule"
+            details = f"{account.kind.label} • {mode} • in use by an income schedule"
         else:
-            details = f"{account.kind.label}  •  {mode}  •  0 transaction(s)"
+            details = f"{account.kind.label} • {mode} • 0 transactions"
         if account.number_last4:
-            details += f"  •  •••• {account.number_last4}"
-        heading: list[ft.Control] = [
-            ft.Text(account.name, size=fs(16), weight=ft.FontWeight.W_600),
-            ft.Text(details, size=fs(13), color=ft.Colors.ON_SURFACE_VARIANT),
-        ]
+            details += f" • •••• {account.number_last4}"
         latest = self.ctx.service.last_reconciliation(account.id)
         if latest is not None and latest.difference_cents == 0:
-            heading.append(
-                ft.Text(
-                    f"Reconciled through {latest.as_of:%Y-%m-%d}",
-                    size=fs(12),
-                    color=INCOME_COLOR,
-                    weight=ft.FontWeight.W_500,
-                )
-            )
+            details += f" • reconciled {latest.as_of:%Y-%m-%d}"
+        heading: list[ft.Control] = [
+            ft.Text(account.name, size=fs(16), weight=ft.FontWeight.W_600, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
+            ft.Text(
+                details,
+                size=fs(12),
+                color=ft.Colors.ON_SURFACE_VARIANT,
+                max_lines=1,
+                overflow=ft.TextOverflow.ELLIPSIS,
+                tooltip=details,
+            ),
+        ]
         minimum = (
             self.ctx.service.current_minimum_payment(account.id, as_of=date.today())
             if is_credit_card
             else None
         )
-        children: list[ft.Control] = [
-            ft.Row(
-                [
-                    account_avatar(account, 44),
-                    ft.Column(heading, spacing=2, expand=True),
-                ],
-                spacing=GAP,
-            ),
+        header = ft.Row(
+            [
+                account_avatar(account, 44),
+                ft.Column(heading, spacing=2, expand=True),
+            ],
+            spacing=GAP,
+        )
+        body: list[ft.Control] = [
             ft.Column(
                 [ft.Text(caption, size=fs(13), color=ft.Colors.ON_SURFACE_VARIANT), balance_text(balance, size=fs(26))],
                 spacing=0,
-            ),
+            )
         ]
         if is_real_estate:
             property_debt = self.ctx.repo.debt_for_property(account.id)
             if property_debt is not None:
                 summary = self.ctx.service.debt_summary(property_debt.id)
                 equity = balance.balance_cents - summary.balance_cents
-                equity_rows = [
-                    _equity_row("Mortgage owed", format_money(summary.balance_cents)),
-                    _equity_row("Equity", format_money(equity), emphasize=True),
-                ]
+                equity_strip = ft.Column(
+                    [
+                        ft.Row(
+                            [
+                                _equity_metric("Mortgage owed", format_money(summary.balance_cents)),
+                                _equity_metric("Equity", format_money(equity), emphasize=True),
+                            ],
+                            spacing=GAP,
+                            vertical_alignment=ft.CrossAxisAlignment.START,
+                        )
+                    ],
+                    spacing=0,
+                )
                 if property_debt.original_balance_cents:
-                    equity_rows.append(
-                        _equity_row(
-                            "Original principal",
-                            format_money(property_debt.original_balance_cents),
+                    equity_strip.controls.append(
+                        ft.Text(
+                            f"Original principal {format_money(property_debt.original_balance_cents)}",
+                            size=fs(11),
+                            color=ft.Colors.ON_SURFACE_VARIANT,
+                            max_lines=1,
+                            overflow=ft.TextOverflow.ELLIPSIS,
                         )
                     )
-                children.append(
-                    ft.Container(
-                        content=ft.Column(equity_rows, spacing=4),
-                        padding=ft.Padding.symmetric(horizontal=12, vertical=8),
-                        border_radius=10,
-                        bgcolor=ft.Colors.with_opacity(0.05, ft.Colors.ON_SURFACE),
-                    )
-                )
+                body.append(equity_strip)
         if is_credit_card:
             minimum_controls: list[ft.Control] = [
                 ft.Text("Minimum", size=fs(13), color=ft.Colors.ON_SURFACE_VARIANT)
@@ -231,7 +242,7 @@ class AccountsView:
                     on_click=lambda _: MinimumPaymentDialog(self.ctx, account).open(),
                 )
             )
-            children.append(
+            body.append(
                 ft.Row(
                     minimum_controls,
                     spacing=8,
@@ -239,8 +250,23 @@ class AccountsView:
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 )
             )
-        children.append(ft.Row(actions, alignment=ft.MainAxisAlignment.END, spacing=4))
-        return card(ft.Column(children, spacing=12), col={"xs": 12, "md": 6, "xl": 4})
+        footer = ft.Row(actions, alignment=ft.MainAxisAlignment.END, spacing=4)
+        return card(
+            ft.Column(
+                [
+                    header,
+                    ft.Column(body, spacing=12),
+                    # Fixed height plus a flexible spacer pins the actions to the bottom
+                    # while keeping the name and balance aligned across every card.
+                    ft.Container(expand=True),
+                    footer,
+                ],
+                spacing=12,
+                expand=True,
+            ),
+            col={"xs": 12, "md": 6, "xl": 4},
+            height=fs(ACCOUNT_CARD_HEIGHT),
+        )
 
     def _pay_card(self, balance: AccountBalance) -> None:
         candidates = [a for a in self.ctx.repo.list_accounts() if not a.kind.is_liability]

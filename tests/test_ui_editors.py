@@ -881,11 +881,23 @@ class TestEditors(unittest.TestCase):
             format_money(sum(b.balance_cents for b in self.repo.account_balances())),
         )
 
-    def test_accounts_grid_stretches_cards_to_equal_height(self):
-        from budget_tracker.ui.views.accounts import AccountsView
+    def test_accounts_grid_uses_uniform_card_heights(self):
+        from budget_tracker.ui.components import STAT_CARD_HEIGHT
+        from budget_tracker.ui.theme import fs
+        from budget_tracker.ui.views.accounts import ACCOUNT_CARD_HEIGHT, AccountsView
 
         view = AccountsView(self.ctx)
-        self.assertEqual(view.grid.vertical_alignment, ft.CrossAxisAlignment.STRETCH)
+        cards = view.grid.controls
+        self.assertTrue(cards)
+        self.assertEqual({card.height for card in cards}, {fs(ACCOUNT_CARD_HEIGHT)})
+        self.assertEqual(
+            {card.height for card in view.stats.controls}, {fs(STAT_CARD_HEIGHT)}
+        )
+        for card in cards:
+            _header, body, spacer, footer = card.content.controls
+            self.assertIsInstance(body, ft.Column)
+            self.assertTrue(spacer.expand)
+            self.assertEqual(footer.alignment, ft.MainAxisAlignment.END)
 
     def test_year_view_builds_with_empty_data(self):
         from budget_tracker.ui.views.year import YearView

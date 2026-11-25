@@ -83,7 +83,11 @@ def category_avatar(icon: str | None, color: str | None, size: int = 40) -> ft.C
     )
 
 
+STAT_CARD_HEIGHT = 125
+
+
 def stat_card(title: str, value: str, icon: ft.IconData, color: str, caption: str = "") -> ft.Container:
+    """A KPI card. Every one shares a height so a wrapped caption cannot make its card taller."""
     return card(
         ft.Row(
             [
@@ -106,8 +110,10 @@ def stat_card(title: str, value: str, icon: ft.IconData, color: str, caption: st
                 ),
             ],
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            expand=True,
         ),
         col={"xs": 12, "sm": 6, "xl": 3},
+        height=fs(STAT_CARD_HEIGHT),
     )
 
 

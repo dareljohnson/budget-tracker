@@ -276,11 +276,13 @@ class TestRealEstateEditors(RealEstateBase):
         self.add_property_and_mortgage()
         view = AccountsView(self.ctx)
         texts = _texts(view.grid.controls)
-        for expected in ("Home", "Market value", "Mortgage owed", "Equity", "Original principal"):
+        for expected in ("Home", "Market value", "Mortgage owed", "Equity"):
             self.assertIn(expected, texts)
+        self.assertTrue(any(text.startswith("Original principal") for text in texts))
         self.assertIn("$450,000.00", texts)
         self.assertIn("$312,000.00", texts)
         self.assertIn("$138,000.00", texts)
+        self.assertTrue(any("$360,000.00" in text for text in texts))
 
     def test_debts_view_shows_the_linked_property(self):
         from budget_tracker.ui.views.debts import DebtsView

@@ -35,6 +35,7 @@ class AccountKind(StrEnum):
     CREDIT_CARD = "credit_card"
     LOAN = "loan"
     CASH = "cash"
+    REAL_ESTATE = "real_estate"
     OTHER = "other"
 
     @property
@@ -56,6 +57,11 @@ class AccountKind(StrEnum):
         return self in (AccountKind.CHECKING, AccountKind.SAVINGS, AccountKind.CASH)
 
     @property
+    def is_real_estate(self) -> bool:
+        """Whether this account holds property, whose balance is its market value."""
+        return self is AccountKind.REAL_ESTATE
+
+    @property
     def icon(self) -> str:
         return {
             AccountKind.CHECKING: "ACCOUNT_BALANCE",
@@ -63,6 +69,7 @@ class AccountKind(StrEnum):
             AccountKind.CREDIT_CARD: "CREDIT_CARD",
             AccountKind.LOAN: "REQUEST_QUOTE",
             AccountKind.CASH: "PAYMENTS",
+            AccountKind.REAL_ESTATE: "HOME",
             AccountKind.OTHER: "ACCOUNT_BALANCE_WALLET",
         }[self]
 
@@ -161,8 +168,13 @@ class Debt:
     apr_bps: int
     minimum_cents: int = 0
     original_balance_cents: int | None = None
-    account_id: int | None = None  # set only for a debt linked to a credit card
+    account_id: int | None = None  # set only for a debt linked to a credit card or loan
+    property_account_id: int | None = None  # real estate account securing this debt, if any
     id: int | None = None
+
+    @property
+    def is_secured_by_property(self) -> bool:
+        return self.property_account_id is not None
 
 
 class IncomeFrequency(StrEnum):

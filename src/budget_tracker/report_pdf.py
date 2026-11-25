@@ -636,16 +636,20 @@ def _render_net_worth(report: NetWorthReport) -> bytes:
 
     pdf.section(
         "Assets",
-        f"Liquid {_money(report.liquid_assets_cents)}  |  Other {_money(report.other_assets_cents)}",
+        f"Liquid {_money(report.liquid_assets_cents)}  |  "
+        f"Real estate {_money(report.real_estate_cents)}  |  "
+        f"Other {_money(report.other_assets_cents)}",
         reserve=20,
     )
     if report.assets:
         pdf.report_table(
-            ("Asset", "Liquidity", "Balance"),
+            ("Asset", "Type", "Balance"),
             [
                 [
                     balance.account.name,
-                    "Liquid" if balance.account.liquid else "Non-liquid",
+                    "Real estate"
+                    if balance.account.kind.is_real_estate
+                    else ("Liquid" if balance.account.liquid else "Non-liquid"),
                     _money(balance.balance_cents),
                 ]
                 for balance in report.assets

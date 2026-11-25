@@ -17,6 +17,7 @@ from .debt_planner import DebtInput, DebtPlan, DebtStrategy, plan_payoff
 from .formatting import month_key, month_label, shift_month
 from .models import (
     AccountBalance,
+    AccountKind,
     BudgetProgress,
     CategoryTotal,
     MonthTotal,
@@ -347,12 +348,30 @@ class NetWorthReport:
         return [balance for balance in self.assets if balance.account.liquid]
 
     @property
+    def real_estate_assets(self) -> list[AccountBalance]:
+        return [
+            balance
+            for balance in self.assets
+            if balance.account.kind is AccountKind.REAL_ESTATE
+        ]
+
+    @property
     def other_assets(self) -> list[AccountBalance]:
-        return [balance for balance in self.assets if not balance.account.liquid]
+        """Non-liquid assets other than property, which the statement shows separately."""
+        return [
+            balance
+            for balance in self.assets
+            if not balance.account.liquid
+            and balance.account.kind is not AccountKind.REAL_ESTATE
+        ]
 
     @property
     def liquid_assets_cents(self) -> int:
         return sum(balance.balance_cents for balance in self.liquid_assets)
+
+    @property
+    def real_estate_cents(self) -> int:
+        return sum(balance.balance_cents for balance in self.real_estate_assets)
 
     @property
     def other_assets_cents(self) -> int:

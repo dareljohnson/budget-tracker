@@ -170,6 +170,15 @@ class DebtSummary:
     monthly_interest_cents: int
     minimum_below_interest: bool
     account_name: str | None
+    property_name: str | None = None
+    property_value_cents: int | None = None
+
+    @property
+    def property_equity_cents(self) -> int | None:
+        """Market value minus this debt's unpaid principal; None when no property is linked."""
+        if self.property_value_cents is None:
+            return None
+        return self.property_value_cents - self.balance_cents
 
 
 class BudgetService:
@@ -984,6 +993,7 @@ class BudgetService:
         original_balance_cents: int | None,
         account_id: int | None,
         *,
+        property_account_id: int | None = None,
         debt_id: int | None = None,
     ) -> None:
         name = (name or "").strip()
@@ -1012,6 +1022,10 @@ class BudgetService:
             linked = [d for d in self.repo.list_debts() if d.account_id == account_id and d.id != debt_id]
             if linked:
                 raise RepositoryError("This account is already linked to a debt")
+        if property_account_id is not None:
+            property_account = self.repo.get_account(property_account_id)
+            if property_account is None or property_account.kind is not AccountKind.REAL_ESTATE:
+                raise RepositoryError("Link a property only to a Real Estate account")
 
     def _card_owed(self, account_id: int) -> int:
         for balance in self.repo.account_balances():
@@ -1042,6 +1056,23 @@ class BudgetService:
                 status = self.current_minimum_payment(debt.account_id, as_of=as_of or date.today())
                 if status is not None:
                     minimum, from_statement, statement_month = status.amount_cents, True, status.month
+        property_name = None
+        property_value = None
+        if debt.property_account_id is not None:
+            property_account = self.repo.get_account(debt.property_account_id)
+            if property_account is not None:
+                property_name = property_account.name
+                if as_of is not None:
+                    property_value = self.repo.account_balance_as_of(property_account.id, as_of)
+                else:
+                    property_value = next(
+                        (
+                            item.balance_cents
+                            for item in self.repo.account_balances()
+                            if item.account.id == property_account.id
+                        ),
+                        None,
+                    )
         interest = monthly_interest_cents(balance, debt.apr_bps)
         return DebtSummary(
             debt=debt,
@@ -1052,6 +1083,8 @@ class BudgetService:
             monthly_interest_cents=interest,
             minimum_below_interest=balance > 0 and minimum < interest,
             account_name=account_name,
+            property_name=property_name,
+            property_value_cents=property_value,
         )
 
     def list_debt_summaries(self, *, as_of: date | None = None) -> list[DebtSummary]:
@@ -1067,14 +1100,16 @@ class BudgetService:
         *,
         original_balance_cents: int | None = None,
         account_id: int | None = None,
+        property_account_id: int | None = None,
     ) -> Debt:
         balance = self._card_owed(account_id) if account_id is not None else balance_cents
         self._validate_debt_record(name, kind, balance, apr_bps, minimum_cents,
-                                   original_balance_cents, account_id)
+                                   original_balance_cents, account_id,
+                                   property_account_id=property_account_id)
         return self.repo.add_debt(Debt(
             name=name.strip(), kind=kind, balance_cents=balance, apr_bps=apr_bps,
             minimum_cents=minimum_cents, original_balance_cents=original_balance_cents,
-            account_id=account_id,
+            account_id=account_id, property_account_id=property_account_id,
         ))
 
     def update_debt(
@@ -1088,6 +1123,7 @@ class BudgetService:
         minimum_cents: int,
         original_balance_cents: int | None,
         account_id: int | None,
+        property_account_id: int | None = None,
     ) -> None:
         existing = self.repo.get_debt(debt_id)
         if existing is None:
@@ -1099,7 +1135,8 @@ class BudgetService:
         else:
             balance = balance_cents
         self._validate_debt_record(name, kind, balance, apr_bps, minimum_cents,
-                                   original_balance_cents, account_id, debt_id=debt_id)
+                                   original_balance_cents, account_id,
+                                   property_account_id=property_account_id, debt_id=debt_id)
         if existing.account_id is None and account_id is not None:
             # Pre-link payments are superseded by the card's live balance snapshot.
             self.repo.clear_debt_payments(debt_id)
@@ -1110,7 +1147,7 @@ class BudgetService:
         self.repo.update_debt(Debt(
             id=debt_id, name=name.strip(), kind=kind, balance_cents=balance, apr_bps=apr_bps,
             minimum_cents=minimum_cents, original_balance_cents=original_balance_cents,
-            account_id=account_id,
+            account_id=account_id, property_account_id=property_account_id,
         ))
 
     def delete_debt(self, debt_id: int) -> None:

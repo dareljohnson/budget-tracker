@@ -57,10 +57,45 @@ class BackupInfo:
 
 
 def backups_dir() -> Path:
-    """Return the backup folder, creating it when needed."""
-    path = data_dir() / "backups"
+    """Return the user-visible backup folder, creating it when needed.
+
+    A Microsoft Store Python redirects ``data_dir()`` into the package cache. Backups
+    must not be hidden there, so a normal source run stores them in the user's home
+    folder. An explicit ``BUDGET_TRACKER_HOME`` (used by tests and portable setups)
+    keeps the backups beside that data folder, and an explicit
+    ``BUDGET_TRACKER_BACKUPS`` overrides both.
+    """
+    override = os.environ.get("BUDGET_TRACKER_BACKUPS")
+    if override:
+        path = Path(override)
+    elif os.environ.get("BUDGET_TRACKER_HOME"):
+        path = data_dir() / "backups"
+    else:
+        path = Path.home() / "BudgetTracker Backups"
     path.mkdir(parents=True, exist_ok=True)
+    _migrate_legacy_backups(data_dir() / "backups", path)
     return path
+
+
+def _migrate_legacy_backups(legacy: Path, destination: Path) -> None:
+    """Move old backups out of the redirected data folder, without overwriting newer files."""
+    try:
+        if not legacy.is_dir() or legacy.resolve() == destination.resolve():
+            return
+        for source in legacy.iterdir():
+            target = destination / source.name
+            if target.exists():
+                continue
+            try:
+                shutil.move(str(source), str(target))
+            except OSError:
+                continue
+        try:
+            legacy.rmdir()
+        except OSError:
+            pass
+    except OSError:
+        pass
 
 
 def status_path() -> Path:

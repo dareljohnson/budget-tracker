@@ -16,7 +16,6 @@ from pathlib import Path
 
 import flet as ft
 
-from ...config import actual_data_dir
 from ...backups import (
     BACKUP_SYNC_SETTING,
     SYNC_FOLDER_NAME,
@@ -123,18 +122,11 @@ class BackupsDialog:
             "Choose Back up now to protect your database and receipts.",
             action=self.empty_backup_button,
         )
-        display_folder = actual_data_dir() / "backups"
         self.location_text = ft.Text(
-            f"Backups are stored in {display_folder}",
+            f"Backups are stored in {backups_dir()}",
             size=fs(12),
             color=ft.Colors.ON_SURFACE_VARIANT,
-        )
-        self.redirect_text = ft.Text(
-            "Windows redirects the Microsoft Store Python's data folder into the package "
-            "cache; this is the real location.",
-            size=fs(11),
-            color=ft.Colors.ON_SURFACE_VARIANT,
-            visible=os.path.normcase(str(display_folder)) != os.path.normcase(str(backups_dir())),
+            selectable=True,
         )
         self.retention_text = ft.Text(
             RETENTION_COPY, size=fs(12), color=ft.Colors.ON_SURFACE_VARIANT
@@ -229,7 +221,6 @@ class BackupsDialog:
                             padding=ft.Padding.symmetric(vertical=2),
                         ),
                         self.location_text,
-                        self.redirect_text,
                         self.sync_block,
                         self.retention_text,
                         self.encryption_text,
@@ -612,10 +603,7 @@ class BackupsDialog:
         self._ask_restore(Path(chosen.path))
 
     def _open_folder(self, _: ft.Event | None = None) -> None:
-        folder = actual_data_dir() / "backups"
-        if not folder.is_dir():
-            folder = backups_dir()
-        self._open_path(folder)
+        self._open_path(backups_dir())
 
     def _open_sync_folder(self, _: ft.Event | None = None) -> None:
         folder = sync_dir_from_setting(self.ctx.repo)

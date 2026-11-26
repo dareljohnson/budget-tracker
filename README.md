@@ -69,7 +69,7 @@ Statement files (PDFs and images) are never copied into the database. Of the sta
 
 ## Backups and restore
 
-Budget Tracker keeps local snapshots of your data and lets you take and restore one yourself. Snapshots are ordinary ZIP files in the `backups` folder inside your data folder — `%LOCALAPPDATA%\BudgetTracker\backups` on Windows and `~/.local/share/budget_tracker/backups` on macOS and Linux (or under `XDG_DATA_HOME`; with `BUDGET_TRACKER_HOME`, it follows that folder).
+Budget Tracker keeps local snapshots of your data and lets you take and restore one yourself. Snapshots are ordinary ZIP files in a **BudgetTracker Backups** folder under your user home — `C:\Users\<you>\BudgetTracker Backups` on Windows and `~/BudgetTracker Backups` on macOS and Linux. With `BUDGET_TRACKER_HOME`, they stay in that data folder; `BUDGET_TRACKER_BACKUPS` overrides the location. Older backups stored in the app data folder are moved into the new folder automatically.
 
 - **Automatic:** after startup and on a six-hour check, the app takes a snapshot when the newest automatic one is more than 24 hours old. That is at most one automatic backup a day, not a fixed time. The newest **14 automatic** snapshots are kept and older ones are deleted.
 - **Manual:** open **Settings** (the gear at the bottom of the navigation rail) → **Backups**, then choose **Back up now**. Manual backups are never deleted automatically.

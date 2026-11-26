@@ -15,6 +15,7 @@ from ...debt_planner import (
 from ...formatting import (
     format_money,
     format_percent,
+    month_key,
     month_label,
     parse_date,
     parse_money,
@@ -237,8 +238,20 @@ class DebtsView:
         controls.append(self._included_table(included))
         controls.append(self._payoff_table(included))
         controls.append(section_title("Combined monthly schedule"))
+        changes = self._payment_changes(summaries)
+        if changes:
+            controls.append(ft.Container(
+                content=ft.Column(
+                    [ft.Text(line, size=fs(13), color=SEED_COLOR) for line in changes],
+                    spacing=4,
+                ),
+                padding=ft.Padding.symmetric(horizontal=12, vertical=8),
+                border_radius=10,
+                bgcolor=ft.Colors.with_opacity(0.06, SEED_COLOR),
+            ))
         controls.append(ft.Text(
-            "Payments and balances below are the total across every debt listed above.",
+            "Debt payments (principal + interest) and balances below are the total across every debt "
+            "listed above. Escrow is not part of debt payoff.",
             size=fs(13),
             color=ft.Colors.ON_SURFACE_VARIANT,
         ))
@@ -247,6 +260,42 @@ class DebtsView:
         if self.schedule_limit < len(current.schedule):
             controls.append(ft.TextButton(content="Show all months", on_click=self._show_more))
         self.plan_panel.controls = [card(ft.Column(controls, spacing=GAP), col=12)]
+
+    def _payment_changes(self, summaries: list[DebtSummary]) -> list[str]:
+        """Future step-ups, so they are visible even beyond the 24-month table preview."""
+        lines: list[str] = []
+        for summary in summaries:
+            if (
+                summary.minimum_after_cents is not None
+                and summary.minimum_after_date is not None
+                and summary.minimum_after_cents != summary.effective_minimum_cents
+            ):
+                lines.append(
+                    f"{summary.debt.name}: debt payment (P&I) changes to "
+                    f"{format_money(summary.minimum_after_cents)} from "
+                    f"{month_label(month_key(summary.minimum_after_date))}."
+                )
+            if summary.debt.account_id is None:
+                continue
+            bill = next(
+                (
+                    bill
+                    for bill in self.ctx.repo.list_bills()
+                    if bill.active
+                    and bill.pay_to_account_id == summary.debt.account_id
+                    and bill.amount_after_cents is not None
+                    and bill.reduced_until is not None
+                ),
+                None,
+            )
+            if bill is not None:
+                lines.append(
+                    f"{bill.name}: cash payment changes to "
+                    f"{format_money(bill.amount_after_cents)} from "
+                    f"{month_label(shift_month(month_key(bill.reduced_until), 1))} "
+                    f"(currently {format_money(bill.amount_cents)})."
+                )
+        return lines
 
     def _extra_selector(self) -> ft.Dropdown:
         keys = [str(amount) for amount in EXTRA_PRESETS]
@@ -387,7 +436,7 @@ class DebtsView:
         widths = [70, 130, 110, 110, 130]
         rows = [
             self._table_row(
-                ["Year", "Starting balance", "Interest", "Paid", "Ending balance"],
+                ["Year", "Starting balance", "Interest", "Debt paid", "Ending balance"],
                 widths,
                 header=True,
             )
@@ -396,7 +445,7 @@ class DebtsView:
         starting = interest = paid = ending = 0
         previous_ending: int | None = None
         for row in plan.schedule:
-            row_year = shift_month(self._start_month, row.month)[:4]
+            row_year = shift_month(self._start_month, row.month - 1)[:4]
             if row_year != year:
                 if year is not None:
                     rows.append(self._year_row(year, starting, interest, paid, ending, widths))
@@ -432,12 +481,12 @@ class DebtsView:
     def _monthly_table(self, plan: DebtPlan) -> ft.Column:
         widths = [130, 110, 110, 130]
         rows = [
-            self._table_row(["Month", "Payment", "Interest", "Balance"], widths, header=True)
+            self._table_row(["Month", "Debt payment", "Interest", "Balance"], widths, header=True)
         ]
         for row in plan.schedule[: self.schedule_limit]:
             rows.append(self._table_row(
                 [
-                    month_label(shift_month(self._start_month, row.month)),
+                    month_label(shift_month(self._start_month, row.month - 1)),
                     format_money(row.paid_cents),
                     format_money(row.interest_cents),
                     format_money(row.balance_cents),
@@ -481,7 +530,7 @@ class DebtsView:
         ]
         for summary in summaries:
             month = self._payoff_months.get(summary.debt.id)
-            payoff = month_label(shift_month(self._start_month, month)) if month else "—"
+            payoff = month_label(shift_month(self._start_month, month - 1)) if month else "—"
             rows.append(self._table_row(
                 [
                     summary.debt.name,
@@ -543,7 +592,7 @@ class DebtsView:
             )
         if payoff_month is not None:
             details.append(ft.Text(
-                f"Payoff: {month_label(shift_month(self._start_month, payoff_month))} at this plan",
+                f"Payoff: {month_label(shift_month(self._start_month, payoff_month - 1))} at this plan",
                 size=fs(13),
                 color=SEED_COLOR,
             ))

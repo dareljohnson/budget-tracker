@@ -50,6 +50,7 @@ from ..theme import (
     text_scale,
 )
 from .loan_payment import LoanSplitFields
+from .velocity import VelocityPanel
 
 EXTRA_PRESETS = [0, 5_000, 10_000, 20_000]
 CHART_HORIZONS = (("12", "1y"), ("36", "3y"), ("60", "5y"), ("all", "All"))
@@ -108,6 +109,7 @@ class DebtsView:
         self.grid = ft.ResponsiveRow(spacing=GAP, run_spacing=GAP)
         self.chart_panel = ft.Column(spacing=GAP)
         self.plan_panel = ft.Column(spacing=GAP)
+        self.velocity_panel = VelocityPanel(ctx)
         self.extra_cents = ctx.service.debt_plan_extra()
         self.custom_text = ""
         self.strategy = ctx.service.debt_plan_strategy()
@@ -132,6 +134,7 @@ class DebtsView:
                                      on_click=lambda _: DebtEditor(ctx, None).open())],
                 ),
                 self.chart_panel,
+                self.velocity_panel.control,
                 self.plan_panel,
                 self.grid,
             ],
@@ -144,9 +147,16 @@ class DebtsView:
 
     def refresh(self) -> None:
         self._render_plan()
+        self.velocity_panel.refresh()
         summaries = self.ctx.service.list_debt_summaries()
+        velocity_ids = self.ctx.service.velocity_target_ids()
         self.grid.controls = [
-            self._debt_card(s, self._payoff_months.get(s.debt.id)) for s in summaries
+            self._debt_card(
+                s,
+                self._payoff_months.get(s.debt.id),
+                velocity_target=s.debt.id in velocity_ids,
+            )
+            for s in summaries
         ] or [
             card(
                 empty_state(
@@ -210,11 +220,21 @@ class DebtsView:
         self.ctx.page.update()
 
     def _render_plan(self) -> None:
-        summaries = self.ctx.service.list_debt_summaries()
+        all_summaries = self.ctx.service.list_debt_summaries()
+        velocity_ids = self.ctx.service.velocity_target_ids()
+        summaries = [
+            summary for summary in all_summaries if summary.debt.id not in velocity_ids
+        ]
         if not any(summary.balance_cents > 0 for summary in summaries):
             self._payoff_months = {}
             self.chart_panel.controls = []
-            self.plan_panel.controls = [card(ft.Text("No debt to pay off."), col=12)]
+            message = (
+                "All debts are assigned to Velocity Banking. Edit the velocity plan to move "
+                "a target back to Payoff."
+                if velocity_ids
+                else "No debt to pay off."
+            )
+            self.plan_panel.controls = [card(ft.Text(message), col=12)]
             return
 
         self._start_month = self.ctx.service.current_month()
@@ -492,7 +512,7 @@ class DebtsView:
                     [
                         ft.Text("Debt reduction", size=fs(16), weight=ft.FontWeight.W_600),
                         ft.Text(
-                            f"Stacked by debt · {plan.strategy.label} · "
+                            f"Payoff debts · {plan.strategy.label} · "
                             f"{format_money(self.extra_cents)} extra",
                             size=fs(12),
                             color=ft.Colors.ON_SURFACE_VARIANT,
@@ -988,7 +1008,13 @@ class DebtsView:
             ))
         return ft.Column([section_title("Debt payoff order"), *rows], spacing=4)
 
-    def _debt_card(self, summary: DebtSummary, payoff_month: int | None = None) -> ft.Container:
+    def _debt_card(
+        self,
+        summary: DebtSummary,
+        payoff_month: int | None = None,
+        *,
+        velocity_target: bool = False,
+    ) -> ft.Container:
         debt = summary.debt
         rate = f"APR {format_percent(summary.apr_bps)}"
         if summary.loan_type is not None:
@@ -1057,9 +1083,28 @@ class DebtsView:
             ft.IconButton(ft.Icons.DELETE_OUTLINE, tooltip="Delete", icon_color=EXPENSE_COLOR,
                           on_click=lambda _: self._confirm_delete(debt)),
         ]
+        plan_label = "Velocity" if velocity_target else "Payoff"
+        plan_color = SEED_COLOR if velocity_target else INCOME_COLOR
+        plan_badge = ft.Container(
+            content=ft.Text(plan_label, size=fs(11), weight=ft.FontWeight.W_600, color=plan_color),
+            padding=ft.Padding.symmetric(horizontal=8, vertical=2),
+            border_radius=999,
+            bgcolor=ft.Colors.with_opacity(0.12, plan_color),
+        )
         return card(
             ft.Column([ft.Text(debt.name, size=fs(16), weight=ft.FontWeight.W_600),
-                       ft.Text(debt.kind.label, size=fs(13), color=ft.Colors.ON_SURFACE_VARIANT),
+                       ft.Row(
+                           [
+                               ft.Text(
+                                   debt.kind.label,
+                                   size=fs(13),
+                                   color=ft.Colors.ON_SURFACE_VARIANT,
+                               ),
+                               plan_badge,
+                           ],
+                           spacing=8,
+                           wrap=True,
+                       ),
                        *details,
                        ft.Row(actions, alignment=ft.MainAxisAlignment.END, spacing=4, wrap=True)],
                       spacing=8),

@@ -289,6 +289,7 @@ class TransactionsView:
         preset_account_id: int | None = None,
         preset_to_account_id: int | None = None,
         preset_amount_cents: int | None = None,
+        preset_description: str = "",
     ) -> None:
         TransactionEditor(
             self.ctx,
@@ -297,6 +298,7 @@ class TransactionsView:
             preset_account_id=preset_account_id,
             preset_to_account_id=preset_to_account_id,
             preset_amount_cents=preset_amount_cents,
+            preset_description=preset_description,
         ).open()
 
 
@@ -320,6 +322,7 @@ class TransactionEditor:
         preset_account_id: int | None = None,
         preset_to_account_id: int | None = None,
         preset_amount_cents: int | None = None,
+        preset_description: str = "",
     ) -> None:
         self.ctx = ctx
         self.tx = tx
@@ -381,7 +384,12 @@ class TransactionEditor:
         )
         self.category = ft.Dropdown(label="Category", expand=True)
         self.date = date_field(ctx.page, "Date", tx.occurred_on if tx else date.today())
-        self.description = ft.TextField(label="Description (optional)", value=tx.description if tx else "", max_length=120, on_submit=self._save)
+        self.description = ft.TextField(
+            label="Description (optional)",
+            value=tx.description if tx else preset_description,
+            max_length=120,
+            on_submit=self._save,
+        )
         attached = bool(tx and tx.receipt_path)
         self.receipt_status = ft.Text(
             "Receipt attached" if attached else "No receipt attached",

@@ -76,6 +76,33 @@ class TestHelpGuide(unittest.TestCase):
         texts = _texts(self.view.body.controls)
         self.assertIn("Debt reduction chart", texts)
 
+    def test_velocity_topic_is_searchable(self):
+        self.view.search.value = "ploc"
+        self.view.refresh()
+        texts = _texts(self.view.body.controls)
+        self.assertIn("Velocity banking (personal line of credit)", texts)
+
+    def test_velocity_setup_examples_are_searchable(self):
+        self.view.search.value = "chunk example"
+        self.view.refresh()
+        texts = _texts(self.view.body.controls)
+        self.assertIn("Velocity banking setup examples", texts)
+        self.assertIn("Example 1 — credit card", " ".join(texts))
+
+    def test_ploc_tracking_topic_is_searchable(self):
+        self.view.search.value = "ploc sweep"
+        self.view.refresh()
+        texts = _texts(self.view.body.controls)
+        self.assertIn("Tracking PLOC draws, sweeps and payments", texts)
+
+    def test_ploc_payment_walkthrough_is_searchable(self):
+        self.view.search.value = "payment walkthrough"
+        self.view.refresh()
+        texts = _texts(self.view.body.controls)
+        self.assertIn("PLOC sweep and payment walkthrough", texts)
+        self.assertIn("Step by step", texts)
+        self.assertIn("What updates automatically", texts)
+
     def test_empty_search_restores_every_section(self):
         self.view.search.value = "zzzz-no-match"
         self.view.refresh()

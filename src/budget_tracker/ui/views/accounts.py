@@ -25,7 +25,7 @@ from .transactions import TransactionEditor
 
 # Every account card gets the same height so the grid stays on a single rhythm.
 # Scaled with the text-size setting so larger text cannot clip the content.
-ACCOUNT_CARD_HEIGHT = 260
+ACCOUNT_CARD_HEIGHT = 300
 
 
 def _compact_percent(bps: int) -> str:
@@ -236,6 +236,28 @@ class AccountsView:
                     rate += f" • {account.loan_type.label}"
                 color = ft.Colors.ON_SURFACE_VARIANT
             body.append(ft.Text(rate, size=fs(12), color=color))
+            if account.credit_limit_cents:
+                available = max(0, account.credit_limit_cents - balance.owed_cents)
+                available_text = f"Available {format_money(available)}"
+                if balance.owed_cents > account.credit_limit_cents:
+                    available_text += " · over limit"
+                body.append(ft.Row(
+                    [
+                        ft.Text(
+                            f"Credit limit {format_money(account.credit_limit_cents)}",
+                            size=fs(12),
+                            color=ft.Colors.ON_SURFACE_VARIANT,
+                        ),
+                        ft.Text(
+                            available_text,
+                            size=fs(12),
+                            weight=ft.FontWeight.W_600,
+                            color=SEED_COLOR if available else EXPENSE_COLOR,
+                        ),
+                    ],
+                    spacing=12,
+                    wrap=True,
+                ))
         if is_real_estate:
             property_debt = self.ctx.repo.debt_for_property(account.id)
             if property_debt is not None:
@@ -366,6 +388,18 @@ class AccountEditor:
             keyboard_type=ft.KeyboardType.NUMBER,
             on_submit=self._save,
         )
+        self.credit_limit = ft.TextField(
+            label="Credit limit (optional)",
+            tooltip="The full credit line on a loan or card. The account card shows the remaining available credit.",
+            prefix_icon=ft.Icons.ATTACH_MONEY,
+            value=(
+                f"{account.credit_limit_cents / 100:.2f}"
+                if account is not None and account.credit_limit_cents is not None
+                else ""
+            ),
+            keyboard_type=ft.KeyboardType.NUMBER,
+            on_submit=self._save,
+        )
         self.loan_type = ft.Dropdown(
             label="Loan type",
             options=[ft.DropdownOption(key=t.value, text=t.label) for t in LoanType],
@@ -396,7 +430,7 @@ class AccountEditor:
             on_submit=self._save,
         )
         self.liability_block = ft.Column(
-            [self.apr, self.loan_type, self.promo_apr, self.promo_end],
+            [self.apr, self.credit_limit, self.loan_type, self.promo_apr, self.promo_end],
             spacing=12,
         )
         self.liquid = account.liquid if account is not None else self.kind.default_liquid
@@ -562,6 +596,7 @@ class AccountEditor:
         self.promo_apr.error = None
         self.promo_end.error = None
         self.loan_type.error_text = None
+        self.credit_limit.error = None
         if not name:
             self.name.error = "Name is required"
             valid = False
@@ -577,7 +612,18 @@ class AccountEditor:
         loan_type = None
         promo_apr_bps = None
         promo_end_date = None
+        credit_limit = None
         if self.kind.is_liability:
+            credit_text = (self.credit_limit.value or "").strip()
+            if credit_text:
+                try:
+                    parsed_limit = parse_signed_money(credit_text)
+                    if parsed_limit < 0:
+                        raise ValueError("Credit limit cannot be negative")
+                    credit_limit = parsed_limit or None
+                except ValueError as exc:
+                    self.credit_limit.error = str(exc)
+                    valid = False
             apr_text = (self.apr.value or "").strip()
             if apr_text:
                 try:
@@ -628,6 +674,7 @@ class AccountEditor:
             promo_apr_bps=promo_apr_bps,
             promo_end_date=promo_end_date,
             storage_location=(self.storage_location.value or "").strip() or None,
+            credit_limit_cents=credit_limit,
         )
         try:
             if account.id:

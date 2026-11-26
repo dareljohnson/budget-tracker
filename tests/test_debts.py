@@ -35,6 +35,10 @@ class TestSchema(unittest.TestCase):
         self.assertIn("debt_id", columns)
         indexes = {row[1] for row in self.repo.conn.execute("PRAGMA index_list(debts)")}
         self.assertIn("ux_debts_account", indexes)
+        account_columns = {
+            row[1] for row in self.repo.conn.execute("PRAGMA table_info(accounts)")
+        }
+        self.assertIn("credit_limit_cents", account_columns)
 
     def test_debt_payments_category_is_seeded(self):
         row = self.repo.conn.execute(

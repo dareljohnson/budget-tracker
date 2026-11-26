@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 from datetime import date
 
 import flet as ft
@@ -26,12 +27,43 @@ from ...formatting import (
 from ...models import AccountKind, Debt, DebtKind, TransactionType
 from ...repository import RepositoryError
 from ...services import DebtSummary
+from ..charts import (
+    DEBT_OTHER_COLOR_DARK,
+    DEBT_OTHER_COLOR_LIGHT,
+    DEBT_SERIES_COLORS_DARK,
+    DEBT_SERIES_COLORS_LIGHT,
+    ChartColors,
+    DebtSeries,
+    debt_stack_chart_png,
+)
 from ..components import card, confirm_dialog, date_field, empty_state, page_header, section_title
 from ..context import AppContext
-from ..theme import EXPENSE_COLOR, GAP, INCOME_COLOR, RADIUS, SEED_COLOR, fs
+from ..theme import (
+    EXPENSE_COLOR,
+    GAP,
+    INCOME_COLOR,
+    RADIUS,
+    SEED_COLOR,
+    THEME_PRESET_SETTING,
+    build_theme,
+    fs,
+    text_scale,
+)
 from .loan_payment import LoanSplitFields
 
 EXTRA_PRESETS = [0, 5_000, 10_000, 20_000]
+CHART_HORIZONS = (("12", "1y"), ("36", "3y"), ("60", "5y"), ("all", "All"))
+CHART_HOVER_COLUMNS = 120
+DEBT_CHART_HEIGHT = 280
+DEBT_CHART_MIN_WIDTH = 420
+DEBT_CHART_MAX_NAMED = 8
+DEBT_LAYOUT_BREAKPOINT = 768
+DEBT_LAYOUT_WIDE_BREAKPOINT = 992
+DEFAULT_PAGE_WIDTH = 1320
+RAIL_WIDTH = 120
+PAGE_PADDING = 64
+DIVIDER_WIDTH = 1
+CARD_PADDING = 40
 
 
 def comparison_amounts(custom_text: str = "") -> list[int]:
@@ -74,10 +106,12 @@ class DebtsView:
         # STRETCH without an explicit height collapses to zero height in this view's scrollable
         # body, so the cards (and the empty state) never appear. Cards size to their content.
         self.grid = ft.ResponsiveRow(spacing=GAP, run_spacing=GAP)
+        self.chart_panel = ft.Column(spacing=GAP)
         self.plan_panel = ft.Column(spacing=GAP)
         self.extra_cents = ctx.service.debt_plan_extra()
         self.custom_text = ""
         self.strategy = ctx.service.debt_plan_strategy()
+        self.chart_horizon = "60"
         self.schedule_limit = 24
         self._payoff_months: dict[int, int] = {}
         self._start_month = ctx.service.current_month()
@@ -97,6 +131,7 @@ class DebtsView:
                     [ft.FilledButton(content="Add debt", icon=ft.Icons.ADD,
                                      on_click=lambda _: DebtEditor(ctx, None).open())],
                 ),
+                self.chart_panel,
                 self.plan_panel,
                 self.grid,
             ],
@@ -178,6 +213,7 @@ class DebtsView:
         summaries = self.ctx.service.list_debt_summaries()
         if not any(summary.balance_cents > 0 for summary in summaries):
             self._payoff_months = {}
+            self.chart_panel.controls = []
             self.plan_panel.controls = [card(ft.Text("No debt to pay off."), col=12)]
             return
 
@@ -187,6 +223,8 @@ class DebtsView:
         current = plans[self.strategy]
         self._payoff_months = {debt.id: month for debt, month in current.payoff_order}
         included = [summary for summary in summaries if summary.balance_cents > 0]
+        chart_card = self._debt_chart_card(current, included)
+        self.chart_panel.controls = [chart_card] if chart_card is not None else []
 
         controls: list[ft.Control] = [section_title("Payoff plan")]
         warnings = [
@@ -260,6 +298,408 @@ class DebtsView:
         if self.schedule_limit < len(current.schedule):
             controls.append(ft.TextButton(content="Show all months", on_click=self._show_more))
         self.plan_panel.controls = [card(ft.Column(controls, spacing=GAP), col=12)]
+
+    def _set_horizon(self, value: str) -> None:
+        if value not in {option for option, _ in CHART_HORIZONS}:
+            return
+        self.chart_horizon = value
+        self.refresh()
+        self.ctx.page.update()
+
+    def _horizon_changed(self, event: ft.Event[ft.SegmentedButton] | None) -> None:
+        selected = getattr(getattr(event, "control", None), "selected", None) or []
+        if selected:
+            self._set_horizon(selected[0])
+
+    def _page_width(self) -> float:
+        candidates = [getattr(self.ctx.page, "width", None)]
+        window = getattr(self.ctx.page, "window", None)
+        if window is not None:
+            candidates.append(getattr(window, "width", None))
+        for candidate in candidates:
+            try:
+                width = float(candidate)
+            except (TypeError, ValueError):
+                continue
+            if width > 0:
+                return width
+        return DEFAULT_PAGE_WIDTH
+
+    def _chart_width(self) -> int:
+        """The chart's inner width at the current page width, in logical pixels."""
+        page_width = self._page_width()
+        content = max(1.0, page_width - RAIL_WIDTH - DIVIDER_WIDTH - PAGE_PADDING)
+        card_width = max(1.0, content - CARD_PADDING)
+        if page_width >= DEBT_LAYOUT_WIDE_BREAKPOINT:
+            chart_width = (card_width - GAP) * 9 / 12
+        elif page_width >= DEBT_LAYOUT_BREAKPOINT:
+            chart_width = (card_width - GAP) * 8 / 12
+        else:
+            chart_width = card_width
+        return max(DEBT_CHART_MIN_WIDTH, round(chart_width))
+
+    def _chart_colors(self) -> tuple[ChartColors, bool]:
+        mode = getattr(self.ctx.page, "theme_mode", None)
+        dark = mode.lower().endswith("dark") if isinstance(mode, str) else mode == ft.ThemeMode.DARK
+        get_setting = getattr(self.ctx.repo, "get_setting", None)
+        preset = "indigo"
+        if get_setting is not None:
+            try:
+                preset = get_setting(THEME_PRESET_SETTING) or "indigo"
+            except Exception:  # pragma: no cover - a missing setting must not break rendering
+                preset = "indigo"
+        scheme = build_theme(dark=dark, preset=preset).color_scheme
+        return (
+            ChartColors(
+                primary=scheme.primary,
+                grid=scheme.outline_variant,
+                text=scheme.on_surface,
+                zero=scheme.outline,
+                lowest=scheme.secondary,
+                negative=scheme.error,
+                surface=scheme.surface_container_low,
+            ),
+            dark,
+        )
+
+    def _chart_items(
+        self, plan: DebtPlan, included: list[DebtSummary]
+    ) -> list[dict[str, object]]:
+        """The chart's debt bands, with extras grouped once there are more than eight debts."""
+        _, dark = self._chart_colors()
+        palette = DEBT_SERIES_COLORS_DARK if dark else DEBT_SERIES_COLORS_LIGHT
+        other_color = DEBT_OTHER_COLOR_DARK if dark else DEBT_OTHER_COLOR_LIGHT
+        by_id = {series.debt_id: series for series in plan.balance_series}
+        records: list[tuple[DebtSummary, tuple[int, ...]]] = []
+        ordered = sorted(
+            included,
+            key=lambda summary: (
+                summary.debt.id is None,
+                summary.debt.id or 0,
+            ),
+        )
+        for summary in ordered:
+            series = by_id.get(summary.debt.id)
+            if series is not None:
+                records.append((summary, tuple(series.balances_cents)))
+        if not records:
+            return []
+
+        def item(summary: DebtSummary, balances: tuple[int, ...], color: str) -> dict[str, object]:
+            return {
+                "label": summary.debt.name,
+                "balances": balances,
+                "color": color,
+                "balance_cents": summary.balance_cents,
+                "apr_bps": summary.apr_bps,
+                "payoff_month": self._payoff_months.get(summary.debt.id),
+                "group_count": 1,
+            }
+
+        if len(records) <= DEBT_CHART_MAX_NAMED:
+            return [
+                item(summary, balances, palette[index % len(palette)])
+                for index, (summary, balances) in enumerate(records)
+            ]
+
+        named = records[: DEBT_CHART_MAX_NAMED - 1]
+        rest = records[DEBT_CHART_MAX_NAMED - 1 :]
+        items = [
+            item(summary, balances, palette[index])
+            for index, (summary, balances) in enumerate(named)
+        ]
+        count = min(len(balances) for _, balances in rest)
+        grouped = tuple(
+            sum(balances[index] for _, balances in rest) for index in range(count)
+        )
+        payoffs = [
+            self._payoff_months[summary.debt.id]
+            for summary, _ in rest
+            if summary.debt.id in self._payoff_months
+        ]
+        items.append(
+            {
+                "label": f"Other ({len(rest)} debts)",
+                "balances": grouped,
+                "color": other_color,
+                "balance_cents": sum(summary.balance_cents for summary, _ in rest),
+                "apr_bps": None,
+                "payoff_month": max(payoffs) if len(payoffs) == len(rest) else None,
+                "group_count": len(rest),
+            }
+        )
+        return items
+
+    def _debt_chart_card(
+        self, plan: DebtPlan, included: list[DebtSummary]
+    ) -> ft.Container | None:
+        items = self._chart_items(plan, included)
+        if not items:
+            return None
+        count = min(len(item["balances"]) for item in items)  # type: ignore[arg-type]
+        keys = [shift_month(self._start_month, index) for index in range(count)]
+        if self.chart_horizon == "all":
+            limit = count
+        else:
+            limit = min(count, int(self.chart_horizon) + 1)
+        view_keys = keys[:limit]
+        chart_series = [
+            DebtSeries(
+                str(item["label"]),
+                tuple(item["balances"])[:limit],  # type: ignore[arg-type]
+                str(item["color"]),
+            )
+            for item in items
+        ]
+        colors, _ = self._chart_colors()
+        png = debt_stack_chart_png(
+            chart_series,
+            view_keys,
+            width=self._chart_width(),
+            height=DEBT_CHART_HEIGHT,
+            colors=colors,
+            text_scale=text_scale(),
+        )
+        total_now = sum(int(item["balance_cents"]) for item in items)
+        still_owed = sum(
+            int(item["balances"][limit - 1]) for item in items  # type: ignore[index]
+        )
+        if self.chart_horizon == "all" or limit >= count:
+            note = "Full plan · month-end balances · escrow excluded"
+        else:
+            label = {"12": "1-year", "36": "3-year", "60": "5-year"}.get(
+                self.chart_horizon, "Selected"
+            )
+            note = (
+                f"{label} view · {format_money(still_owed)} still owed then · escrow excluded"
+                if still_owed
+                else f"{label} view · debt-free by then · escrow excluded"
+            )
+
+        horizon = ft.SegmentedButton(
+            segments=[
+                ft.Segment(value=value, label=ft.Text(label, size=fs(12)))
+                for value, label in CHART_HORIZONS
+            ],
+            selected=[self.chart_horizon],
+            show_selected_icon=False,
+            allow_multiple_selection=False,
+            on_change=self._horizon_changed,
+        )
+        header = ft.ResponsiveRow(
+            [
+                ft.Column(
+                    [
+                        ft.Text("Debt reduction", size=fs(16), weight=ft.FontWeight.W_600),
+                        ft.Text(
+                            f"Stacked by debt · {plan.strategy.label} · "
+                            f"{format_money(self.extra_cents)} extra",
+                            size=fs(12),
+                            color=ft.Colors.ON_SURFACE_VARIANT,
+                        ),
+                    ],
+                    spacing=2,
+                    col={"xs": 12, "md": 8, "lg": 9},
+                ),
+                ft.Container(
+                    content=ft.Row([horizon], alignment=ft.MainAxisAlignment.END),
+                    col={"xs": 12, "md": 4, "lg": 3},
+                ),
+            ],
+            spacing=GAP,
+            run_spacing=8,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        )
+        debt_free = (
+            month_label(plan.debt_free_month)
+            if plan.finished and plan.debt_free_month
+            else "Not within 50 years"
+        )
+        summary = ft.Row(
+            [
+                ft.Container(
+                    content=ft.Text(
+                        f"Debt-free {debt_free}",
+                        size=fs(12),
+                        weight=ft.FontWeight.W_600,
+                        color=INCOME_COLOR,
+                    ),
+                    padding=ft.Padding.symmetric(horizontal=10, vertical=4),
+                    border_radius=999,
+                    bgcolor=ft.Colors.with_opacity(0.12, INCOME_COLOR),
+                ),
+                ft.Text(
+                    f"Est. interest {format_money(plan.total_interest_cents)} · "
+                    f"{self._duration_label(plan.months)}",
+                    size=fs(12),
+                    color=ft.Colors.ON_SURFACE_VARIANT,
+                ),
+            ],
+            spacing=10,
+            wrap=True,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        )
+        chart = ft.Container(
+            height=DEBT_CHART_HEIGHT,
+            expand=True,
+            image=ft.DecorationImage(
+                src=self._png_source(png),
+                fit=ft.BoxFit.CONTAIN,
+            ),
+            content=self._chart_hover_overlay(items, view_keys),
+        )
+        chart_column = ft.Column(
+            [
+                ft.Row([chart], spacing=0),
+                ft.Text(note, size=fs(11), color=ft.Colors.ON_SURFACE_VARIANT),
+            ],
+            spacing=6,
+        )
+        panel = ft.Container(
+            content=self._chart_debt_panel(items, total_now),
+            height=max(DEBT_CHART_HEIGHT, fs(40) * len(items) + fs(86)),
+            padding=ft.Padding.only(left=GAP),
+            border=ft.Border.only(
+                left=ft.BorderSide(1, ft.Colors.OUTLINE_VARIANT)
+            ),
+        )
+        body = ft.ResponsiveRow(
+            [
+                ft.Container(content=chart_column, col={"xs": 12, "md": 8, "lg": 9}),
+                ft.Container(content=panel, col={"xs": 12, "md": 4, "lg": 3}),
+            ],
+            spacing=GAP,
+            run_spacing=GAP,
+        )
+        return card(
+            ft.Column([header, summary, body], spacing=12),
+            col=12,
+        )
+
+    @staticmethod
+    def _duration_label(months: int) -> str:
+        years, remainder = divmod(max(0, months), 12)
+        if years and remainder:
+            return f"{years} yr {remainder} mo"
+        if years:
+            return f"{years} yr"
+        return f"{remainder} mo"
+
+    def _chart_hover_overlay(
+        self, items: list[dict[str, object]], keys: list[str]
+    ) -> ft.Row:
+        columns: list[ft.Control] = []
+        stride = max(1, (len(keys) + CHART_HOVER_COLUMNS - 1) // CHART_HOVER_COLUMNS)
+        for index in range(0, len(keys), stride):
+            key = keys[index]
+            total = sum(int(item["balances"][index]) for item in items)  # type: ignore[index]
+            lines = [f"{month_label(key)}", f"Total {format_money(total)}"]
+            lines.extend(
+                f"{item['label']}: {format_money(int(item['balances'][index]))}"  # type: ignore[index]
+                for item in items
+            )
+            columns.append(
+                ft.Container(
+                    expand=True,
+                    height=DEBT_CHART_HEIGHT,
+                    bgcolor=ft.Colors.TRANSPARENT,
+                    tooltip="\n".join(lines),
+                )
+            )
+        return ft.Row(columns, spacing=0, expand=True)
+
+    def _chart_debt_panel(
+        self, items: list[dict[str, object]], total_now: int
+    ) -> ft.Column:
+        rows: list[ft.Control] = [
+            ft.Text(
+                "Debts in this plan",
+                size=fs(11),
+                weight=ft.FontWeight.W_600,
+                color=ft.Colors.ON_SURFACE_VARIANT,
+            )
+        ]
+        for item in items:
+            payoff_month = item["payoff_month"]
+            payoff = (
+                month_label(shift_month(self._start_month, int(payoff_month)))
+                if payoff_month is not None
+                else "—"
+            )
+            if item["group_count"] == 1:
+                detail = (
+                    f"{format_money(int(item['balance_cents']))} · "
+                    f"{format_percent(int(item['apr_bps']))} APR"
+                )
+            else:
+                detail = (
+                    f"{format_money(int(item['balance_cents']))} · "
+                    f"{int(item['group_count'])} debts"
+                )
+            rows.append(
+                ft.Row(
+                    [
+                        ft.Container(
+                            width=9,
+                            height=9,
+                            border_radius=2,
+                            bgcolor=str(item["color"]),
+                        ),
+                        ft.Column(
+                            [
+                                ft.Text(
+                                    str(item["label"]),
+                                    size=fs(13),
+                                    weight=ft.FontWeight.W_600,
+                                ),
+                                ft.Text(
+                                    detail,
+                                    size=fs(11),
+                                    color=ft.Colors.ON_SURFACE_VARIANT,
+                                ),
+                            ],
+                            spacing=1,
+                            expand=True,
+                        ),
+                        ft.Text(
+                            f"Paid\n{payoff}",
+                            size=fs(11),
+                            color=ft.Colors.ON_SURFACE_VARIANT,
+                            text_align=ft.TextAlign.RIGHT,
+                        ),
+                    ],
+                    spacing=8,
+                    vertical_alignment=ft.CrossAxisAlignment.START,
+                )
+            )
+        rows.append(ft.Container(expand=True))
+        rows.append(
+            ft.Row(
+                [
+                    ft.Text(
+                        "Total",
+                        size=fs(12),
+                        color=ft.Colors.ON_SURFACE_VARIANT,
+                    ),
+                    ft.Text(
+                        format_money(total_now),
+                        size=fs(13),
+                        weight=ft.FontWeight.W_600,
+                    ),
+                ],
+                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+            )
+        )
+        return ft.Column(
+            rows,
+            spacing=10,
+            expand=True,
+            horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
+        )
+
+    @staticmethod
+    def _png_source(png: bytes) -> str:
+        return "data:image/png;base64," + base64.b64encode(png).decode("ascii")
 
     def _payment_changes(self, summaries: list[DebtSummary]) -> list[str]:
         """Future step-ups, so they are visible even beyond the 24-month table preview."""

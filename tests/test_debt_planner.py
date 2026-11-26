@@ -95,3 +95,26 @@ class TestPayoff(unittest.TestCase):
         a = entry("A", 100_000, 1200, 10_000)
         plan = plan_payoff([a], extra_cents=0, strategy=DebtStrategy.AVALANCHE, start_month="2026-11")
         self.assertEqual(plan.debt_free_month, shift_month("2026-11", plan.months))
+
+    def test_plan_exposes_a_balance_series_for_each_debt(self):
+        a = entry("A", 100_000, 1200, 10_000)
+        b = entry("B", 50_000, 0, 5_000)
+        plan = plan_payoff(
+            [a, b], extra_cents=0, strategy=DebtStrategy.AVALANCHE, start_month="2026-11"
+        )
+
+        self.assertEqual(len(plan.balance_series), 2)
+        self.assertEqual(len(plan.balance_series[0].balances_cents), plan.months + 1)
+        self.assertEqual(plan.balance_series[0].balances_cents[0], 100_000)
+        self.assertEqual(plan.balance_series[1].balances_cents[0], 50_000)
+        self.assertEqual(plan.balance_series[0].balances_cents[-1], 0)
+        self.assertEqual(plan.balance_series[1].balances_cents[-1], 0)
+        for index, row in enumerate(plan.schedule, start=1):
+            self.assertEqual(
+                sum(series.balances_cents[index] for series in plan.balance_series),
+                row.balance_cents,
+            )
+
+    def test_a_plan_with_no_debts_has_no_balance_series(self):
+        plan = plan_payoff([], extra_cents=0, strategy=DebtStrategy.AVALANCHE, start_month="2026-11")
+        self.assertEqual(plan.balance_series, ())

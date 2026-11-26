@@ -40,6 +40,14 @@ class DebtPayoff:
 
 
 @dataclass(slots=True, frozen=True)
+class DebtBalanceSeries:
+    """One debt's balances for the chart: the current balance, then each month's ending balance."""
+
+    debt_id: int | None
+    balances_cents: tuple[int, ...]
+
+
+@dataclass(slots=True, frozen=True)
 class DebtPlan:
     strategy: DebtStrategy
     extra_cents: int
@@ -51,6 +59,7 @@ class DebtPlan:
     schedule: list[DebtPayoff]
     payoff_order: list[tuple[Debt, int]]
     first_target: Debt | None
+    balance_series: tuple[DebtBalanceSeries, ...] = ()
 
 
 def monthly_interest_cents(balance_cents: int, apr_bps: int) -> int:
@@ -185,6 +194,7 @@ def plan_payoff(
         order = sorted(range(len(entries)), key=lambda i: (entries[i].balance_cents, -entries[i].debt.apr_bps))
     balances = [d.balance_cents for d in entries]
     minimums = [d.minimum_cents for d in entries]
+    balance_paths: list[list[int]] = [[d.balance_cents] for d in entries]
     month = 0
     total_interest = total_paid = 0
     schedule: list[DebtPayoff] = []
@@ -226,6 +236,8 @@ def plan_payoff(
         for i in order:
             if balances[i] == 0 and not any(debt is entries[i].debt for debt, _ in payoff_order):
                 payoff_order.append((entries[i].debt, month))
+        for path, balance in zip(balance_paths, balances, strict=True):
+            path.append(balance)
         schedule.append(DebtPayoff(month, sum(balances), interest_this_month, paid))
     finished = all(balance == 0 for balance in balances)
     return DebtPlan(
@@ -239,4 +251,8 @@ def plan_payoff(
         schedule=schedule,
         payoff_order=payoff_order,
         first_target=entries[order[0]].debt,
+        balance_series=tuple(
+            DebtBalanceSeries(entry.debt.id, tuple(path))
+            for entry, path in zip(entries, balance_paths, strict=True)
+        ),
     )

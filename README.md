@@ -191,6 +191,8 @@ The plan panel compares two strategies, each with an **extra monthly amount on t
 
 For the selected extra amount, the panel shows each strategy's debt-free date, months, total interest, and total paid, and marks the strategy that saves interest when both plans finish. It also compares several extra amounts ($0, $50, $100, $200, and a custom amount) side by side, and shows the month-by-month schedule and the order debts are paid off. A cleared debt's minimum rolls into the next target, so the monthly budget stays fixed until you are debt-free.
 
+A **debt reduction chart** sits above the payoff plan. It stacks each debt's balance from today to the end of the selected plan, with **1y / 3y / 5y / All** horizons. The side panel lists each debt's current balance, APR and payoff month; hover a month for its balances. The chart follows the selected strategy and extra payment, groups extras as **Other** when more than eight debts are plotted, and excludes escrow. The yearly and monthly tables below remain the full data view.
+
 A minimum may be **zero** (a deferred student loan, for example). A plan with only a zero minimum and no extra never pays the debt off; the plan says so instead of showing a date. The panel also warns when a minimum does not cover that month's interest.
 
 The projection is an **estimate**: it assumes a fixed APR, monthly compounding, the minimums you record, and constant payments, and it ignores fees, escrow, and rate changes. A mortgage in particular may differ from its real amortization. A plan that cannot finish within **50 years (600 months)** is reported as not paid off rather than given a payoff date.

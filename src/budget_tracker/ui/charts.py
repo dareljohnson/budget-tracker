@@ -26,6 +26,8 @@ CUMULATIVE_WIDTH = 1200
 CUMULATIVE_HEIGHT = 320
 DEBT_WIDTH = 900
 DEBT_HEIGHT = 280
+VELOCITY_WIDTH = 900
+VELOCITY_HEIGHT = 260
 
 NEGATIVE_COLOR = "#C62828"
 
@@ -456,6 +458,174 @@ def _truncate_text(
         else:
             high = middle - 1
     return text[:low] + ellipsis if low else ellipsis
+
+
+def velocity_chart_png(
+    target_values: Sequence[int] | None,
+    line_values: Sequence[int] | None,
+    month_keys: Sequence[str] | None,
+    *,
+    width: int = VELOCITY_WIDTH,
+    height: int = VELOCITY_HEIGHT,
+    colors: ChartColors | None = None,
+    text_scale: float = 1.0,
+    target_color: str = DEBT_SERIES_COLORS_LIGHT[0],
+    line_color: str = DEBT_SERIES_COLORS_LIGHT[1],
+    target_label: str = "Target",
+) -> bytes:
+    """Render the target and PLOC balances as two lines over the cycle schedule."""
+    colors = colors or DEFAULT_COLORS
+    text_scale = _positive_float(text_scale, 1.0)
+    pixel_width, pixel_height = _pixel_size(width, height, VELOCITY_WIDTH, VELOCITY_HEIGHT)
+    image = Image.new("RGBA", (pixel_width, pixel_height), (0, 0, 0, 0))
+    rows = _velocity_rows(target_values, line_values, month_keys)
+    if rows is not None:
+        target, line, keys = rows
+        _draw_velocity_chart(
+            image,
+            target,
+            line,
+            keys,
+            colors=colors,
+            text_scale=text_scale,
+            target_color=target_color,
+            line_color=line_color,
+            target_label=target_label,
+        )
+    return _png_bytes(image)
+
+
+def _velocity_rows(
+    target_values: Sequence[int] | None,
+    line_values: Sequence[int] | None,
+    month_keys: Sequence[str] | None,
+) -> tuple[list[int], list[int], list[str]] | None:
+    try:
+        target = [max(0, int(value)) for value in (target_values or ())]
+        line = [max(0, int(value)) for value in (line_values or ())]
+        keys = [str(key) for key in (month_keys or ())]
+    except (TypeError, ValueError):
+        return None
+    count = min(len(target), len(line), len(keys))
+    if count <= 0:
+        return None
+    return target[:count], line[:count], keys[:count]
+
+
+def _draw_velocity_chart(
+    image: Image.Image,
+    target: list[int],
+    line: list[int],
+    keys: list[str],
+    *,
+    colors: ChartColors,
+    text_scale: float,
+    target_color: str,
+    line_color: str,
+    target_label: str,
+) -> None:
+    draw = ImageDraw.Draw(image)
+    width, height = image.size
+    pad = max(2, round(_PAD * text_scale * SCALE))
+    gap = max(2, round(4 * text_scale * SCALE))
+    font = ImageFont.load_default(size=max(1, int(_DEBT_LABEL_FONT_SIZE * text_scale * SCALE)))
+
+    axis_top, ticks = _debt_axis(max([*target, *line, 0]))
+    tick_labels = [_money_label(tick) for tick in ticks]
+    tick_sizes = [_text_size(draw, label, font) for label in tick_labels]
+    label_height = max(size[1] for size in tick_sizes)
+    left = pad + max(size[0] for size in tick_sizes) + gap
+    right = max(left + 1, width - pad)
+    top = pad
+    bottom = max(top + 1, height - pad - label_height - gap)
+
+    def x_for(index: int) -> float:
+        if len(keys) == 1:
+            return left + (right - left) / 2
+        return left + (right - left) * index / (len(keys) - 1)
+
+    def y_for(cents: float) -> float:
+        clamped = min(max(float(cents), 0.0), axis_top)
+        return bottom - clamped / axis_top * (bottom - top)
+
+    for index, (tick, label) in enumerate(zip(ticks, tick_labels, strict=True)):
+        y = y_for(tick)
+        draw.line(
+            (left, y, right, y),
+            fill=_rgba(colors.zero if index == 0 else colors.grid, 170 if index == 0 else 90),
+            width=SCALE,
+        )
+        draw.text(
+            (left - gap, y),
+            label,
+            font=font,
+            fill=_rgba(colors.text, _LABEL_ALPHA),
+            anchor="rm",
+        )
+
+    target_points = [(x_for(index), y_for(value)) for index, value in enumerate(target)]
+    line_points = [(x_for(index), y_for(value)) for index, value in enumerate(line)]
+    for points, color in ((target_points, target_color), (line_points, line_color)):
+        if len(points) > 1:
+            draw.line(
+                points,
+                fill=_rgba(color),
+                width=max(1, round(2 * SCALE)),
+                joint="curve",
+            )
+        _disc(
+            draw,
+            points[-1][0],
+            points[-1][1],
+            max(2.0, 4.0 * SCALE),
+            _rgba(color),
+        )
+        _disc(
+            draw,
+            points[-1][0],
+            points[-1][1],
+            max(2.0, 4.0 * SCALE) + SCALE,
+            _rgba(colors.surface),
+        )
+        _disc(
+            draw,
+            points[-1][0],
+            points[-1][1],
+            max(2.0, 4.0 * SCALE),
+            _rgba(color),
+        )
+
+    # Direct labels at the first point, where the two balances normally differ most.
+    label_y = {
+        target_label: target_points[0][1],
+        "PLOC": line_points[0][1],
+    }
+    if abs(label_y[target_label] - label_y["PLOC"]) < label_height + 4 * SCALE:
+        middle = (label_y[target_label] + label_y["PLOC"]) / 2
+        label_y[target_label] = middle - label_height
+        label_y["PLOC"] = middle + label_height
+    for label in (target_label, "PLOC"):
+        draw.text(
+            (left + round(6 * text_scale * SCALE), label_y[label]),
+            label,
+            font=font,
+            fill=_rgba(colors.text, _LABEL_ALPHA),
+            anchor="lm",
+            stroke_width=max(1, SCALE),
+            stroke_fill=_rgba(colors.surface),
+        )
+
+    _draw_debt_x_labels(
+        draw,
+        keys,
+        x_for=x_for,
+        bottom=bottom,
+        gap=gap,
+        pad=pad,
+        width=width,
+        font=font,
+        colors=colors,
+    )
 
 
 def _pixel_size(

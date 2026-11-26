@@ -922,6 +922,39 @@ class TestEditors(unittest.TestCase):
             (card.promo_apr_bps, card.promo_end_date), (0, date(2027, 3, 1))
         )
 
+    def test_account_editor_saves_a_credit_limit(self):
+        from budget_tracker.models import AccountKind, LoanType
+        from budget_tracker.ui.views.accounts import AccountEditor
+
+        editor = AccountEditor(self.ctx, None)
+        editor.name.value = "Personal LOC"
+        editor.kind = AccountKind.LOAN
+        editor.kind_dropdown.value = AccountKind.LOAN.value
+        editor.loan_type.value = LoanType.REVOLVING.value
+        editor.apr.value = "3.99"
+        editor.credit_limit.value = "12000"
+        editor._render()
+        editor._save(None)
+
+        account = next(a for a in self.repo.list_accounts() if a.name == "Personal LOC")
+        self.assertEqual(account.credit_limit_cents, 1_200_000)
+
+    def test_accounts_card_shows_loc_limit_and_available_credit(self):
+        from budget_tracker.models import Account, AccountKind, LoanType
+        from budget_tracker.ui.views.accounts import AccountsView
+
+        self.repo.add_account(Account(
+            "Personal LOC",
+            AccountKind.LOAN,
+            opening_balance_cents=-100_000,
+            apr_bps=399,
+            loan_type=LoanType.REVOLVING,
+            credit_limit_cents=1_200_000,
+        ))
+        texts = self._texts(AccountsView(self.ctx).grid)
+        self.assertTrue(any("Credit limit $12,000.00" in text for text in texts))
+        self.assertTrue(any("Available $11,000.00" in text for text in texts))
+
     def test_account_editor_saves_a_cash_location(self):
         from budget_tracker.ui.views.accounts import AccountEditor
 
@@ -2053,6 +2086,279 @@ class TestEditors(unittest.TestCase):
         self.assertIn("Other (2 debts)", texts)
         self.assertNotIn("Debt 8", texts)
         self.assertIn("Debt 6", texts)
+
+    def test_debts_velocity_setup_card_appears_without_an_eligible_target(self):
+        from budget_tracker.ui.views.debts import DebtsView
+
+        view = DebtsView(self.ctx)
+        texts = self._texts(view.velocity_panel.control)
+        self.assertIn("Velocity banking", texts)
+        self.assertIn("Add a credit card, auto loan or personal loan with a balance", " ".join(texts))
+
+    def test_debts_velocity_setup_card_appears_for_a_card_target(self):
+        from budget_tracker.models import DebtKind
+        from budget_tracker.ui.views.debts import DebtsView
+
+        self.ctx.service.create_debt("Visa", DebtKind.CREDIT_CARD, 180_000, 2499, 4_800)
+        view = DebtsView(self.ctx)
+        texts = self._texts(view.velocity_panel.control)
+        self.assertIn("Velocity banking", texts)
+        self.assertIn("Set up velocity banking", texts)
+
+    def test_debts_velocity_card_uses_the_saved_plan(self):
+        from budget_tracker.models import DebtKind
+        from budget_tracker.services import VelocitySettings
+        from budget_tracker.ui.views.debts import DebtsView
+
+        debt = self.ctx.service.create_debt("Visa", DebtKind.CREDIT_CARD, 180_000, 2499, 4_800)
+        self.ctx.service.set_velocity_settings(VelocitySettings(
+            target_debt_ids=(debt.id or 0,),
+            loc_limit_cents=1_200_000,
+            loc_apr_bps=399,
+            loc_balance_cents=0,
+            chunk_cents=300_000,
+            sweep_cents=30_000,
+            reserve_cents=100_000,
+        ))
+        view = DebtsView(self.ctx)
+        texts = self._texts(view.velocity_panel.control)
+        self.assertIn("Velocity banking", texts)
+        self.assertIn("Target Visa: $1,800.00 at 24.99% APR", texts)
+        self.assertIn("Variable-rate scenarios", texts)
+        self.assertIn("Net interest saved", texts)
+        self.assertIn("Cycles / peak line", texts)
+        self.assertIn("Break-even PLOC rate", " ".join(texts))
+        self.assertTrue(any(text.startswith("3.99%") for text in texts))
+        self.assertTrue(any(text.startswith("5.99%") for text in texts))
+        self.assertTrue(any(text.startswith("7.99%") for text in texts))
+
+    def test_velocity_card_lists_multiple_targets(self):
+        from budget_tracker.models import DebtKind
+        from budget_tracker.services import VelocitySettings
+        from budget_tracker.ui.views.debts import DebtsView
+
+        visa = self.ctx.service.create_debt("Visa", DebtKind.CREDIT_CARD, 180_000, 2499, 4_800)
+        auto = self.ctx.service.create_debt("Auto", DebtKind.AUTO, 500_000, 690, 20_000)
+        self.ctx.service.set_velocity_settings(VelocitySettings(
+            target_debt_ids=(visa.id or 0, auto.id or 0),
+            loc_limit_cents=1_200_000,
+            loc_apr_bps=399,
+            loc_balance_cents=0,
+            chunk_cents=300_000,
+            sweep_cents=30_000,
+            reserve_cents=100_000,
+        ))
+        view = DebtsView(self.ctx)
+        texts = self._texts(view.velocity_panel.control)
+        self.assertIn("Targets (2): Visa, Auto", texts)
+        self.assertIn("Target payoff", texts)
+        self.assertIn("All targets paid", texts)
+        self.assertNotIn("Visa", self._texts(view.plan_panel))
+
+    def test_velocity_dialog_saves_a_valid_plan(self):
+        from budget_tracker.models import DebtKind
+        from budget_tracker.ui.views.velocity import VelocityPlanDialog
+
+        debt = self.ctx.service.create_debt("Visa", DebtKind.CREDIT_CARD, 180_000, 2499, 4_800)
+        dialog = VelocityPlanDialog(self.ctx, None)
+        dialog.limit.value = "12000"
+        dialog.apr.value = "3.99"
+        dialog.loc_balance.value = "0"
+        dialog.chunk.value = "3000"
+        dialog.sweep.value = "300"
+        dialog.reserve.value = "1000"
+        dialog._save(None)
+
+        settings = self.ctx.service.velocity_settings()
+        self.assertIsNotNone(settings)
+        self.assertEqual(settings.target_debt_ids, (debt.id,))
+        self.assertEqual(
+            (settings.loc_limit_cents, settings.loc_apr_bps, settings.chunk_cents,
+             settings.sweep_cents, settings.reserve_cents),
+            (1_200_000, 399, 300_000, 30_000, 100_000),
+        )
+
+    def test_velocity_dialog_selects_multiple_targets(self):
+        from budget_tracker.models import DebtKind
+        from budget_tracker.ui.views.velocity import VelocityPlanDialog
+
+        visa = self.ctx.service.create_debt("Visa", DebtKind.CREDIT_CARD, 180_000, 2499, 4_800)
+        auto = self.ctx.service.create_debt("Auto", DebtKind.AUTO, 500_000, 690, 20_000)
+        dialog = VelocityPlanDialog(self.ctx, None)
+        for _, checkbox in dialog.target_checks:
+            checkbox.value = True
+        dialog.limit.value = "12000"
+        dialog.apr.value = "3.99"
+        dialog.loc_balance.value = "0"
+        dialog.chunk.value = "3000"
+        dialog.sweep.value = "300"
+        dialog.reserve.value = "1000"
+        dialog._save(None)
+
+        settings = self.ctx.service.velocity_settings()
+        self.assertIsNotNone(settings)
+        self.assertEqual(set(settings.target_debt_ids), {visa.id, auto.id})
+
+    def test_velocity_dialog_fields_have_tooltips(self):
+        from budget_tracker.models import DebtKind
+        from budget_tracker.ui.views.velocity import VelocityPlanDialog
+
+        self.ctx.service.create_debt("Visa", DebtKind.CREDIT_CARD, 180_000, 2499, 4_800)
+        dialog = VelocityPlanDialog(self.ctx, None)
+
+        for field in (
+            dialog.limit,
+            dialog.apr,
+            dialog.loc_balance,
+            dialog.chunk,
+            dialog.sweep,
+            dialog.reserve,
+        ):
+            self.assertTrue(field.tooltip)
+        self.assertTrue(dialog.target_checks[0][1].tooltip)
+        self.assertIn("credit limit", dialog.limit.tooltip.lower())
+        self.assertIn("interest", dialog.sweep.tooltip.lower())
+
+    def test_debt_cards_are_marked_velocity_or_payoff(self):
+        from budget_tracker.models import DebtKind
+        from budget_tracker.services import VelocitySettings
+        from budget_tracker.ui.views.debts import DebtsView
+
+        visa = self.ctx.service.create_debt("Visa", DebtKind.CREDIT_CARD, 180_000, 2499, 4_800)
+        self.ctx.service.create_debt("Auto", DebtKind.AUTO, 500_000, 690, 20_000)
+        self.ctx.service.set_velocity_settings(VelocitySettings(
+            target_debt_ids=(visa.id or 0,),
+            loc_limit_cents=1_200_000,
+            loc_apr_bps=399,
+            loc_balance_cents=0,
+            chunk_cents=300_000,
+            sweep_cents=30_000,
+            reserve_cents=100_000,
+        ))
+        view = DebtsView(self.ctx)
+
+        card_texts = self._texts(view.grid)
+        self.assertIn("Velocity", card_texts)
+        self.assertIn("Payoff", card_texts)
+        plan_texts = self._texts(view.plan_panel)
+        self.assertNotIn("Visa", plan_texts)
+        self.assertIn("Auto", plan_texts)
+
+    def test_velocity_dialog_links_a_revolving_loc_account(self):
+        from budget_tracker.models import DebtKind, LoanType
+        from budget_tracker.ui.views.velocity import VelocityPlanDialog
+
+        debt = self.ctx.service.create_debt("Visa", DebtKind.CREDIT_CARD, 180_000, 2499, 4_800)
+        account = self.repo.add_account(Account(
+            "Personal LOC",
+            AccountKind.LOAN,
+            opening_balance_cents=-100_000,
+            apr_bps=399,
+            loan_type=LoanType.REVOLVING,
+            credit_limit_cents=1_200_000,
+        ))
+        dialog = VelocityPlanDialog(self.ctx, None)
+        dialog.loc_account.value = str(account.id)
+        dialog._loc_account_changed()
+        self.assertTrue(dialog.apr.disabled)
+        self.assertTrue(dialog.loc_balance.disabled)
+        self.assertTrue(dialog.limit.disabled)
+        self.assertEqual(dialog.limit.value, "12000.00")
+        self.assertEqual(dialog.apr.value, "3.99")
+        self.assertEqual(dialog.loc_balance.value, "1000.00")
+        self.assertIn("Linked to Personal LOC", dialog.loc_note.value)
+
+        dialog.limit.value = "12000"
+        dialog.chunk.value = "3000"
+        dialog.sweep.value = "300"
+        dialog.reserve.value = "1000"
+        dialog._save(None)
+
+        settings = self.ctx.service.velocity_settings()
+        self.assertIsNotNone(settings)
+        self.assertEqual(settings.target_debt_ids, (debt.id,))
+        self.assertEqual(settings.loc_account_id, account.id)
+        self.assertEqual((settings.loc_balance_cents, settings.loc_apr_bps), (100_000, 399))
+
+    def test_velocity_card_shows_linked_loc_account(self):
+        from budget_tracker.models import DebtKind, LoanType
+        from budget_tracker.services import VelocitySettings
+        from budget_tracker.ui.views.debts import DebtsView
+
+        debt = self.ctx.service.create_debt("Visa", DebtKind.CREDIT_CARD, 180_000, 2499, 4_800)
+        account = self.repo.add_account(Account(
+            "Personal LOC",
+            AccountKind.LOAN,
+            opening_balance_cents=-100_000,
+            apr_bps=399,
+            loan_type=LoanType.REVOLVING,
+            credit_limit_cents=1_200_000,
+        ))
+        self.ctx.service.set_velocity_settings(VelocitySettings(
+            target_debt_ids=(debt.id or 0,),
+            loc_limit_cents=1_200_000,
+            loc_apr_bps=399,
+            loc_balance_cents=100_000,
+            chunk_cents=300_000,
+            sweep_cents=30_000,
+            reserve_cents=100_000,
+            loc_account_id=account.id,
+        ))
+        view = DebtsView(self.ctx)
+        texts = " ".join(self._texts(view.velocity_panel.control))
+        self.assertIn("PLOC linked to Personal LOC", texts)
+        self.assertIn("3.99% APR", texts)
+        self.assertIn("read from the linked account", texts)
+        self.assertIn("$12,000.00 limit", texts)
+
+    def test_velocity_record_draw_prefills_a_transfer(self):
+        from budget_tracker.models import DebtKind, LoanType
+        from budget_tracker.services import VelocitySettings
+        from budget_tracker.ui.views.debts import DebtsView
+
+        debt = self.ctx.service.create_debt("Visa", DebtKind.CREDIT_CARD, 180_000, 2499, 4_800)
+        account = self.repo.add_account(Account(
+            "Personal LOC",
+            AccountKind.LOAN,
+            opening_balance_cents=0,
+            apr_bps=399,
+            loan_type=LoanType.REVOLVING,
+        ))
+        self.ctx.service.set_velocity_settings(VelocitySettings(
+            target_debt_ids=(debt.id or 0,),
+            loc_limit_cents=1_200_000,
+            loc_apr_bps=399,
+            loc_balance_cents=0,
+            chunk_cents=300_000,
+            sweep_cents=30_000,
+            reserve_cents=100_000,
+            loc_account_id=account.id,
+        ))
+        view = DebtsView(self.ctx)
+        view.velocity_panel._record_transfer(draw=True)
+
+        [dialog] = self.page.open_dialogs
+        texts = self._texts(dialog.content)
+        self.assertIn("PLOC draw", texts)
+
+    def test_velocity_dialog_rejects_a_chunk_above_available_credit(self):
+        from budget_tracker.models import DebtKind
+        from budget_tracker.ui.views.velocity import VelocityPlanDialog
+
+        self.ctx.service.create_debt("Visa", DebtKind.CREDIT_CARD, 180_000, 2499, 4_800)
+        dialog = VelocityPlanDialog(self.ctx, None)
+        dialog.limit.value = "12000"
+        dialog.apr.value = "3.99"
+        dialog.loc_balance.value = "0"
+        dialog.chunk.value = "11500"
+        dialog.sweep.value = "300"
+        dialog.reserve.value = "1000"
+        dialog._save(None)
+
+        self.assertIsNone(self.ctx.service.velocity_settings())
+        self.assertEqual(
+            dialog.chunk.error, "Chunk cannot exceed available credit after the reserve"
+        )
 
     def test_debt_editor_lists_loan_accounts_and_uses_loan_kind(self):
         from budget_tracker.models import Account, AccountKind, DebtKind

@@ -7,7 +7,7 @@ A personal budget tracker desktop app built with **Python 3.13**, **[Flet](https
 - **Dashboard**: net worth across all accounts, monthly income and spending, savings rate, spending by category, a six-month income vs. spending trend, account balances, budget health, recent activity, and the five days in the selected month with the highest net spending.
 - **Accounts**: checking, savings, credit card, cash, real estate, and other accounts, each with a live balance. A **Cash** account can record where the money is kept — for example a home safe, wallet, or safe deposit box — and the location appears on its card. A **Real Estate** account holds a property's market value; **Other** accounts hold investments, vehicles, and anything else you own. Each asset account is marked **Liquid** or **Non-liquid**; checking, savings, and cash are liquid by default, and an Other account can be marked liquid if it can be spent quickly. Credit cards show the amount owed, and **Pay card** records a payment from your checking account.
 - **Goals**: savings targets with progress, a fixed monthly plan, and contributions recorded as transfers.
-- **Debts**: credit cards, auto, student, personal, mortgage and other debts, with a payoff planner
+- **Debts**: credit cards, auto, student, personal, mortgage and other debts, with a payoff planner and a personal line-of-credit velocity plan
   comparing avalanche and snowball strategies at several extra monthly amounts.
 - **Year**: monthly budget versus actual spending, year-to-date totals with the same period last year, a run-rate year-end projection, and a daily cash-flow forecast for the next 30, 60, or 90 days with an income plan.
 - **Reports**: preview and export a print-ready PDF of a **monthly summary**, a **year in review**, or a **net worth statement**, built from the same ledger as the rest of the app. See [Reports](#reports).
@@ -114,7 +114,7 @@ tests/             data-layer and UI editor tests
 3. When you pay the bill, click **Pay card** (or add a **Transfer** from checking to the card). Checking goes down and the amount owed goes down. Your spending doesn't change, because you already counted it when you made the purchases.
 4. Each month, record the **minimum payment** printed on the card's statement — from the card's **Minimum** row, or while using **Check balance**. The card shows whether that month's minimum has been paid: payments into the card are matched oldest-unpaid first, so a payment made the following month still counts, and anything above a minimum rolls into the next recorded month.
 
-A credit card or loan account also records its **APR** and **loan type**: Revolving, Installment, Same as cash, or Other. For **Same as cash**, enter the **promo APR** and **promo end date**; the account card shows the promo rate, its end date, and the standard rate afterward. The account is the source of truth: linking a debt copies the debt's APR onto an account that has none, and changing the account APR updates the linked debt's payoff rate.
+A credit card or loan account also records its **APR** and **loan type**: Revolving, Installment, Same as cash, or Other. A liability can also record an optional **credit limit**; the account card then shows the credit limit and available credit. For **Same as cash**, enter the **promo APR** and **promo end date**; the account card shows the promo rate, its end date, and the standard rate afterward. The account is the source of truth: linking a debt copies the debt's APR onto an account that has none, and changing the account APR updates the linked debt's payoff rate.
 
 Existing databases are upgraded automatically: transactions recorded before accounts existed are assigned to a **Checking** account.
 
@@ -192,6 +192,58 @@ The plan panel compares two strategies, each with an **extra monthly amount on t
 For the selected extra amount, the panel shows each strategy's debt-free date, months, total interest, and total paid, and marks the strategy that saves interest when both plans finish. It also compares several extra amounts ($0, $50, $100, $200, and a custom amount) side by side, and shows the month-by-month schedule and the order debts are paid off. A cleared debt's minimum rolls into the next target, so the monthly budget stays fixed until you are debt-free.
 
 A **debt reduction chart** sits above the payoff plan. It stacks each debt's balance from today to the end of the selected plan, with **1y / 3y / 5y / All** horizons. The side panel lists each debt's current balance, APR and payoff month; hover a month for its balances. The chart follows the selected strategy and extra payment, groups extras as **Other** when more than eight debts are plotted, and excludes escrow. The yearly and monthly tables below remain the full data view.
+
+### Velocity banking with a personal line of credit
+
+The Debts page can also simulate **velocity banking** with a personal line of credit. It is separate from Avalanche and Snowball because it uses a credit line rather than a fixed payoff budget.
+
+Choose one or more credit cards, auto loans or personal loans, then enter the PLOC limit, variable APR, current amount owed, chunk per cycle, monthly sweep and the credit you want to keep unused. The simulator draws a chunk, applies it to the highest-APR target first and any leftover to the next target, sweeps the line back down, and draws another chunk only after the line reaches zero. It compares the result with paying the same cash flow directly to the selected targets, shows the combined target and PLOC balance, and runs the rate at the current level, +2 points and +4 points.
+
+Selected debts are marked **Velocity** on their debt cards and are removed from the normal Payoff plan, so their minimums are not counted twice. All other debts are marked **Payoff**.
+
+The PLOC is a **simulation**: the plan does not create a line-of-credit account or record draws and payments. Link a Revolving Loan account in the setup to read its live APR, amount owed and credit limit when set; draws and sweeps then update the plan automatically. Each setup field has a tooltip with a short explanation. The result is an estimate, not a recommendation.
+
+#### Tracking real PLOC activity
+
+The Velocity card is read-only. To track the real line, add a **Loan** account named `Personal LOC` with the amount owed, APR, **Revolving** loan type and optional **credit limit**, then link it as the **PLOC account** in the Velocity setup. Record a **draw** as a transfer from the PLOC to Checking, and a **sweep** as a transfer from Checking to the PLOC. A linked account supplies the plan’s APR, current amount owed and credit limit, so draws and sweeps update the estimate automatically. Without a link, update **Current PLOC amount owed** manually.
+
+The Velocity card’s **Record draw** and **Record sweep** buttons prefill the transfer, amount and description, then open the normal transaction dialog for confirmation. Nothing is written until you save it.
+
+**Log payment** against a Velocity target still works normally and lowers that debt’s live balance. The Velocity estimate recalculates from the new balance, but logging a payment does not draw or sweep the PLOC. For a linked card the payment is a transfer; for a linked loan it splits into principal, interest and escrow; for a standalone debt it is an expense. To fund a target with PLOC money, first transfer from the PLOC to Checking, then log the payment from Checking.
+
+#### PLOC sweep and payment walkthrough
+
+Example only: Visa **$4,800 at 24.99%**, minimum **$150**; Personal LOC **$12,000** at **3.99% variable**, current owed **$0**; reserve **$2,000**, chunk **$3,000**, sweep **$350**; Checking starts at **$2,000**.
+
+| Step | Action | Checking | PLOC owed | Visa |
+|---|---|---:|---:|---:|
+| Start | — | $2,000 | $0 | $4,800 |
+| 1 | Transfer PLOC → Checking, $3,000 | $5,000 | $3,000 | $4,800 |
+| 2 | Log payment on Visa, $3,000 from Checking | $2,000 | $3,000 | $1,800 |
+| 3 | Log Visa minimum, $150 | $1,850 | $3,000 | ~$1,687 |
+| 4 | Transfer Checking → PLOC sweep, $350 | $1,500 | ~$2,660 | ~$1,687 |
+| 5 | Repeat steps 3–4 monthly | ↓ | ↓ | ↓ |
+| 6 | PLOC reaches zero; next chunk | — | $0 | ~$598 |
+| 7 | Transfer PLOC → Checking $598; Log payment Visa $598 | — | $598 | $0 |
+| 8 | Final Checking → PLOC sweep | ↓ | $0 | $0 |
+
+The app estimates the Visa paid around **September 2027** and the PLOC cleared around **October 2027**, with about **$312 net interest saved** versus paying the same $500 per month directly to Visa. The target balance updates automatically through Log payment. If the setup is linked to the Personal LOC account, the PLOC balance and plan update from each draw or sweep; otherwise update the PLOC amount owed manually. When Visa reaches zero it drops out of the active Velocity targets, so edit or clear the plan and choose the next target.
+
+#### Setup examples
+
+These are illustrative, not recommendations. Use the balances and rates already stored in your Debts page.
+
+| Field | Credit card | Auto loan | Existing PLOC balance |
+|---|---|---|---|
+| Target debt | Visa, $4,800 at 24.99%, minimum $150 | Auto loan, $9,000 at 6.90%, minimum $250 | Visa, $3,000 at 22.00%, minimum $100 |
+| PLOC credit limit | $12,000 | $12,000 | $12,000 |
+| PLOC APR | 3.99% variable | 3.99% variable | 3.99% variable |
+| Current PLOC amount owed | $0 | $0 | $1,500 |
+| Chunk per cycle | $3,000 | $2,000 | $1,000 |
+| Monthly sweep | $350 | $300 | $250 |
+| Keep this much credit unused | $2,000 | $4,000 | $1,000 |
+
+The credit-card example has a large rate gap and a chunk that still leaves a reserve. The auto-loan example uses a smaller chunk and a larger reserve because the rate gap is smaller. In the existing-balance example, the plan pays the $1,500 down first and waits for the line to reach zero before drawing a new chunk. For multiple targets, use the same fields and check both debts: with Visa $4,800 at 24.99% and an auto loan $9,000 at 6.90%, a $12,000 PLOC at 3.99%, a $2,000 reserve, a $3,000 chunk and a $500 sweep, chunks go to Visa first, then to the auto loan. Check the **+2** and **+4** point rate rows before using a variable-rate line.
 
 A minimum may be **zero** (a deferred student loan, for example). A plan with only a zero minimum and no extra never pays the debt off; the plan says so instead of showing a date. The panel also warns when a minimum does not cover that month's interest.
 

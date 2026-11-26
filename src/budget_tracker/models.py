@@ -124,6 +124,7 @@ class Account:
     promo_apr_bps: int | None = None  # rate during a same-as-cash promotion
     promo_end_date: date | None = None  # when a same-as-cash promotion ends
     storage_location: str | None = None  # where cash is kept, Cash accounts only
+    credit_limit_cents: int | None = None  # revolving credit line limit
 
     def __post_init__(self) -> None:
         if self.kind.is_liability:
@@ -146,6 +147,8 @@ class Account:
             self.promo_end_date = None
         if self.kind is not AccountKind.CASH:
             self.storage_location = None
+        if not self.kind.is_liability:
+            self.credit_limit_cents = None
 
 
 @dataclass(slots=True, frozen=True)

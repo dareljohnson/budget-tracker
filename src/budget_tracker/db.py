@@ -372,6 +372,10 @@ MIGRATIONS: list[str] = [
     """
     ALTER TABLE accounts ADD COLUMN storage_location TEXT;
     """,
+    # v19: the credit limit on a revolving liability, so a personal LOC can show available credit.
+    """
+    ALTER TABLE accounts ADD COLUMN credit_limit_cents INTEGER;
+    """,
 ]
 
 FOREIGN_KEYS_OFF_MIGRATIONS = {8, 14}

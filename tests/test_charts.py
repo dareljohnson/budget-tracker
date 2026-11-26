@@ -14,6 +14,7 @@ from budget_tracker.ui.charts import (
     cumulative_chart_png,
     debt_stack_chart_png,
     line_chart_png,
+    velocity_chart_png,
 )
 
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
@@ -280,3 +281,50 @@ def test_debt_stack_text_scale_changes_the_output():
 
     assert normal != large
     assert _image(normal).size == _image(large).size
+
+
+def test_velocity_chart_png_has_magic_and_renders_at_twice_the_requested_size():
+    data = velocity_chart_png(
+        [900_000, 700_000, 400_000, 0],
+        [0, 300_000, 150_000, 0],
+        ["2026-11", "2026-12", "2027-01", "2027-02"],
+        width=600,
+        height=220,
+        colors=COLORS,
+    )
+
+    assert data.startswith(PNG_MAGIC)
+    assert _image(data).size == (1200, 440)
+
+
+def test_velocity_chart_uses_the_target_and_line_colors():
+    image = _image(velocity_chart_png(
+        [900_000, 700_000, 400_000, 0],
+        [0, 300_000, 150_000, 0],
+        ["2026-11", "2026-12", "2027-01", "2027-02"],
+        width=600,
+        height=220,
+        colors=COLORS,
+    ))
+
+    colors = _colors(image)
+    assert _rgb("#2a78d6") in colors
+    assert _rgb("#eb6834") in colors
+
+
+@pytest.mark.parametrize(
+    "target, line, keys",
+    [
+        ([], [], ["2026-11"]),
+        (None, [0], ["2026-11"]),
+        ([100], [0], []),
+        ([100], [0], None),
+    ],
+)
+def test_velocity_chart_empty_or_invalid_data_returns_a_blank_chart(target, line, keys):
+    data = velocity_chart_png(target, line, keys, width=120, height=80, colors=COLORS)
+
+    image = _image(data)
+    assert data.startswith(PNG_MAGIC)
+    assert image.size == (240, 160)
+    assert image.getextrema()[3] == (0, 0)

@@ -15,10 +15,25 @@ from ..theme import GAP, SEED_COLOR, fs
 
 
 @dataclass(frozen=True)
+class HelpTable:
+    columns: tuple[str, ...]
+    rows: tuple[tuple[str, ...], ...]
+
+
+@dataclass(frozen=True)
+class HelpBlock:
+    heading: str = ""
+    body: str = ""
+    bullets: tuple[str, ...] = ()
+    table: HelpTable | None = None
+
+
+@dataclass(frozen=True)
 class HelpTopic:
     title: str
     body: str
     keywords: tuple[str, ...] = ()
+    blocks: tuple[HelpBlock, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -100,8 +115,11 @@ GUIDE: tuple[HelpSection, ...] = (
                 "APR, loan type and promos",
                 "Credit-card and loan accounts record an APR and a loan type: Revolving, "
                 "Installment, Same as cash or Other. Same as cash adds a promo APR and end date. "
-                "A linked debt uses the account's rate for its payoff plan.",
-                ("apr", "interest rate", "revolving", "installment", "same as cash", "promo"),
+                "A liability can also record a credit limit; its account card then shows the "
+                "limit and available credit. A linked debt uses the account's rate for its "
+                "payoff plan.",
+                ("apr", "interest rate", "revolving", "installment", "same as cash", "promo",
+                 "credit limit", "available credit"),
             ),
             HelpTopic(
                 "Real estate and mortgages",
@@ -216,7 +234,7 @@ GUIDE: tuple[HelpSection, ...] = (
     HelpSection(
         "Debts",
         ft.Icons.CREDIT_SCORE,
-        "What you owe, payment splits, the reduction chart and payoff planning.",
+        "What you owe, payment splits, the reduction chart, velocity banking and payoff planning.",
         (
             HelpTopic(
                 "Add or link a debt",
@@ -257,6 +275,172 @@ GUIDE: tuple[HelpSection, ...] = (
                 "groups extras as Other when there are more than eight debts. Escrow is not "
                 "included; the yearly and monthly tables below are the full data view.",
                 ("chart", "graph", "stacked", "horizon", "1y", "3y", "5y", "debt reduction"),
+            ),
+            HelpTopic(
+                "Velocity banking (personal line of credit)",
+                "Use a personal line of credit in repeating cycles against selected debts.",
+                ("velocity", "line of credit", "ploc", "chunk", "sweep", "cycle", "variable",
+                 "multiple targets", "personal loan", "payoff plan"),
+                (
+                    HelpBlock(
+                        heading="How a cycle works",
+                        bullets=(
+                            "Choose one or more credit cards, auto loans or personal loans.",
+                            "The plan draws a chunk. The chunk goes to the highest-APR target "
+                            "first; any leftover goes to the next target.",
+                            "Every selected debt's minimum is still paid. The monthly sweep "
+                            "pays the PLOC.",
+                            "The line must reach zero before another chunk starts.",
+                            "The plan compares the result with paying the same cash flow "
+                            "directly to the selected targets.",
+                        ),
+                    ),
+                    HelpBlock(
+                        heading="Velocity or Payoff",
+                        body="A debt selected for Velocity is marked Velocity on its card and "
+                        "removed from the normal Payoff plan. Every other debt is marked Payoff. "
+                        "Clearing the velocity plan returns its targets to Payoff.",
+                    ),
+                    HelpBlock(
+                        heading="Variable rate and what is real",
+                        bullets=(
+                            "The PLOC rate is treated as variable; scenarios show +2 and +4 "
+                            "points.",
+                            "Hover each setup field for a short explanation.",
+                            "The plan is read-only: it does not move money. Link a Revolving "
+                            "Loan account in setup to read its live APR, amount owed and credit "
+                            "limit when set; draws and sweeps then update the plan automatically.",
+                            "If no account is linked, enter the APR and current amount owed "
+                            "manually; update them after a draw or sweep.",
+                        ),
+                    ),
+                ),
+            ),
+            HelpTopic(
+                "Velocity banking setup examples",
+                "Example 1 — credit card; Example 2 — auto loan; Example 3 — existing PLOC "
+                "balance; Example 4 — multiple targets. These are illustrative, not "
+                "recommendations.",
+                ("velocity example", "ploc example", "chunk example", "sweep example",
+                 "credit card velocity", "auto loan velocity", "multiple targets example"),
+                (
+                    HelpBlock(
+                        heading="Common setups",
+                        table=HelpTable(
+                            columns=("Field", "Credit card", "Auto loan", "Existing PLOC"),
+                            rows=(
+                                ("Target debt",
+                                 "Visa, $4,800 at 24.99%, min $150",
+                                 "Auto loan, $9,000 at 6.90%, min $250",
+                                 "Visa, $3,000 at 22.00%, min $100"),
+                                ("PLOC limit", "$12,000", "$12,000", "$12,000"),
+                                ("PLOC APR", "3.99% variable", "3.99% variable", "3.99% variable"),
+                                ("Current owed", "$0", "$0", "$1,500"),
+                                ("Chunk", "$3,000", "$2,000", "$1,000"),
+                                ("Monthly sweep", "$350", "$300", "$250"),
+                                ("Credit reserve", "$2,000", "$4,000", "$1,000"),
+                            ),
+                        ),
+                    ),
+                    HelpBlock(
+                        heading="Multiple targets",
+                        body="With Visa $4,800 at 24.99% and an auto loan $9,000 at 6.90%, "
+                        "use the same fields with a $12,000 PLOC at 3.99%, $2,000 reserve, "
+                        "$3,000 chunk and $500 sweep. Chunks go to Visa first; after Visa is "
+                        "paid, remaining chunks go to the auto loan.",
+                    ),
+                    HelpBlock(
+                        heading="Avoid",
+                        bullets=(
+                            "A target APR below the PLOC APR.",
+                            "A chunk above limit minus current balance minus reserve.",
+                            "A sweep that does not cover line interest.",
+                        ),
+                    ),
+                ),
+            ),
+            HelpTopic(
+                "Tracking PLOC draws, sweeps and payments",
+                "The Velocity Banking card is a simulation; it does not create a PLOC account "
+                "or move money. Use normal accounts and transfers to track the real line.",
+                ("track ploc", "ploc sweep", "draw", "transfer", "log payment", "personal loc"),
+                (
+                    HelpBlock(
+                        heading="Track the real PLOC",
+                        bullets=(
+                            "Add a Loan account such as Personal LOC with the amount owed, APR, "
+                            "Revolving loan type and, optionally, the credit limit.",
+                            "Link that account in Velocity setup. Its APR, current amount owed "
+                            "and credit limit (when set) become the source of truth.",
+                            "Record a draw as a Transfer from the PLOC to Checking.",
+                            "Record a sweep as a Transfer from Checking to the PLOC.",
+                            "The Velocity card's Record draw and Record sweep buttons prefill "
+                            "the transfer and amount; review and save the transaction.",
+                            "A linked account updates the plan automatically. If no account is "
+                            "linked, update Current PLOC amount owed after each draw or sweep.",
+                        ),
+                    ),
+                    HelpBlock(
+                        heading="What Log payment does",
+                        bullets=(
+                            "Linked credit card: a transfer from Checking to the card; the "
+                            "card's live balance drops.",
+                            "Linked auto or personal loan: principal, interest and escrow split; "
+                            "principal reduces the loan.",
+                            "Standalone debt: an expense that lowers the debt balance.",
+                            "It does not draw or sweep the PLOC. To use PLOC money, first "
+                            "transfer from the PLOC to Checking, then log the payment from "
+                            "Checking.",
+                        ),
+                    ),
+                ),
+            ),
+            HelpTopic(
+                "PLOC sweep and payment walkthrough",
+                "Example only: Visa $4,800 at 24.99%, minimum $150; Personal LOC $12,000 "
+                "limit at 3.99% variable, current owed $0; reserve $2,000, chunk $3,000, "
+                "sweep $350; Checking starts at $2,000. The Record draw and Record sweep "
+                "buttons can prefill the transfers in steps 1 and 4.",
+                ("ploc walkthrough", "payment walkthrough", "sweep example", "log payment",
+                 "draw example", "velocity demo", "ploc demo"),
+                (
+                    HelpBlock(
+                        heading="Step by step",
+                        table=HelpTable(
+                            columns=("Step", "Action", "Checking", "PLOC owed", "Visa"),
+                            rows=(
+                                ("Start", "—", "$2,000", "$0", "$4,800"),
+                                ("1", "Transfer PLOC → Checking, $3,000", "$5,000", "$3,000", "$4,800"),
+                                ("2", "Log payment Visa, $3,000 from Checking", "$2,000", "$3,000", "$1,800"),
+                                ("3", "Log Visa minimum, $150", "$1,850", "$3,000", "~$1,687"),
+                                ("4", "Transfer Checking → PLOC sweep, $350", "$1,500", "~$2,660", "~$1,687"),
+                                ("5", "Repeat steps 3–4 monthly", "↓", "↓", "↓"),
+                                ("6", "PLOC zero; next chunk", "—", "$0", "~$598"),
+                                ("7", "Draw $598; Log payment Visa $598", "—", "$598", "$0"),
+                                ("8", "Final Checking → PLOC sweep", "↓", "$0", "$0"),
+                            ),
+                        ),
+                    ),
+                    HelpBlock(
+                        heading="What updates automatically",
+                        bullets=(
+                            "Log payment updates the target balance; the Velocity target date, "
+                            "chunks and interest recalculate.",
+                            "If the setup is linked to the Personal LOC Loan account, the draw "
+                            "or sweep changes its balance and the plan follows automatically. If "
+                            "it is not linked, update Current PLOC amount owed manually.",
+                            "When a target reaches zero it drops out of the active Velocity "
+                            "targets. Edit or clear the plan and choose the next target.",
+                        ),
+                    ),
+                    HelpBlock(
+                        heading="End state",
+                        body="The sample estimates Visa paid around September 2027, PLOC "
+                        "cleared around October 2027, and about $312 net interest saved versus "
+                        "paying the same $500 per month directly to Visa. These figures are "
+                        "illustrative, not a statement forecast.",
+                    ),
+                ),
             ),
             HelpTopic(
                 "Temporary higher payment",
@@ -551,13 +735,93 @@ class HelpView:
             topics = tuple(
                 topic
                 for topic in section.topics
-                if query in topic.title.casefold()
-                or query in topic.body.casefold()
+                if query in self._topic_text(topic).casefold()
                 or any(query in keyword.casefold() for keyword in topic.keywords)
             )
             if topics:
                 matches.append(replace(section, topics=topics))
         return matches
+
+    @staticmethod
+    def _topic_text(topic: HelpTopic) -> str:
+        parts = [topic.title, topic.body]
+        for block in topic.blocks:
+            parts.extend((block.heading, block.body, *block.bullets))
+            if block.table is not None:
+                parts.extend(block.table.columns)
+                for row in block.table.rows:
+                    parts.extend(row)
+        return " ".join(part for part in parts if part)
+
+    @staticmethod
+    def _block_control(block: HelpBlock) -> ft.Control:
+        controls: list[ft.Control] = []
+        if block.heading:
+            controls.append(ft.Text(
+                block.heading,
+                size=fs(13),
+                weight=ft.FontWeight.W_600,
+                color=ft.Colors.ON_SURFACE,
+            ))
+        if block.body:
+            controls.append(ft.Text(
+                block.body,
+                size=fs(13),
+                color=ft.Colors.ON_SURFACE_VARIANT,
+                selectable=True,
+            ))
+        for bullet in block.bullets:
+            controls.append(ft.Row(
+                [
+                    ft.Text("•", size=fs(13), color=SEED_COLOR),
+                    ft.Text(
+                        bullet,
+                        size=fs(13),
+                        color=ft.Colors.ON_SURFACE_VARIANT,
+                        selectable=True,
+                        expand=True,
+                    ),
+                ],
+                spacing=6,
+                vertical_alignment=ft.CrossAxisAlignment.START,
+            ))
+        if block.table is not None:
+            table = ft.DataTable(
+                columns=[
+                    ft.DataColumn(ft.Text(column, size=fs(12), weight=ft.FontWeight.W_600))
+                    for column in block.table.columns
+                ],
+                rows=[
+                    ft.DataRow(
+                        cells=[
+                            ft.DataCell(ft.Text(cell, size=fs(12)))
+                            for cell in row
+                        ]
+                    )
+                    for row in block.table.rows
+                ],
+                column_spacing=24,
+            )
+            controls.append(ft.Row([table], scroll=ft.ScrollMode.AUTO))
+        return ft.Column(controls, spacing=6)
+
+    def _topic_control(self, topic: HelpTopic) -> ft.Control:
+        controls: list[ft.Control] = [
+            ft.Text(
+                topic.title,
+                size=fs(14),
+                weight=ft.FontWeight.W_600,
+                color=ft.Colors.ON_SURFACE,
+            ),
+            ft.Text(
+                topic.body,
+                size=fs(13),
+                color=ft.Colors.ON_SURFACE_VARIANT,
+                selectable=True,
+            ),
+        ]
+        controls.extend(self._block_control(block) for block in topic.blocks)
+        return ft.Column(controls, spacing=6)
 
     def refresh(self) -> None:
         query = (self.search.value or "").strip()
@@ -587,23 +851,7 @@ class HelpView:
                     controls=[
                         ft.Column(
                             [
-                                ft.Column(
-                                    [
-                                        ft.Text(
-                                            topic.title,
-                                            size=fs(14),
-                                            weight=ft.FontWeight.W_600,
-                                            color=ft.Colors.ON_SURFACE,
-                                        ),
-                                        ft.Text(
-                                            topic.body,
-                                            size=fs(13),
-                                            color=ft.Colors.ON_SURFACE_VARIANT,
-                                            selectable=True,
-                                        ),
-                                    ],
-                                    spacing=4,
-                                )
+                                self._topic_control(topic)
                                 for topic in section.topics
                             ],
                             spacing=14,

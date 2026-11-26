@@ -5,6 +5,7 @@ from __future__ import annotations
 import calendar
 import csv
 import hashlib
+import json
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -56,11 +57,20 @@ from .receipts.storage import delete_receipt_file, store_receipt
 from .repository import Repository, RepositoryError
 from .statements import load_statement
 from .statements.model import ImportPreview, ImportRow
+from .velocity_planner import (
+    VelocityComparison,
+    VelocityInput,
+    VelocityResult,
+    VelocityTarget,
+    compare_velocity,
+    rate_scenarios,
+)
 from .workbook_export import export_workbook
 
 # The Debts payoff plan's extra and strategy are shared with the Bills page.
 DEBT_EXTRA_SETTING = "debt_extra_cents"
 DEBT_STRATEGY_SETTING = "debt_strategy"
+VELOCITY_SETTING = "velocity_plan"
 
 
 RECEIPT_CATEGORY_KEYWORDS: list[tuple[tuple[str, ...], str]] = [
@@ -197,6 +207,20 @@ class DebtSummary:
         if self.property_value_cents is None:
             return None
         return self.property_value_cents - self.balance_cents
+
+
+@dataclass(frozen=True, slots=True)
+class VelocitySettings:
+    """The saved setup for a cycled personal line-of-credit plan."""
+
+    target_debt_ids: tuple[int, ...]
+    loc_limit_cents: int
+    loc_apr_bps: int
+    loc_balance_cents: int
+    chunk_cents: int
+    sweep_cents: int
+    reserve_cents: int
+    loc_account_id: int | None = None
 
 
 class BudgetService:
@@ -1391,6 +1415,7 @@ class BudgetService:
     ) -> DebtPlan:
         if extra_cents < 0:
             raise RepositoryError("Extra payment cannot be negative")
+        excluded = self.velocity_target_ids()
         inputs = [
             DebtInput(
                 summary.debt,
@@ -1404,7 +1429,7 @@ class BudgetService:
                 ),
             )
             for summary in self.list_debt_summaries(as_of=as_of)
-            if summary.balance_cents > 0
+            if summary.balance_cents > 0 and summary.debt.id not in excluded
         ]
         return plan_payoff(
             inputs, extra_cents=extra_cents, strategy=strategy, start_month=self.current_month(today)
@@ -1432,6 +1457,193 @@ class BudgetService:
     def set_debt_plan_strategy(self, strategy: DebtStrategy) -> None:
         self.repo.set_setting(DEBT_STRATEGY_SETTING, strategy.value)
 
+    def velocity_target_ids(self) -> frozenset[int]:
+        """Debt IDs assigned exclusively to the Velocity plan."""
+        settings = self.velocity_settings()
+        if settings is None:
+            return frozenset()
+        eligible = {
+            summary.debt.id
+            for summary in self.list_debt_summaries()
+            if summary.balance_cents > 0
+            and summary.debt.kind
+            in (DebtKind.CREDIT_CARD, DebtKind.AUTO, DebtKind.PERSONAL)
+        }
+        return frozenset(
+            target_id for target_id in settings.target_debt_ids if target_id in eligible
+        )
+
+    def velocity_settings(self) -> VelocitySettings | None:
+        """The saved cycled-PLOC setup, or None when it is absent or malformed."""
+        try:
+            raw = self.repo.get_setting(VELOCITY_SETTING)
+        except Exception:  # pragma: no cover - a settings read must not break the page
+            return None
+        if not raw:
+            return None
+        try:
+            data = json.loads(raw)
+            raw_ids = data.get("target_debt_ids")
+            if raw_ids is None:
+                raw_ids = (
+                    [data["target_debt_id"]]
+                    if data.get("target_debt_id") is not None
+                    else []
+                )
+            if not isinstance(raw_ids, (list, tuple)):
+                return None
+            target_ids = tuple(
+                dict.fromkeys(int(target_id) for target_id in raw_ids)
+            )
+            raw_account_id = data.get("loc_account_id")
+            loc_account_id = (
+                int(raw_account_id) if raw_account_id not in (None, "", 0) else None
+            )
+            settings = VelocitySettings(
+                target_debt_ids=target_ids,
+                loc_limit_cents=int(data["loc_limit_cents"]),
+                loc_apr_bps=int(data["loc_apr_bps"]),
+                loc_balance_cents=int(data["loc_balance_cents"]),
+                chunk_cents=int(data["chunk_cents"]),
+                sweep_cents=int(data["sweep_cents"]),
+                reserve_cents=int(data["reserve_cents"]),
+                loc_account_id=loc_account_id,
+            )
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+            return None
+        if (
+            not settings.target_debt_ids
+            or any(target_id <= 0 for target_id in settings.target_debt_ids)
+            or settings.loc_limit_cents <= 0
+            or settings.loc_apr_bps < 0
+            or (settings.loc_account_id is not None and settings.loc_account_id <= 0)
+            or min(
+                settings.loc_balance_cents,
+                settings.chunk_cents,
+                settings.sweep_cents,
+                settings.reserve_cents,
+            )
+            < 0
+        ):
+            return None
+        return settings
+
+    def set_velocity_settings(self, settings: VelocitySettings) -> None:
+        self.repo.set_setting(
+            VELOCITY_SETTING,
+            json.dumps(
+                {
+                    "target_debt_ids": list(settings.target_debt_ids),
+                    "loc_limit_cents": settings.loc_limit_cents,
+                    "loc_apr_bps": settings.loc_apr_bps,
+                    "loc_balance_cents": settings.loc_balance_cents,
+                    "chunk_cents": settings.chunk_cents,
+                    "sweep_cents": settings.sweep_cents,
+                    "reserve_cents": settings.reserve_cents,
+                    "loc_account_id": settings.loc_account_id,
+                }
+            ),
+        )
+
+    def clear_velocity_settings(self) -> None:
+        self.repo.set_setting(VELOCITY_SETTING, "")
+
+    def velocity_line(
+        self, settings: VelocitySettings | None = None
+    ) -> tuple[str | None, int, int, int] | None:
+        """The PLOC name, amount owed, APR and effective limit.
+
+        A linked Revolving Loan supplies its live balance and APR. Its credit limit is used
+        when set; otherwise the plan's saved limit is the fallback.
+        """
+        settings = settings or self.velocity_settings()
+        if settings is None:
+            return None
+        if settings.loc_account_id is None:
+            return (
+                None,
+                settings.loc_balance_cents,
+                settings.loc_apr_bps,
+                settings.loc_limit_cents,
+            )
+        account = self.repo.get_account(settings.loc_account_id)
+        if (
+            account is None
+            or account.kind is not AccountKind.LOAN
+            or account.loan_type not in (None, LoanType.REVOLVING)
+            or account.apr_bps is None
+        ):
+            return None
+        owed = next(
+            (
+                balance.owed_cents
+                for balance in self.repo.account_balances()
+                if balance.account.id == account.id
+            ),
+            0,
+        )
+        return (
+            account.name,
+            owed,
+            account.apr_bps,
+            account.credit_limit_cents or settings.loc_limit_cents,
+        )
+
+    def velocity_input(
+        self, settings: VelocitySettings | None = None
+    ) -> VelocityInput | None:
+        """Build the pure planner input from saved settings and the current target debt."""
+        settings = settings or self.velocity_settings()
+        if settings is None:
+            return None
+        line = self.velocity_line(settings)
+        if line is None:
+            return None
+        _line_name, line_balance, line_apr, line_limit = line
+        targets: list[VelocityTarget] = []
+        for debt_id in settings.target_debt_ids:
+            try:
+                target = self.debt_summary(debt_id)
+            except RepositoryError:
+                continue
+            if (
+                target.balance_cents <= 0
+                or target.debt.kind
+                not in (DebtKind.CREDIT_CARD, DebtKind.AUTO, DebtKind.PERSONAL)
+            ):
+                continue
+            targets.append(
+                VelocityTarget(
+                    target.debt.id,
+                    target.balance_cents,
+                    target.apr_bps,
+                    target.effective_minimum_cents,
+                )
+            )
+        if not targets:
+            return None
+        return VelocityInput.for_targets(
+            tuple(targets),
+            loc_limit_cents=line_limit,
+            loc_apr_bps=line_apr,
+            loc_balance_cents=line_balance,
+            chunk_cents=settings.chunk_cents,
+            sweep_cents=settings.sweep_cents,
+            reserve_cents=settings.reserve_cents,
+        )
+
+    def velocity_comparison(
+        self, settings: VelocitySettings | None = None
+    ) -> VelocityComparison | None:
+        inputs = self.velocity_input(settings)
+        return compare_velocity(inputs) if inputs is not None else None
+
+    def velocity_scenarios(
+        self, settings: VelocitySettings | None = None
+    ) -> list[tuple[int, VelocityResult]]:
+        inputs = self.velocity_input(settings)
+        return rate_scenarios(inputs) if inputs is not None else []
+
     def debt_plans(self, extra_cents: int, *, today: date | None = None) -> dict[DebtStrategy, DebtPlan]:
         return {strategy: self.debt_plan(extra_cents, strategy, today=today) for strategy in DebtStrategy}
 
@@ -1439,6 +1651,7 @@ class BudgetService:
         self, extra_cents: int, strategy: DebtStrategy, *, as_of: date | None = None
     ) -> dict[int, int]:
         """The plan's first-month extra for each debt, including the roll-over split."""
+        excluded = self.velocity_target_ids()
         inputs = [
             DebtInput(
                 summary.debt,
@@ -1452,7 +1665,7 @@ class BudgetService:
                 ),
             )
             for summary in self.list_debt_summaries(as_of=as_of)
-            if summary.balance_cents > 0
+            if summary.balance_cents > 0 and summary.debt.id not in excluded
         ]
         return next_month_extra_allocation(
             inputs,

@@ -44,6 +44,7 @@ from .ui.views.categories import CategoriesView
 from .ui.views.dashboard import DashboardView
 from .ui.views.debts import DebtsView
 from .ui.views.goals import GoalsView
+from .ui.views.help import HelpView
 from .ui.views.reports import ReportsView
 from .ui.views.transactions import TransactionsView
 from .ui.views.year import YearView
@@ -64,11 +65,13 @@ NAV_ITEMS = [
     ("Bills", ft.Icons.EVENT_NOTE_OUTLINED, ft.Icons.EVENT_NOTE),
     ("Budgets", ft.Icons.TRACK_CHANGES_OUTLINED, ft.Icons.TRACK_CHANGES),
     ("Categories", ft.Icons.CATEGORY_OUTLINED, ft.Icons.CATEGORY),
+    ("Help", ft.Icons.HELP_OUTLINE, ft.Icons.HELP),
 ]
 REPORTS_INDEX = 2
 TRANSACTIONS_INDEX = 3
 BILLS_INDEX = 7
 BUDGETS_INDEX = 8
+HELP_INDEX = 10
 ALERT_MAX_ROWS = 6
 AUTO_BACKUP_INTERVAL_SECONDS = 6 * 60 * 60
 DAY_CHECK_INTERVAL_SECONDS = 60
@@ -226,6 +229,7 @@ def main(page: ft.Page) -> None:
             BillsView(ctx),
             BudgetsView(ctx),
             CategoriesView(ctx),
+            HelpView(ctx),
         ]
 
     views = build_views()

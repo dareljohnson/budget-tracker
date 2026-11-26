@@ -204,6 +204,12 @@ class AccountsView:
                 spacing=0,
             )
         ]
+        if account.kind is AccountKind.CASH and account.storage_location:
+            body.append(ft.Text(
+                f"Location: {account.storage_location}",
+                size=fs(12),
+                color=ft.Colors.ON_SURFACE_VARIANT,
+            ))
         if is_liability:
             standard = (
                 format_percent(account.apr_bps)
@@ -414,6 +420,13 @@ class AccountEditor:
             keyboard_type=ft.KeyboardType.NUMBER,
             on_submit=self._save,
         )
+        self.storage_location = ft.TextField(
+            label="Where is the cash stored?",
+            hint_text="e.g. Home safe, wallet, safe deposit box",
+            value=(account.storage_location or "") if account else "",
+            max_length=60,
+            on_submit=self._save,
+        )
         opening = account.opening_balance_cents if account else 0
         if self.kind.is_liability:
             opening = -opening
@@ -439,6 +452,7 @@ class AccountEditor:
                         self.liability_block,
                         self.liquid_block,
                         self.number_last4,
+                        self.storage_location,
                         self.opening,
                         ft.Text("Color", weight=ft.FontWeight.W_600),
                         self.color_grid,
@@ -483,6 +497,7 @@ class AccountEditor:
         self.liquid_block.visible = not self.kind.is_liability
         self.liquid_switch.value = bool(self.liquid)
         self.liability_block.visible = self.kind.is_liability
+        self.storage_location.visible = self.kind is AccountKind.CASH
         promo = (
             self.kind.is_liability
             and self.loan_type.value == LoanType.SAME_AS_CASH.value
@@ -612,6 +627,7 @@ class AccountEditor:
             loan_type=loan_type,
             promo_apr_bps=promo_apr_bps,
             promo_end_date=promo_end_date,
+            storage_location=(self.storage_location.value or "").strip() or None,
         )
         try:
             if account.id:

@@ -206,6 +206,8 @@ class Debt:
     property_account_id: int | None = None  # real estate account securing this debt, if any
     maturity_date: date | None = None  # mortgage maturity, used to derive the scheduled P&I
     pi_payment_cents: int | None = None  # principal-and-interest payment, optional override
+    minimum_after_cents: int | None = None  # payment after a temporary reduced period
+    minimum_after_date: date | None = None  # first date at the later payment
     id: int | None = None
 
     @property
@@ -438,6 +440,8 @@ class Bill:
     category_icon: str | None = None
     pay_to_account_name: str | None = None
     pay_to_account_kind: AccountKind | None = None
+    amount_after_cents: int | None = None  # amount after a temporary reduced period
+    reduced_until: date | None = None  # last due date at the temporary amount
 
     @property
     def is_card_payment(self) -> bool:

@@ -37,12 +37,20 @@ def _match_label(candidate: MatchCandidate) -> str:
     )
 
 
-def monthly_equivalent(bill: Bill) -> int:
+def monthly_equivalent(bill: Bill, today: date | None = None) -> int:
     """Approximate monthly cost of a recurring bill, in cents (one-time bills count as 0)."""
+    amount = bill.amount_cents
+    if (
+        today is not None
+        and bill.reduced_until is not None
+        and bill.amount_after_cents is not None
+        and today > bill.reduced_until
+    ):
+        amount = bill.amount_after_cents
     return {
-        BillFrequency.WEEKLY: round(bill.amount_cents * 52 / 12),
-        BillFrequency.MONTHLY: bill.amount_cents,
-        BillFrequency.YEARLY: round(bill.amount_cents / 12),
+        BillFrequency.WEEKLY: round(amount * 52 / 12),
+        BillFrequency.MONTHLY: amount,
+        BillFrequency.YEARLY: round(amount / 12),
     }.get(bill.frequency, 0)
 
 
@@ -113,7 +121,7 @@ class BillsView:
             stat_card("Due Soon", str(len(upcoming)), ft.Icons.NOTIFICATIONS_ACTIVE, WARNING_COLOR, format_money(sum(d.amount_cents for d in upcoming))),
             stat_card(
                 "Monthly Bills",
-                format_money(sum(monthly_equivalent(b) for b in active)),
+                format_money(sum(monthly_equivalent(b, today) for b in active)),
                 ft.Icons.EVENT_REPEAT,
                 SEED_COLOR,
                 f"{len(active)} active bill(s)",
@@ -145,7 +153,12 @@ class BillsView:
         else:
             detail = f"{bill.category_name}  •  from {bill.account_name}"
         if bill.amount_cents:
-            amount = format_money(bill.amount_cents)
+            amount = format_money(self.ctx.repo.amount_due(bill, bill.next_due))
+            if bill.reduced_until is not None and bill.amount_after_cents is not None:
+                detail += (
+                    f"  •  {format_money(bill.amount_after_cents)} from "
+                    f"{bill.reduced_until:%b %d, %Y}"
+                )
         elif due:
             amount = format_money(due.amount_cents)
         else:
@@ -419,13 +432,24 @@ class MarkPaidDialog:
         if debt is None:
             return None
         summary = self.ctx.service.debt_summary(debt.id)
+        payment_date = self._payment_date()
+        scheduled = summary.pi_payment_cents
+        if (
+            summary.minimum_after_cents is not None
+            and summary.minimum_after_date is not None
+            and payment_date >= summary.minimum_after_date
+        ):
+            scheduled = summary.minimum_after_cents
+        elif scheduled is None and 0 < summary.effective_minimum_cents < total_cents:
+            # A loan minimum that is below the cash payment is the current P&I.
+            scheduled = summary.effective_minimum_cents
         return escrow_from_amortization(
             total_cents,
             summary.balance_cents,
             summary.apr_bps,
             summary.maturity_date,
-            self._payment_date(),
-            pi_payment_cents=summary.pi_payment_cents,
+            payment_date,
+            pi_payment_cents=scheduled,
         )
 
     # ---------- match panel ----------
@@ -694,6 +718,26 @@ class BillEditor:
             expand=True,
             on_submit=self._save,
         )
+        self.reduced_until = ft.TextField(
+            label="Reduced amount until (YYYY-MM-DD)",
+            hint_text="Optional; e.g. 2028-12-31",
+            value=(
+                bill.reduced_until.isoformat()
+                if bill and bill.reduced_until is not None
+                else ""
+            ),
+        )
+        self.amount_after = ft.TextField(
+            label="Then amount",
+            hint_text="Amount due after the reduced period",
+            prefix_icon=ft.Icons.ATTACH_MONEY,
+            keyboard_type=ft.KeyboardType.NUMBER,
+            value=(
+                f"{bill.amount_after_cents / 100:.2f}"
+                if bill and bill.amount_after_cents is not None
+                else ""
+            ),
+        )
         self.frequency = ft.Dropdown(
             label="Repeats",
             value=(bill.frequency if bill else BillFrequency.MONTHLY).value,
@@ -733,6 +777,7 @@ class BillEditor:
                         self.hint,
                         self.name,
                         ft.Row([self.amount, self.frequency], spacing=12),
+                        ft.Row([self.reduced_until, self.amount_after], spacing=12),
                         self.next_due,
                         self.payment_row,
                     ],
@@ -770,7 +815,7 @@ class BillEditor:
     def _save(self, _: ft.Event) -> None:
         is_card = self.kind == CARD_KIND
         valid = True
-        for field in (self.name, self.amount, self.next_due):
+        for field in (self.name, self.amount, self.next_due, self.reduced_until, self.amount_after):
             field.error = None
         for dropdown in (self.account, self.category, self.pay_to):
             dropdown.error_text = None
@@ -790,6 +835,30 @@ class BillEditor:
         except ValueError as exc:
             self.next_due.error = str(exc)
             valid = False
+        reduced_until = None
+        amount_after = None
+        reduced_text = (self.reduced_until.value or "").strip()
+        after_text = (self.amount_after.value or "").strip()
+        if reduced_text or after_text:
+            if not (reduced_text and after_text):
+                (self.reduced_until if not reduced_text else self.amount_after).error = (
+                    "Set both the end date and the later amount"
+                )
+                valid = False
+            else:
+                try:
+                    reduced_until = parse_date(reduced_text)
+                except ValueError as exc:
+                    self.reduced_until.error = str(exc)
+                    valid = False
+                try:
+                    amount_after = parse_money(after_text)
+                except ValueError as exc:
+                    self.amount_after.error = str(exc)
+                    valid = False
+                if amount == 0:
+                    self.amount.error = "A temporary reduction needs a current amount"
+                    valid = False
         if not self.account.value:
             self.account.error_text = "Select an account"
             valid = False
@@ -816,6 +885,8 @@ class BillEditor:
             pay_to_account_id=int(self.pay_to.value) if is_card else None,
             anchor_day=self.bill.anchor_day if keep_anchor else None,
             active=self.bill.active if self.bill else True,
+            amount_after_cents=amount_after,
+            reduced_until=reduced_until,
         )
         try:
             if bill.id:

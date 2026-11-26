@@ -669,6 +669,25 @@ class DebtEditor:
                 else ""
             ),
         )
+        self.minimum_after = ft.TextField(
+            label="Higher payment / month (optional)",
+            hint_text="The payment after a temporary reduction",
+            prefix_icon=ft.Icons.ATTACH_MONEY,
+            value=(
+                f"{debt.minimum_after_cents / 100:.2f}"
+                if debt and debt.minimum_after_cents is not None
+                else ""
+            ),
+        )
+        self.minimum_after_date = ft.TextField(
+            label="Higher payment starts (YYYY-MM-DD)",
+            hint_text="For example 2029-01-01",
+            value=(
+                debt.minimum_after_date.isoformat()
+                if debt and debt.minimum_after_date is not None
+                else ""
+            ),
+        )
         self.link = ft.Dropdown(
             label="Link to credit-card or loan account",
             options=[ft.DropdownOption(key="none", text="None")]
@@ -700,7 +719,8 @@ class DebtEditor:
             title=ft.Text("Edit Debt" if debt else "New Debt"),
             content=ft.Container(width=460, content=ft.Column(
                 [self.name, self.kind, self.balance, self.apr, self.apr_note, self.minimum,
-                 self.minimum_note, self.original, self.maturity, self.pi_payment, self.link,
+                 self.minimum_note, self.original, self.maturity, self.pi_payment,
+                 self.minimum_after, self.minimum_after_date, self.link,
                  self.property, self.property_note, self.error],
                 spacing=14, tight=True, horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
                 scroll=ft.ScrollMode.AUTO)),
@@ -727,6 +747,8 @@ class DebtEditor:
         self.property_note.visible = visible
         self.maturity.visible = visible
         self.pi_payment.visible = visible
+        self.minimum_after.visible = visible
+        self.minimum_after_date.visible = visible
 
     def _stored_minimum_value(self) -> str:
         if self.debt is not None and self.debt.minimum_cents:
@@ -801,6 +823,8 @@ class DebtEditor:
             self.original,
             self.maturity,
             self.pi_payment,
+            self.minimum_after,
+            self.minimum_after_date,
         ):
             field.error = None
         self.error.visible = False
@@ -856,6 +880,8 @@ class DebtEditor:
         )
         maturity = None
         pi_payment = None
+        minimum_after = None
+        minimum_after_date = None
         if kind is DebtKind.MORTGAGE:
             try:
                 maturity = (
@@ -877,6 +903,31 @@ class DebtEditor:
             except ValueError as exc:
                 self.pi_payment.error = str(exc)
                 valid = False
+            try:
+                minimum_after = (
+                    parse_signed_money(self.minimum_after.value)
+                    if (self.minimum_after.value or "").strip()
+                    else None
+                )
+                if minimum_after is not None and minimum_after <= 0:
+                    raise ValueError("Payment must be greater than zero")
+            except ValueError as exc:
+                self.minimum_after.error = str(exc)
+                valid = False
+            try:
+                minimum_after_date = (
+                    parse_date(self.minimum_after_date.value)
+                    if (self.minimum_after_date.value or "").strip()
+                    else None
+                )
+            except ValueError as exc:
+                self.minimum_after_date.error = str(exc)
+                valid = False
+            if (minimum_after is None) != (minimum_after_date is None):
+                (self.minimum_after if minimum_after is None else self.minimum_after_date).error = (
+                    "Set both the higher payment and the date it starts"
+                )
+                valid = False
         if not valid:
             self._refresh_dialog()
             return
@@ -886,14 +937,16 @@ class DebtEditor:
                     self.debt.id, name=name, kind=kind, balance_cents=balance, apr_bps=apr,
                     minimum_cents=minimum, original_balance_cents=original, account_id=link,
                     property_account_id=property_link, maturity_date=maturity,
-                    pi_payment_cents=pi_payment,
+                    pi_payment_cents=pi_payment, minimum_after_cents=minimum_after,
+                    minimum_after_date=minimum_after_date,
                 )
             else:
                 self.ctx.service.create_debt(
                     name, kind, balance, apr, minimum,
                     original_balance_cents=original, account_id=link,
                     property_account_id=property_link, maturity_date=maturity,
-                    pi_payment_cents=pi_payment,
+                    pi_payment_cents=pi_payment, minimum_after_cents=minimum_after,
+                    minimum_after_date=minimum_after_date,
                 )
         except RepositoryError as exc:
             self.error.value = str(exc)
@@ -922,8 +975,23 @@ class DebtPaymentDialog:
             on_submit=self._save,
             on_change=lambda _: self._total_changed(),
         )
-        if self.is_loan_payment and summary.effective_minimum_cents:
-            self.amount.value = f"{summary.effective_minimum_cents / 100:.2f}"
+        if self.is_loan_payment:
+            linked_bill = next(
+                (
+                    bill
+                    for bill in ctx.repo.list_bills()
+                    if bill.active
+                    and bill.pay_to_account_id == loan_account.id
+                    and bill.amount_cents
+                ),
+                None,
+            )
+            if linked_bill is not None:
+                self.amount.value = (
+                    f"{ctx.repo.amount_due(linked_bill, linked_bill.next_due) / 100:.2f}"
+                )
+            elif summary.effective_minimum_cents:
+                self.amount.value = f"{summary.effective_minimum_cents / 100:.2f}"
         funding = [
             a for a in ctx.repo.list_accounts()
             if not a.kind.is_liability and a.id != debt.account_id
@@ -1014,13 +1082,27 @@ class DebtPaymentDialog:
             return date.today()
 
     def _escrow_estimate(self, total_cents: int) -> int | None:
+        payment_date = self._payment_date()
+        scheduled = self.summary.pi_payment_cents
+        if (
+            self.summary.minimum_after_cents is not None
+            and self.summary.minimum_after_date is not None
+            and payment_date >= self.summary.minimum_after_date
+        ):
+            scheduled = self.summary.minimum_after_cents
+        elif (
+            scheduled is None
+            and 0 < self.summary.effective_minimum_cents < total_cents
+        ):
+            # A loan minimum that is below the cash payment is the current P&I.
+            scheduled = self.summary.effective_minimum_cents
         return escrow_from_amortization(
             total_cents,
             self.summary.balance_cents,
             self.summary.apr_bps,
             self.summary.maturity_date,
-            self._payment_date(),
-            pi_payment_cents=self.summary.pi_payment_cents,
+            payment_date,
+            pi_payment_cents=scheduled,
         )
 
     def open(self) -> None:

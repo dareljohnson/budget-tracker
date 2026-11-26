@@ -1015,7 +1015,7 @@ class Repository:
     _DEBT_SELECT = (
         "SELECT id, name, kind, balance_cents, apr_bps, minimum_cents, "
         "original_balance_cents, account_id, property_account_id, maturity_date, "
-        "pi_payment_cents FROM debts"
+        "pi_payment_cents, minimum_after_cents, minimum_after_date FROM debts"
     )
 
     def _row_to_debt(self, row: sqlite3.Row) -> Debt:
@@ -1033,6 +1033,12 @@ class Repository:
                 date.fromisoformat(row["maturity_date"]) if row["maturity_date"] else None
             ),
             pi_payment_cents=row["pi_payment_cents"],
+            minimum_after_cents=row["minimum_after_cents"],
+            minimum_after_date=(
+                date.fromisoformat(row["minimum_after_date"])
+                if row["minimum_after_date"]
+                else None
+            ),
         )
 
     def list_debts(self) -> list[Debt]:
@@ -1064,13 +1070,16 @@ class Repository:
                 cur = self.conn.execute(
                     "INSERT INTO debts (name, kind, balance_cents, apr_bps, minimum_cents, "
                     "original_balance_cents, account_id, property_account_id, maturity_date, "
-                    "pi_payment_cents) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "pi_payment_cents, minimum_after_cents, minimum_after_date) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         debt.name.strip(), debt.kind.value, debt.balance_cents, debt.apr_bps,
                         debt.minimum_cents, debt.original_balance_cents, debt.account_id,
                         debt.property_account_id,
                         debt.maturity_date.isoformat() if debt.maturity_date else None,
                         debt.pi_payment_cents,
+                        debt.minimum_after_cents,
+                        debt.minimum_after_date.isoformat() if debt.minimum_after_date else None,
                     ),
                 )
         except sqlite3.IntegrityError as exc:
@@ -1087,13 +1096,16 @@ class Repository:
                 self.conn.execute(
                     "UPDATE debts SET name = ?, kind = ?, balance_cents = ?, apr_bps = ?, "
                     "minimum_cents = ?, original_balance_cents = ?, account_id = ?, "
-                    "property_account_id = ?, maturity_date = ?, pi_payment_cents = ? WHERE id = ?",
+                    "property_account_id = ?, maturity_date = ?, pi_payment_cents = ?, "
+                    "minimum_after_cents = ?, minimum_after_date = ? WHERE id = ?",
                     (
                         debt.name.strip(), debt.kind.value, debt.balance_cents, debt.apr_bps,
                         debt.minimum_cents, debt.original_balance_cents, debt.account_id,
                         debt.property_account_id,
                         debt.maturity_date.isoformat() if debt.maturity_date else None,
-                        debt.pi_payment_cents, debt.id,
+                        debt.pi_payment_cents, debt.minimum_after_cents,
+                        debt.minimum_after_date.isoformat() if debt.minimum_after_date else None,
+                        debt.id,
                     ),
                 )
         except sqlite3.IntegrityError as exc:
@@ -1118,6 +1130,10 @@ class Repository:
             raise RepositoryError("Original balance cannot be negative")
         if debt.pi_payment_cents is not None and debt.pi_payment_cents <= 0:
             raise RepositoryError("Principal and interest payment must be greater than zero")
+        if (debt.minimum_after_cents is None) != (debt.minimum_after_date is None):
+            raise RepositoryError("Set both the later minimum and the date it starts")
+        if debt.minimum_after_cents is not None and debt.minimum_after_cents <= 0:
+            raise RepositoryError("The later minimum must be greater than zero")
         if debt.account_id is not None:
             account = self.get_account(debt.account_id)
             if account is None or not account.kind.is_liability:
@@ -1565,7 +1581,8 @@ class Repository:
     # ---------- bills & reminders ----------
     _BILL_SELECT = (
         "SELECT b.id, b.name, b.amount_cents, b.frequency, b.next_due, b.anchor_day, b.account_id, b.category_id, "
-        "b.pay_to_account_id, b.active, a.name AS account_name, c.name AS category_name, c.color AS category_color, "
+        "b.pay_to_account_id, b.active, b.amount_after_cents, b.reduced_until, "
+        "a.name AS account_name, c.name AS category_name, c.color AS category_color, "
         "c.icon AS category_icon, pa.name AS pay_to_account_name, pa.kind AS pay_to_account_kind "
         "FROM bills b JOIN accounts a ON a.id = b.account_id "
         "LEFT JOIN categories c ON c.id = b.category_id "
@@ -1585,6 +1602,10 @@ class Repository:
             category_id=row["category_id"],
             pay_to_account_id=row["pay_to_account_id"],
             active=bool(row["active"]),
+            amount_after_cents=row["amount_after_cents"],
+            reduced_until=(
+                date.fromisoformat(row["reduced_until"]) if row["reduced_until"] else None
+            ),
             account_name=row["account_name"],
             category_name=row["category_name"],
             category_color=row["category_color"],
@@ -1607,6 +1628,10 @@ class Repository:
             raise RepositoryError("Bill name is required")
         if bill.amount_cents < 0:
             raise RepositoryError("Amount cannot be negative")
+        if (bill.reduced_until is None) != (bill.amount_after_cents is None):
+            raise RepositoryError("Set both the reduced-period end date and the later amount")
+        if bill.amount_after_cents is not None and bill.amount_after_cents <= 0:
+            raise RepositoryError("The later amount must be greater than zero")
         if self.get_account(bill.account_id) is None:
             raise RepositoryError("Select the account the payment comes from")
         if bill.is_card_payment:
@@ -1638,6 +1663,8 @@ class Repository:
             bill.category_id,
             bill.pay_to_account_id,
             int(bill.active),
+            bill.amount_after_cents,
+            bill.reduced_until.isoformat() if bill.reduced_until else None,
         )
 
     def add_bill(self, bill: Bill) -> Bill:
@@ -1645,7 +1672,8 @@ class Repository:
         with self.conn:
             cur = self.conn.execute(
                 "INSERT INTO bills (name, amount_cents, frequency, next_due, anchor_day, account_id, category_id, "
-                "pay_to_account_id, active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "pay_to_account_id, active, amount_after_cents, reduced_until) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 self._bill_params(bill),
             )
         bill.id = cur.lastrowid
@@ -1658,7 +1686,8 @@ class Repository:
         with self.conn:
             self.conn.execute(
                 "UPDATE bills SET name = ?, amount_cents = ?, frequency = ?, next_due = ?, anchor_day = ?, "
-                "account_id = ?, category_id = ?, pay_to_account_id = ?, active = ? WHERE id = ?",
+                "account_id = ?, category_id = ?, pay_to_account_id = ?, active = ?, "
+                "amount_after_cents = ?, reduced_until = ? WHERE id = ?",
                 (*self._bill_params(bill), bill.id),
             )
 
@@ -1666,12 +1695,26 @@ class Repository:
         with self.conn:
             self.conn.execute("DELETE FROM bills WHERE id = ?", (bill_id,))
 
-    def amount_due(self, bill: Bill) -> int:
-        """What to pay now: the fixed amount, or the full balance owed for an open-amount card payment."""
-        if bill.amount_cents or not bill.is_card_payment:
-            return bill.amount_cents
-        owed = next((b.owed_cents for b in self.account_balances() if b.account.id == bill.pay_to_account_id), 0)
-        return owed
+    def amount_due(self, bill: Bill, on_date: date | None = None) -> int:
+        """What to pay now: the fixed amount, or the full balance owed for an open-amount card payment.
+
+        A temporary reduced amount applies through ``reduced_until``; after that the bill's
+        later amount is due.
+        """
+        if bill.is_card_payment and bill.amount_cents == 0:
+            owed = next(
+                (b.owed_cents for b in self.account_balances() if b.account.id == bill.pay_to_account_id),
+                0,
+            )
+            return owed
+        due = on_date or bill.next_due
+        if (
+            bill.reduced_until is not None
+            and bill.amount_after_cents is not None
+            and due > bill.reduced_until
+        ):
+            return bill.amount_after_cents
+        return bill.amount_cents
 
     def due_bills(self, today: date, within_days: int) -> list[DueBill]:
         """Active bills that are overdue or due within ``within_days`` of ``today``, soonest first."""

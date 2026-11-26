@@ -27,6 +27,8 @@ class DebtInput:
     debt: Debt
     balance_cents: int
     minimum_cents: int
+    minimum_after_cents: int | None = None
+    minimum_after_month: str | None = None  # YYYY-MM when the later minimum starts
 
 
 @dataclass(slots=True, frozen=True)
@@ -109,6 +111,7 @@ def next_month_extra_allocation(
     *,
     extra_cents: int,
     strategy: DebtStrategy,
+    start_month: str | None = None,
 ) -> dict[int, int]:
     """The extra above minimums each debt receives in the plan's first month.
 
@@ -132,11 +135,22 @@ def next_month_extra_allocation(
         entry.balance_cents + monthly_interest_cents(entry.balance_cents, entry.debt.apr_bps)
         for entry in entries
     ]
-    budget = sum(entry.minimum_cents for entry in entries) + extra_cents
+    minimums = [
+        (
+            entry.minimum_after_cents
+            if start_month
+            and entry.minimum_after_cents is not None
+            and entry.minimum_after_month is not None
+            and start_month >= entry.minimum_after_month
+            else entry.minimum_cents
+        )
+        for entry in entries
+    ]
+    budget = sum(minimums) + extra_cents
     paid = 0
     for i in order:
         if balances[i] > 0:
-            amount = min(balances[i], entries[i].minimum_cents)
+            amount = min(balances[i], minimums[i])
             balances[i] -= amount
             paid += amount
     remainder = budget - paid
@@ -170,13 +184,22 @@ def plan_payoff(
     else:
         order = sorted(range(len(entries)), key=lambda i: (entries[i].balance_cents, -entries[i].debt.apr_bps))
     balances = [d.balance_cents for d in entries]
-    budget = sum(d.minimum_cents for d in entries) + extra_cents
+    minimums = [d.minimum_cents for d in entries]
     month = 0
     total_interest = total_paid = 0
     schedule: list[DebtPayoff] = []
     payoff_order: list[tuple[Debt, int]] = []
     while any(b > 0 for b in balances) and month < max_months:
         month += 1
+        current_month = shift_month(start_month, month - 1)
+        for i, entry in enumerate(entries):
+            if (
+                entry.minimum_after_cents is not None
+                and entry.minimum_after_month is not None
+                and current_month >= entry.minimum_after_month
+            ):
+                minimums[i] = entry.minimum_after_cents
+        budget = sum(minimums) + extra_cents
         interest_this_month = 0
         for i, d in enumerate(entries):
             if balances[i] > 0:
@@ -187,7 +210,7 @@ def plan_payoff(
         paid = 0
         for i in order:
             if balances[i] > 0:
-                amount = min(balances[i], entries[i].minimum_cents)
+                amount = min(balances[i], minimums[i])
                 balances[i] -= amount
                 paid += amount
         remainder = budget - paid

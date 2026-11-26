@@ -37,31 +37,23 @@ STAGE="$(mktemp -d)"
 cp -R "$APP" "$STAGE/"
 ln -s /Applications "$STAGE/Applications"
 
-# Give the mounted disk image the app icon; otherwise Finder shows the generic
-# disk-image icon even though the .app inside has its own icon.
-if command -v sips >/dev/null 2>&1 && command -v iconutil >/dev/null 2>&1; then
-  ICONSET="$(mktemp -d)/AppIcon.iconset"
-  mkdir -p "$ICONSET"
-  for size in 16 32 128 256 512; do
-    sips -z "$size" "$size" "$ROOT/src/assets/icon.png" --out "$ICONSET/icon_${size}x${size}.png" >/dev/null
-    sips -z "$((size * 2))" "$((size * 2))" "$ROOT/src/assets/icon.png" --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null
-  done
-  if iconutil -c icns "$ICONSET" -o "$STAGE/.VolumeIcon.icns"; then
-    if command -v SetFile >/dev/null 2>&1; then
-      SetFile -a C "$STAGE"
-    else
-      echo "SetFile not found; the DMG volume may keep the generic disk icon." >&2
-    fi
-  fi
-  rm -rf "$(dirname "$ICONSET")"
-else
-  echo "sips or iconutil not found; the DMG will keep the generic disk icon." >&2
-fi
-
 mkdir -p build/installer
-rm -f "$DMG"
-hdiutil create -volname "Budget Tracker" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
+created=0
+for attempt in 1 2 3; do
+  rm -f "$DMG"
+  if hdiutil create -volname "Budget Tracker" -srcfolder "$STAGE" -ov -format UDZO \
+      -fs HFS+ "$DMG"; then
+    created=1
+    break
+  fi
+  echo "hdiutil attempt $attempt failed; retrying..." >&2
+  sleep 5
+done
 rm -rf "$STAGE"
+if [[ "$created" -ne 1 ]]; then
+  echo "Could not create $DMG" >&2
+  exit 1
+fi
 
 if [[ -n "${MACOS_SIGN_IDENTITY:-}" ]]; then
   codesign --force --timestamp --sign "$MACOS_SIGN_IDENTITY" "$DMG"

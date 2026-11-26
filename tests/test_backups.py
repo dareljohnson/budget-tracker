@@ -826,3 +826,56 @@ class TestPreMigrationCopy(BackupTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestBackupLocation(unittest.TestCase):
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmpdir.cleanup)
+        self.root = Path(self._tmpdir.name)
+        self.home = self.root / "home"
+        self.home.mkdir()
+        self.data = self.root / "data"
+        self.data.mkdir()
+
+    def test_default_backups_are_in_the_user_home(self):
+        from budget_tracker import backups
+
+        env = mock.patch.dict(
+            os.environ,
+            {"BUDGET_TRACKER_HOME": "", "BUDGET_TRACKER_BACKUPS": ""},
+        )
+        with env, mock.patch.object(Path, "home", return_value=self.home),                 mock.patch.object(backups, "data_dir", return_value=self.data):
+            self.assertEqual(
+                backups.backups_dir(), self.home / "BudgetTracker Backups"
+            )
+
+    def test_legacy_backups_move_out_of_the_data_folder(self):
+        from budget_tracker import backups
+
+        legacy = self.data / "backups"
+        legacy.mkdir()
+        (legacy / "auto-20260101-000000.zip").write_bytes(b"old")
+        env = mock.patch.dict(
+            os.environ,
+            {"BUDGET_TRACKER_HOME": "", "BUDGET_TRACKER_BACKUPS": ""},
+        )
+        with env, mock.patch.object(Path, "home", return_value=self.home),                 mock.patch.object(backups, "data_dir", return_value=self.data):
+            folder = backups.backups_dir()
+
+        self.assertEqual(folder, self.home / "BudgetTracker Backups")
+        self.assertTrue((folder / "auto-20260101-000000.zip").is_file())
+        self.assertFalse(legacy.exists())
+
+    def test_explicit_backup_folder_wins(self):
+        from budget_tracker import backups
+
+        custom = self.root / "custom backups"
+        with mock.patch.dict(os.environ, {"BUDGET_TRACKER_BACKUPS": str(custom)}):
+            self.assertEqual(backups.backups_dir(), custom)
+
+    def test_budget_tracker_home_keeps_backups_beside_data(self):
+        from budget_tracker import backups
+
+        with mock.patch.dict(os.environ, {"BUDGET_TRACKER_HOME": str(self.data)}):
+            self.assertEqual(backups.backups_dir(), self.data / "backups")

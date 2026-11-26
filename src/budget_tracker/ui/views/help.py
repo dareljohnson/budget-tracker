@@ -621,11 +621,13 @@ GUIDE: tuple[HelpSection, ...] = (
                 "Data folder",
                 "The database lives in %LOCALAPPDATA%\\BudgetTracker on Windows or "
                 "~/.local/share/budget_tracker on macOS and Linux (or $XDG_DATA_HOME/"
-                "budget_tracker); BUDGET_TRACKER_HOME overrides it. The backups/ and receipts/ "
-                "folders sit beside it. With a Microsoft Store Python, Windows redirects the "
-                "folder into %LOCALAPPDATA%\\Packages\\PythonSoftwareFoundation.Python.*\\"
-                "LocalCache\\Local\\BudgetTracker; the Backups dialog shows that real path. "
-                "The app makes a pre-migration copy before a schema upgrade.",
+                "budget_tracker); BUDGET_TRACKER_HOME overrides it. Receipts sit beside it. "
+                "With a Microsoft Store Python, Windows redirects that data folder into "
+                "%LOCALAPPDATA%\\Packages\\PythonSoftwareFoundation.Python.*\\"
+                "LocalCache\\Local\\BudgetTracker. Backups are deliberately kept outside "
+                "that folder: normally in BudgetTracker Backups under your user home, or "
+                "beside the data folder when BUDGET_TRACKER_HOME is set. BUDGET_TRACKER_BACKUPS "
+                "overrides the backup folder.",
                 ("data folder", "database", "sqlite", "location", "migration", "mac", "linux", "store python", "redirect"),
             ),
             HelpTopic(
@@ -682,13 +684,14 @@ GUIDE: tuple[HelpSection, ...] = (
                 ("payment", "schedule", "changed", "temporary", "escrow", "p&i"),
             ),
             HelpTopic(
-                "The backup folder path does not exist",
-                "If the Backups dialog shows a path under AppData\\Local\\BudgetTracker but "
-                "Explorer cannot open it, the app is running under the Microsoft Store Python. "
-                "Windows redirects that folder into %LOCALAPPDATA%\\Packages\\"
-                "PythonSoftwareFoundation.Python.*\\LocalCache\\Local\\BudgetTracker. "
-                "The dialog now shows the real path; use Open backup folder. Your backups are safe.",
-                ("backup", "folder", "path", "missing", "does not exist", "store python", "redirect"),
+                "Where backups are stored",
+                "Backups are in BudgetTracker Backups under your user home, for example "
+                "C:\\Users\\<you>\\BudgetTracker Backups on Windows or "
+                "~/BudgetTracker Backups on macOS and Linux. They are intentionally outside "
+                "the Microsoft Store Python package cache. Older backups in the old app-data "
+                "folder are moved automatically. Use Open backup folder in Settings → Backups "
+                "to find the folder.",
+                ("backup", "folder", "path", "missing", "store python", "redirect", "home"),
             ),
             HelpTopic(
                 "Text recognition is unavailable",

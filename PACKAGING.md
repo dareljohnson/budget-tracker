@@ -259,10 +259,12 @@ process's writes to `%LOCALAPPDATA%` into the package's private `LocalCache`. Th
 file is not where the other modes look. (The `Python.3.13` part of the path follows your Store Python
 version; find the folder with `Get-ChildItem "$env:LOCALAPPDATA\Packages" -Filter 'PythonSoftwareFoundation.Python.*'`.)
 
-Backups live in a `backups` folder inside that same data folder — `%LOCALAPPDATA%\BudgetTracker\backups` on
-Windows, `~/.local/share/budget_tracker/backups` on macOS and Linux, or under `BUDGET_TRACKER_HOME` when it is
-set. The folder holds automatic, manual, and pre-restore ZIP snapshots (the database and receipt images),
-plus pre-migration `.db` copies. Backups are not encrypted and never leave the PC; see
+Backups live in a **BudgetTracker Backups** folder under the user home — `C:\Users\<you>\BudgetTracker Backups`
+on Windows and `~/BudgetTracker Backups` on macOS and Linux. This keeps them out of the Microsoft Store
+Python package cache. With `BUDGET_TRACKER_HOME`, they stay in that data folder; `BUDGET_TRACKER_BACKUPS`
+overrides the location. Older backups under the data folder are moved automatically. The folder holds
+automatic, manual, and pre-restore ZIP snapshots (the database and receipt images), plus pre-migration `.db`
+copies. Backups are not encrypted and never leave the PC; see
 [Backups and restore](README.md#backups-and-restore).
 
 **Run only one copy of the app at a time.** Backup and restore are serialized within a running app but not
@@ -300,9 +302,8 @@ The icon shown on the downloaded file differs by platform:
 
 - **Windows:** `packaging/windows/installer.iss` sets `SetupIconFile`, so `setup.exe` and its shortcuts
   carry `packaging/windows/budget_tracker.ico`.
-- **macOS:** the `.app` gets its icon from `src/assets/icon.png` during `flet build`; `packaging/macos/build.sh`
-  also writes a `.VolumeIcon.icns`, so the mounted **.dmg volume** shows the app icon. The `.dmg` file itself
-  still uses Finder's standard disk-image icon, which macOS does not let the build set with the built-in tools.
+- **macOS:** the `.app` gets its icon from `src/assets/icon.png` during `flet build`. The `.dmg` file itself
+  uses Finder's standard disk-image icon, which macOS does not let the build set with the built-in tools.
 - **Linux:** the `.tar.gz` is a compressed archive and uses the file manager's generic archive icon. Its
   `share/applications` entry and hicolor icons are installed by `install.sh`, so the **application menu**
   shows the app icon. The AppImage embeds the same desktop entry and icon.

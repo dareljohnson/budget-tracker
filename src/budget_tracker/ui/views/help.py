@@ -226,8 +226,9 @@ GUIDE: tuple[HelpSection, ...] = (
                 "Reminders and text alerts",
                 "The reminder window controls the startup pop-up and Windows notifications. SMS "
                 "alerts can be configured on the Bills page; they use the saved provider settings "
-                "and are sent by the reminder process.",
-                ("reminder", "notification", "sms", "text", "alert"),
+                "and are sent by the reminder process. The Text alerts dialog can also text PLOC "
+                "draw and sweep reminders once a month.",
+                ("reminder", "notification", "sms", "text", "alert", "ploc"),
             ),
         ),
     ),
@@ -310,6 +311,8 @@ GUIDE: tuple[HelpSection, ...] = (
                             "The plan is read-only: it does not move money. Link a Revolving "
                             "Loan account in setup to read its live APR, amount owed and credit "
                             "limit when set; draws and sweeps then update the plan automatically.",
+                            "Set a monthly Reminder day to get a PLOC sweep reminder, or a "
+                            "new-chunk reminder when the linked line reaches zero.",
                             "If no account is linked, enter the APR and current amount owed "
                             "manually; update them after a draw or sweep.",
                         ),
@@ -394,6 +397,22 @@ GUIDE: tuple[HelpSection, ...] = (
                         ),
                     ),
                 ),
+            ),
+            HelpTopic(
+                "PLOC draw and sweep reminders",
+                "Set a Reminder day of the month (1–31) in Velocity setup to get one monthly "
+                "nudge. This is a calendar day, not a number of days before; 15 means the 15th "
+                "of each month. On or "
+                "after that day, if the linked PLOC still has a balance, the app says PLOC sweep "
+                "due. If the PLOC is at zero and a target remains, it says the next chunk is "
+                "ready. The reminder appears at startup, and the scheduled reminder command can "
+                "show a Windows notification. If PLOC reminder texts are enabled in Text alerts, "
+                "the startup and scheduled checks can also send the reminder by SMS. A sweep "
+                "reminder is suppressed when a transfer into the PLOC is already recorded that "
+                "month. A reminder never creates a transaction; "
+                "use Record draw or Record sweep on the Velocity card to prefill it for "
+                "confirmation.",
+                ("reminder", "alert", "sweep reminder", "draw reminder", "notification"),
             ),
             HelpTopic(
                 "PLOC sweep and payment walkthrough",

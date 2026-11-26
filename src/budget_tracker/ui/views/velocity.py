@@ -358,7 +358,12 @@ class VelocityPanel:
                 f"Chunk {format_money(settings.chunk_cents)} per cycle · "
                 f"sweep {format_money(settings.sweep_cents)} per month · "
                 f"line cleared {self._month(velocity.line_clear_month)} · "
-                f"{velocity.months} months",
+                f"{velocity.months} months"
+                + (
+                    f" · reminder on day {settings.reminder_day}"
+                    if settings.reminder_day
+                    else ""
+                ),
                 size=fs(12),
                 color=ft.Colors.ON_SURFACE_VARIANT,
             ),
@@ -766,6 +771,13 @@ class VelocityPlanDialog:
             prefix_icon=ft.Icons.ATTACH_MONEY,
             value=f"{settings.sweep_cents / 100:.2f}" if settings else "",
         )
+        self.reminder_day = ft.TextField(
+            label="Reminder day of month (1–31, optional)",
+            tooltip="This is a calendar day, not days before. For example, 15 means the 15th of each month. Leave blank for no alert.",
+            hint_text="e.g. 15 = the 15th each month; blank = off",
+            keyboard_type=ft.KeyboardType.NUMBER,
+            value=str(settings.reminder_day) if settings and settings.reminder_day else "",
+        )
         self.reserve = ft.TextField(
             label="Keep this much credit unused",
             tooltip="Credit kept unused. The plan never draws the final reserve portion of the limit.",
@@ -795,6 +807,7 @@ class VelocityPlanDialog:
                         self.chunk,
                         self.sweep,
                         self.reserve,
+                        self.reminder_day,
                         self.info,
                         self.error,
                     ],
@@ -891,7 +904,15 @@ class VelocityPlanDialog:
         )
 
     def _save(self, _: ft.Event) -> None:
-        for field in (self.limit, self.apr, self.loc_balance, self.chunk, self.sweep, self.reserve):
+        for field in (
+            self.limit,
+            self.apr,
+            self.loc_balance,
+            self.chunk,
+            self.sweep,
+            self.reserve,
+            self.reminder_day,
+        ):
             field.error = None
         self.error.visible = False
         selected = [summary for summary, checkbox in self.target_checks if checkbox.value]
@@ -949,6 +970,16 @@ class VelocityPlanDialog:
             self.reserve.error = str(exc)
             valid = False
             reserve = 0
+        reminder_day = None
+        reminder_text = (self.reminder_day.value or "").strip()
+        if reminder_text:
+            try:
+                reminder_day = int(reminder_text)
+                if not 1 <= reminder_day <= 31:
+                    raise ValueError("Enter a day from 1 to 31")
+            except ValueError as exc:
+                self.reminder_day.error = str(exc)
+                valid = False
         if linked_account is not None:
             if linked_account.apr_bps is None:
                 self.error.value = (
@@ -987,6 +1018,7 @@ class VelocityPlanDialog:
             sweep_cents=sweep,
             reserve_cents=reserve,
             loc_account_id=linked_account.id if linked_account is not None else None,
+            reminder_day=reminder_day,
         )
         self.ctx.service.set_velocity_settings(settings)
         self.ctx.page.pop_dialog()

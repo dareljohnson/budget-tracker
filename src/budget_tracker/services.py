@@ -26,7 +26,7 @@ from .debt_planner import (
     next_month_extra_allocation,
     plan_payoff,
 )
-from .formatting import month_key, shift_month
+from .formatting import format_money, month_key, shift_month
 from .matching import MatchCandidate, match_candidates as _match_candidates
 from .models import (
     Account,
@@ -71,6 +71,7 @@ from .workbook_export import export_workbook
 DEBT_EXTRA_SETTING = "debt_extra_cents"
 DEBT_STRATEGY_SETTING = "debt_strategy"
 VELOCITY_SETTING = "velocity_plan"
+VELOCITY_REMINDER_SENT_SETTING = "velocity_reminder_sent"
 
 
 RECEIPT_CATEGORY_KEYWORDS: list[tuple[tuple[str, ...], str]] = [
@@ -221,6 +222,16 @@ class VelocitySettings:
     sweep_cents: int
     reserve_cents: int
     loc_account_id: int | None = None
+    reminder_day: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class VelocityReminder:
+    title: str
+    body: str
+    month: str
+    kind: str  # sweep | draw
+    amount_cents: int = 0
 
 
 class BudgetService:
@@ -1499,6 +1510,10 @@ class BudgetService:
             loc_account_id = (
                 int(raw_account_id) if raw_account_id not in (None, "", 0) else None
             )
+            raw_reminder_day = data.get("reminder_day")
+            reminder_day = (
+                int(raw_reminder_day) if raw_reminder_day not in (None, "") else None
+            )
             settings = VelocitySettings(
                 target_debt_ids=target_ids,
                 loc_limit_cents=int(data["loc_limit_cents"]),
@@ -1508,6 +1523,7 @@ class BudgetService:
                 sweep_cents=int(data["sweep_cents"]),
                 reserve_cents=int(data["reserve_cents"]),
                 loc_account_id=loc_account_id,
+                reminder_day=reminder_day,
             )
         except (KeyError, TypeError, ValueError, json.JSONDecodeError):
             return None
@@ -1541,6 +1557,7 @@ class BudgetService:
                     "sweep_cents": settings.sweep_cents,
                     "reserve_cents": settings.reserve_cents,
                     "loc_account_id": settings.loc_account_id,
+                    "reminder_day": settings.reminder_day,
                 }
             ),
         )
@@ -1643,6 +1660,88 @@ class BudgetService:
     ) -> list[tuple[int, VelocityResult]]:
         inputs = self.velocity_input(settings)
         return rate_scenarios(inputs) if inputs is not None else []
+
+    def velocity_reminder(
+        self, *, today: date | None = None, settings: VelocitySettings | None = None
+    ) -> VelocityReminder | None:
+        """The monthly PLOC draw or sweep reminder, if it is due and not already sent."""
+        settings = settings or self.velocity_settings()
+        if settings is None or settings.reminder_day is None:
+            return None
+        day = today or date.today()
+        month = month_key(day)
+        if day.day < min(settings.reminder_day, calendar.monthrange(day.year, day.month)[1]):
+            return None
+        if self.repo.get_setting(VELOCITY_REMINDER_SENT_SETTING) == month:
+            return None
+        line = self.velocity_line(settings)
+        if line is None:
+            return None
+        line_name, owed, _apr, _limit = line
+        summaries = {
+            summary.debt.id: summary for summary in self.list_debt_summaries()
+        }
+        targets = [
+            summaries[target_id]
+            for target_id in settings.target_debt_ids
+            if target_id in summaries
+            and summaries[target_id].balance_cents > 0
+            and summaries[target_id].debt.kind
+            in (DebtKind.CREDIT_CARD, DebtKind.AUTO, DebtKind.PERSONAL)
+        ]
+        if not targets:
+            return None
+        account_name = line_name or "the PLOC"
+        if owed > 0:
+            if settings.loc_account_id is not None:
+                transfers = self.repo.list_transactions(
+                    month=month,
+                    type_=TransactionType.TRANSFER,
+                    account_id=settings.loc_account_id,
+                )
+                if any(
+                    tx.transfer_account_id == settings.loc_account_id
+                    and tx.account_id != settings.loc_account_id
+                    for tx in transfers
+                ):
+                    return None
+            amount = min(settings.sweep_cents, owed)
+            return VelocityReminder(
+                title="PLOC sweep due",
+                body=(
+                    f"Transfer {format_money(amount)} from Checking to {account_name}. "
+                    f"The PLOC has {format_money(owed)} owed."
+                ),
+                month=month,
+                kind="sweep",
+                amount_cents=amount,
+            )
+        amount = settings.chunk_cents
+        comparison = self.velocity_comparison(settings)
+        if comparison is not None:
+            amount = next(
+                (
+                    row.chunk_cents
+                    for row in comparison.velocity.schedule
+                    if row.chunk_cents > 0
+                ),
+                amount,
+            )
+        return VelocityReminder(
+            title="PLOC ready for the next chunk",
+            body=(
+                f"Draw up to {format_money(amount)} from {account_name} to Checking, then pay "
+                f"the target. {len(targets)} target{'s' if len(targets) != 1 else ''} remain."
+            ),
+            month=month,
+            kind="draw",
+            amount_cents=amount,
+        )
+
+    def mark_velocity_reminder_sent(self, *, today: date | None = None) -> None:
+        self.repo.set_setting(
+            VELOCITY_REMINDER_SENT_SETTING, month_key(today or date.today())
+        )
 
     def debt_plans(self, extra_cents: int, *, today: date | None = None) -> dict[DebtStrategy, DebtPlan]:
         return {strategy: self.debt_plan(extra_cents, strategy, today=today) for strategy in DebtStrategy}

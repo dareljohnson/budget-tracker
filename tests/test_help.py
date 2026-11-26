@@ -89,6 +89,12 @@ class TestHelpGuide(unittest.TestCase):
         self.assertIn("Velocity banking setup examples", texts)
         self.assertIn("Example 1 — credit card", " ".join(texts))
 
+    def test_ploc_reminder_topic_is_searchable(self):
+        self.view.search.value = "sweep reminder"
+        self.view.refresh()
+        texts = _texts(self.view.body.controls)
+        self.assertIn("PLOC draw and sweep reminders", texts)
+
     def test_ploc_tracking_topic_is_searchable(self):
         self.view.search.value = "ploc sweep"
         self.view.refresh()

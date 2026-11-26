@@ -20,7 +20,8 @@ from .db import connect
 from .formatting import format_money
 from .models import DueBill
 from .repository import Repository
-from .sms import SmsError, send_due_sms
+from .services import BudgetService
+from .sms import SmsError, send_due_sms, send_velocity_sms
 
 log = logging.getLogger(__name__)
 
@@ -84,6 +85,38 @@ def check_and_notify(
     return due
 
 
+def check_velocity_reminder(
+    repo: Repository,
+    *,
+    today: date | None = None,
+    notifier: Callable[[str, str], None] = show_windows_toast,
+    mark_sent: bool = True,
+    send_text: bool = True,
+) -> bool:
+    """Show and optionally text the monthly PLOC draw or sweep reminder."""
+    service = BudgetService(repo)
+    reminder = service.velocity_reminder(today=today)
+    if reminder is None:
+        return False
+    notification_ok = True
+    try:
+        notifier(reminder.title, reminder.body)
+    except (OSError, subprocess.SubprocessError) as exc:
+        log.error("Could not show the PLOC notification: %s", exc)
+        notification_ok = False
+    sms_sent = False
+    if send_text:
+        try:
+            sms_sent = send_velocity_sms(repo, reminder, today=today)
+            if sms_sent:
+                log.info("Sent a PLOC reminder text")
+        except SmsError as exc:
+            log.error("Could not send the PLOC reminder text: %s", exc)
+    if mark_sent and (notification_ok or sms_sent):
+        service.mark_velocity_reminder_sent(today=today)
+    return notification_ok or sms_sent
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Show a notification for bills that are overdue or due soon.")
     parser.add_argument("--print", action="store_true", help="print reminders instead of showing a notification")
@@ -110,6 +143,16 @@ def main(argv: list[str] | None = None) -> int:
                     log.info("Sent a text message about due bills")
             except SmsError as exc:
                 log.error("Could not send a text message: %s", exc)
+        try:
+            check_velocity_reminder(
+                repo,
+                today=None if args.print else date.today(),
+                notifier=notifier,
+                mark_sent=not args.print,
+                send_text=not args.print,
+            )
+        except SmsError as exc:
+            log.error("Could not send the PLOC reminder text: %s", exc)
     finally:
         repo.close()
     if not due:

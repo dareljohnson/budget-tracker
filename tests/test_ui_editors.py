@@ -2167,11 +2167,13 @@ class TestEditors(unittest.TestCase):
         dialog.chunk.value = "3000"
         dialog.sweep.value = "300"
         dialog.reserve.value = "1000"
+        dialog.reminder_day.value = "15"
         dialog._save(None)
 
         settings = self.ctx.service.velocity_settings()
         self.assertIsNotNone(settings)
         self.assertEqual(settings.target_debt_ids, (debt.id,))
+        self.assertEqual(settings.reminder_day, 15)
         self.assertEqual(
             (settings.loc_limit_cents, settings.loc_apr_bps, settings.chunk_cents,
              settings.sweep_cents, settings.reserve_cents),
@@ -2310,6 +2312,33 @@ class TestEditors(unittest.TestCase):
         self.assertIn("3.99% APR", texts)
         self.assertIn("read from the linked account", texts)
         self.assertIn("$12,000.00 limit", texts)
+
+    def test_velocity_reminder_dialog_and_marking(self):
+        from budget_tracker.main import show_velocity_reminder_alert
+        from budget_tracker.models import DebtKind
+        from budget_tracker.services import VelocitySettings
+
+        debt = self.ctx.service.create_debt("Visa", DebtKind.CREDIT_CARD, 180_000, 2499, 4_800)
+        self.ctx.service.set_velocity_settings(VelocitySettings(
+            target_debt_ids=(debt.id or 0,),
+            loc_limit_cents=1_200_000,
+            loc_apr_bps=399,
+            loc_balance_cents=50_000,
+            chunk_cents=300_000,
+            sweep_cents=30_000,
+            reserve_cents=100_000,
+            reminder_day=date.today().day,
+        ))
+        shown = []
+        self.assertTrue(show_velocity_reminder_alert(
+            self.ctx, lambda: shown.append(True), quiet=False
+        ))
+        [dialog] = self.page.open_dialogs
+        self.assertEqual(dialog.title.value, "PLOC sweep due")
+        self.assertIn("Transfer $300.00", " ".join(self._texts(dialog.content)))
+        self.assertFalse(show_velocity_reminder_alert(
+            self.ctx, lambda: shown.append(True), quiet=False
+        ))
 
     def test_velocity_record_draw_prefills_a_transfer(self):
         from budget_tracker.models import DebtKind, LoanType

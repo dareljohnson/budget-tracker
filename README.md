@@ -299,7 +299,15 @@ The import is rejected — and nothing is written — if the parsed rows don't a
 
 ## Scanning receipts
 
-On the **Transactions** page, click **Scan receipt** to turn a paper receipt into an expense with its image attached. Choose **Scan with scanner** to scan one page with the first scanner connected to a Windows PC, or **Choose photo or scan file** to pick a PDF, PNG, or JPEG on any platform.
+On the **Transactions** page, click **Scan receipt** to turn a paper receipt into an expense with its image attached. Choose **Scan with scanner** to scan one page with the first scanner connected to a Windows PC, **Scan with phone** to photograph it with a phone on the same Wi-Fi, or **Choose photo or scan file** to pick a PDF, PNG, or JPEG on any platform.
+
+### Scanning with your phone
+
+1. Click **Scan with phone**. The dialog shows a QR code and a local address.
+2. Connect the phone to the same Wi-Fi as the PC, scan the QR code, and take or choose a photo of the receipt.
+3. The photo uploads directly to the PC, then appears in the normal review form. One photo is received per link.
+
+The phone page is served by the desktop app over your local network; no cloud service is involved. The link uses a one-time token, accepts JPEG and PNG up to 25 MB, and stops working after the upload or when the dialog closes. The phone hand-off works on Windows and macOS; only the flatbed **Scan with scanner** option is Windows-only. Windows or macOS may ask you to allow the app on private networks the first time. Camera photos are converted to JPEG in the browser before upload; if an iPhone still sends an unsupported format, set **Settings → Camera → Formats → Most Compatible**.
 
 - Text recognition runs on your PC with the same local OCR engine the statement importer uses. The image is never uploaded.
 - Review the merchant, amount, and date before saving. **Save** stays disabled until the amount, date, account, and category are filled in; a total the receipt does not print is left blank rather than guessed.

@@ -6,6 +6,7 @@ import asyncio
 import base64
 import shutil
 import tempfile
+import time
 from collections.abc import Callable
 from datetime import date
 from pathlib import Path
@@ -23,6 +24,7 @@ from ...receipts import (
     ReceiptScanError,
     read_receipt,
 )
+from ...receipts.phone import PhoneReceiptError, PhoneReceiptServer, qr_data_uri
 from ...receipts.scanner import scan_receipt
 from ...receipts.storage import resolve_receipt
 from ...repository import RepositoryError
@@ -102,6 +104,7 @@ class ReceiptImportDialog:
         self._saving = False
         self._source_path: Path | None = None
         self._temp_dir: Path | None = None
+        self._phone_server: PhoneReceiptServer | None = None
         self._match_mode = False
         self._create_requested = False
         self._selected_match: MatchCandidate | None = None
@@ -120,6 +123,37 @@ class ReceiptImportDialog:
             content="Choose photo or scan file",
             icon=ft.Icons.FOLDER_OPEN,
             on_click=self._choose_file,
+        )
+        self.phone_button = ft.OutlinedButton(
+            content="Scan with phone",
+            icon=ft.Icons.PHONE_ANDROID,
+            on_click=self._phone_scan,
+        )
+        self.phone_qr = ft.Image(src="", width=190, height=190, fit=ft.BoxFit.CONTAIN, visible=False)
+        self.phone_url = ft.Text("", selectable=True, size=fs(12), color=ft.Colors.ON_SURFACE_VARIANT)
+        self.phone_note = ft.Text("", size=fs(12), color=ft.Colors.ON_SURFACE_VARIANT)
+        self.phone_stop = ft.TextButton(
+            content="Stop",
+            icon=ft.Icons.CLOSE,
+            on_click=lambda _: self._stop_phone(),
+        )
+        self.phone_panel = ft.Container(
+            visible=False,
+            padding=12,
+            border=ft.Border.all(1, ft.Colors.OUTLINE_VARIANT),
+            border_radius=10,
+            content=ft.Row(
+                [
+                    self.phone_qr,
+                    ft.Column(
+                        [self.phone_note, self.phone_url, self.phone_stop],
+                        spacing=6,
+                        expand=True,
+                    ),
+                ],
+                spacing=GAP,
+                vertical_alignment=ft.CrossAxisAlignment.START,
+            ),
         )
         self.progress = ft.ProgressRing(visible=False, width=fs(18), height=fs(18), stroke_width=2)
         self.note = ft.Text("", size=fs(13), color=ft.Colors.ON_SURFACE_VARIANT)
@@ -207,11 +241,12 @@ class ReceiptImportDialog:
                 content=ft.Column(
                     [
                         ft.Row(
-                            [self.scan_button, self.choose_button, self.progress, self.note],
+                            [self.scan_button, self.choose_button, self.phone_button, self.progress, self.note],
                             spacing=12,
                             wrap=True,
                             vertical_alignment=ft.CrossAxisAlignment.CENTER,
                         ),
+                        self.phone_panel,
                         self.preview_holder,
                         self.match_panel,
                         self.merchant,
@@ -250,6 +285,7 @@ class ReceiptImportDialog:
         if self._closed_notified:
             return
         self._closed_notified = True
+        self._stop_phone()
         self._cleanup_temp()
         if self.on_close is not None:
             self.on_close()
@@ -309,6 +345,73 @@ class ReceiptImportDialog:
             return
         self._set_busy(False)
         await self._load(destination)
+
+    async def _phone_scan(self, _: ft.Event | None = None) -> None:
+        """Start a one-photo LAN receiver and wait for the phone's upload."""
+        if self._busy or self._phone_server is not None:
+            return
+        previous_temp = self._temp_dir
+        self._cleanup_temp()
+        self._drop_source_in(previous_temp)
+        self._temp_dir = Path(tempfile.mkdtemp(prefix="budget-tracker-phone-"))
+        try:
+            server = PhoneReceiptServer(self._temp_dir)
+            url = server.url
+            if url is None:
+                raise PhoneReceiptError(
+                    "This computer has no network address. Connect it to Wi-Fi and try again."
+                )
+            server.start()
+        except (OSError, PhoneReceiptError) as exc:
+            self._cleanup_temp()
+            if not self._closed_notified:
+                self.ctx.notify(f"Could not start phone capture: {exc}", error=True)
+            return
+        self._phone_server = server
+        self._set_source_buttons(phone_active=True)
+        qr = qr_data_uri(url)
+        self.phone_qr.src = qr or ""
+        self.phone_qr.visible = qr is not None
+        self.phone_url.value = url
+        self.phone_note.value = (
+            "Scan this QR code with your phone camera, then take or choose a photo. "
+            "Both devices must be on the same Wi-Fi."
+        )
+        self.phone_note.color = ft.Colors.ON_SURFACE_VARIANT
+        self.phone_panel.visible = True
+        self._refresh_ui()
+        try:
+            deadline = time.monotonic() + 300
+            while (
+                not self._closed_notified
+                and self._phone_server is not None
+                and time.monotonic() < deadline
+            ):
+                path = await asyncio.to_thread(server.wait, 0.5)
+                if path is not None:
+                    self._stop_phone()
+                    await self._load(path)
+                    return
+            if not self._closed_notified and self._phone_server is not None:
+                self.phone_note.value = "No photo arrived. Try again."
+                self.phone_note.color = EXPENSE_COLOR
+                self._refresh_ui()
+        finally:
+            self._stop_phone()
+
+    def _stop_phone(self) -> None:
+        if self._phone_server is not None:
+            self._phone_server.stop()
+            self._phone_server = None
+        self.phone_panel.visible = False
+        self._set_source_buttons(phone_active=False)
+        self._refresh_ui()
+
+    def _set_source_buttons(self, *, phone_active: bool) -> None:
+        disabled = self._busy or phone_active
+        self.scan_button.disabled = disabled
+        self.choose_button.disabled = disabled
+        self.phone_button.disabled = disabled
 
     def _drop_source_in(self, temp_dir: Path | None) -> None:
         """Forget a source that lived in a temporary folder we just deleted.
@@ -559,8 +662,7 @@ class ReceiptImportDialog:
     def _set_busy(self, busy: bool) -> None:
         self._busy = busy
         self.progress.visible = busy
-        self.scan_button.disabled = busy
-        self.choose_button.disabled = busy
+        self._set_source_buttons(phone_active=self._phone_server is not None)
         self._refresh_save()
 
     def _is_mounted(self) -> bool:

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "budget-tracker"
-version = "1.17.0"
+version = "1.18.0"
 description = "A personal budget tracker desktop app built with Flet and SQLite"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -20,6 +20,8 @@ dependencies = [
     "rapidocr-onnxruntime==1.2.3",
     "onnxruntime>=1.23,<2",
     "Pillow>=13,<14",
+    # QR code for the phone-to-desktop receipt hand-off.
+    "qrcode>=8,<9",
     "pypdfium2>=5.15,<6",
 ]
 

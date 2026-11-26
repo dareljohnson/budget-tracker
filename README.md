@@ -201,7 +201,7 @@ Choose one or more credit cards, auto loans or personal loans, then enter the PL
 
 Selected debts are marked **Velocity** on their debt cards and are removed from the normal Payoff plan, so their minimums are not counted twice. All other debts are marked **Payoff**.
 
-The PLOC is a **simulation**: the plan does not create a line-of-credit account or record draws and payments. Link a Revolving Loan account in the setup to read its live APR, amount owed and credit limit when set; draws and sweeps then update the plan automatically. Each setup field has a tooltip with a short explanation. The result is an estimate, not a recommendation.
+The PLOC is a **simulation**: the plan does not create a line-of-credit account or record draws and payments. Link a Revolving Loan account in the setup to read its live APR, amount owed and credit limit when set; draws and sweeps then update the plan automatically. Set a monthly **Reminder day of the month** to receive a PLOC sweep or new-chunk reminder at startup and through the scheduled reminder command. A reminder never creates a transfer. Each setup field has a tooltip with a short explanation. The result is an estimate, not a recommendation.
 
 #### Tracking real PLOC activity
 
@@ -416,6 +416,7 @@ schtasks /Create /SC DAILY /ST 09:00 /TN "BudgetTracker Reminders" `
 - To test without showing a notification, run `python -m budget_tracker.reminders --print`.
 - To remove the scheduled task, run `schtasks /Delete /TN "BudgetTracker Reminders"`.
 - If text alerts are configured, the same command also sends the SMS summary. The `--print` option never sends a text.
+- If **PLOC draw and sweep reminders** are enabled in Text alerts, the same command also sends one PLOC reminder a month. The Velocity setup’s Reminder day decides when it is due.
 
 ### Text message alerts
 

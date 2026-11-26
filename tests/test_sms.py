@@ -351,6 +351,58 @@ class TestReminderCommand(unittest.TestCase):
         self.assertEqual(result, 0)
         send.assert_called_once()
 
+    def test_velocity_reminder_is_shown_and_marked(self):
+        from budget_tracker.models import DebtKind
+        from budget_tracker.services import BudgetService, VelocitySettings
+
+        debt = BudgetService(self.repo).create_debt(
+            "Visa", DebtKind.CREDIT_CARD, 180_000, 2499, 4_800
+        )
+        BudgetService(self.repo).set_velocity_settings(VelocitySettings(
+            target_debt_ids=(debt.id or 0,),
+            loc_limit_cents=1_200_000,
+            loc_apr_bps=399,
+            loc_balance_cents=0,
+            chunk_cents=300_000,
+            sweep_cents=30_000,
+            reserve_cents=100_000,
+            reminder_day=date.today().day,
+        ))
+        sent = []
+        self.assertTrue(self.reminders.check_velocity_reminder(
+            self.repo, notifier=lambda title, body: sent.append((title, body))
+        ))
+        self.assertEqual(sent[0][0], "PLOC ready for the next chunk")
+        self.assertFalse(self.reminders.check_velocity_reminder(
+            self.repo, notifier=lambda title, body: sent.append((title, body))
+        ))
+
+    def test_velocity_reminder_sends_the_scheduled_text(self):
+        from budget_tracker.models import DebtKind
+        from budget_tracker.services import BudgetService, VelocitySettings
+
+        debt = BudgetService(self.repo).create_debt(
+            "Visa", DebtKind.CREDIT_CARD, 180_000, 2499, 4_800
+        )
+        BudgetService(self.repo).set_velocity_settings(VelocitySettings(
+            target_debt_ids=(debt.id or 0,),
+            loc_limit_cents=1_200_000,
+            loc_apr_bps=399,
+            loc_balance_cents=50_000,
+            chunk_cents=300_000,
+            sweep_cents=30_000,
+            reserve_cents=100_000,
+            reminder_day=date.today().day,
+        ))
+        sent = []
+        with mock.patch.object(self.reminders, "send_velocity_sms", return_value=True) as text:
+            self.assertTrue(self.reminders.check_velocity_reminder(
+                self.repo,
+                notifier=lambda title, body: sent.append((title, body)),
+            ))
+        text.assert_called_once()
+        self.assertEqual(sent[0][0], "PLOC sweep due")
+
     def test_print_mode_does_not_send_a_text(self):
         with mock.patch.object(self.reminders, "connect", return_value=self.repo.conn), \
                 mock.patch.object(self.reminders, "send_due_sms") as send, \
@@ -390,6 +442,45 @@ class _PageStub:
 
 
 @unittest.skipIf(__import__("importlib").util.find_spec("flet") is None, "flet is not installed")
+class TestVelocitySms(unittest.TestCase):
+    def setUp(self) -> None:
+        self.repo = Repository(connect(":memory:"))
+        self.addCleanup(self.repo.close)
+
+    def test_send_velocity_sms_once_per_month(self):
+        sms.save_config(self.repo, _config(notify_due=False, notify_velocity=True))
+        reminder = SimpleNamespace(
+            title="PLOC sweep due",
+            body="Transfer $300.00 from Checking to Personal LOC.",
+        )
+        sent = []
+
+        self.assertTrue(sms.send_velocity_sms(
+            self.repo,
+            reminder,
+            today=date(2026, 11, 15),
+            sender=lambda config, body: sent.append(body),
+        ))
+        self.assertIn("PLOC sweep due", sent[0])
+        self.assertIn("Transfer $300.00", sent[0])
+        self.assertFalse(sms.send_velocity_sms(
+            self.repo,
+            reminder,
+            today=date(2026, 11, 20),
+            sender=lambda config, body: sent.append(body),
+        ))
+
+    def test_velocity_sms_requires_the_toggle(self):
+        sms.save_config(self.repo, _config(notify_due=True, notify_velocity=False))
+        reminder = SimpleNamespace(title="PLOC sweep due", body="Transfer $300.00.")
+        self.assertFalse(sms.send_velocity_sms(
+            self.repo,
+            reminder,
+            today=date(2026, 11, 15),
+            sender=lambda config, body: None,
+        ))
+
+
 class TestTextAlertsDialog(unittest.TestCase):
     def setUp(self) -> None:
         from budget_tracker.services import BudgetService
@@ -435,6 +526,19 @@ class TestTextAlertsDialog(unittest.TestCase):
         self.assertEqual((loaded.carrier, loaded.number, loaded.notify_due), ("att", "5551234567", True))
         self.assertEqual(loaded.username, "owner@example.com")
         self.assertTrue(any("saved" in bar.content.value.lower() for bar in self.page.overlay if hasattr(bar, "content")))
+
+    def test_save_persists_the_ploc_reminder_toggle(self):
+        dialog = self._dialog()
+        dialog.open()
+        self._fill(dialog)
+        dialog.notify.value = False
+        dialog.notify_velocity.value = True
+
+        dialog._save(None)
+
+        loaded = sms.load_config(self.repo)
+        self.assertFalse(loaded.notify_due)
+        self.assertTrue(loaded.notify_velocity)
 
     def test_invalid_phone_and_missing_server_are_reported_on_their_fields(self):
         dialog = self._dialog()

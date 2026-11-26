@@ -25,7 +25,7 @@ from .db import connect
 from .formatting import format_money
 from .repository import Repository
 from .services import BudgetService
-from .sms import SmsError, send_due_sms_for_today
+from .sms import SmsError, load_config, send_due_sms_for_today, send_velocity_sms
 from .ui.context import AppContext
 from .ui.theme import (
     EXPENSE_COLOR,
@@ -73,6 +73,7 @@ REPORTS_INDEX = 2
 TRANSACTIONS_INDEX = 3
 BILLS_INDEX = 7
 BUDGETS_INDEX = 8
+DEBTS_INDEX = 6
 HELP_INDEX = 10
 ALERT_MAX_ROWS = 6
 AUTO_BACKUP_INTERVAL_SECONDS = 6 * 60 * 60
@@ -436,7 +437,68 @@ def main(page: ft.Page) -> None:
             restore_message,
             error=restore_message != RESTORE_APPLIED_MESSAGE,
         )
-    show_due_bills_alert(ctx, lambda: show_view(BILLS_INDEX))
+    bills_alerted = show_due_bills_alert(ctx, lambda: show_view(BILLS_INDEX))
+    show_velocity_reminder_alert(
+        ctx,
+        lambda: show_view(DEBTS_INDEX),
+        quiet=bills_alerted,
+    )
+
+
+def show_velocity_reminder_alert(
+    ctx: AppContext,
+    on_view_debts: Callable[[], None],
+    *,
+    quiet: bool = False,
+) -> bool:
+    """Show the monthly PLOC draw or sweep reminder; return True when one was due."""
+    reminder = ctx.service.velocity_reminder()
+    if reminder is None:
+        return False
+    if quiet:
+        ctx.notify(f"{reminder.title}: {reminder.body}")
+        ctx.service.mark_velocity_reminder_sent()
+        return True
+
+    page = ctx.page
+
+    def view_debts(_: ft.Event) -> None:
+        page.pop_dialog()
+        on_view_debts()
+
+    page.show_dialog(
+        ft.AlertDialog(
+            modal=True,
+            icon=ft.Icon(ft.Icons.ACCOUNT_BALANCE_WALLET, color=WARNING_COLOR),
+            title=ft.Text(reminder.title),
+            content=ft.Text(reminder.body, size=fs(13)),
+            actions=[
+                ft.TextButton(content="Dismiss", on_click=lambda _: page.pop_dialog()),
+                ft.FilledTonalButton(
+                    content="View Debts",
+                    on_click=view_debts,
+                ),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+    )
+    if load_config(ctx.repo).notify_velocity:
+        page.run_task(_send_velocity_text, ctx, reminder)
+    else:
+        ctx.service.mark_velocity_reminder_sent()
+    return True
+
+
+async def _send_velocity_text(ctx: AppContext, reminder) -> None:
+    """Send the PLOC text in the background after the startup reminder is shown."""
+    try:
+        await asyncio.to_thread(send_velocity_sms, ctx.repo, reminder)
+    except SmsError as exc:
+        ctx.notify(f"PLOC text not sent: {exc}", error=True)
+    except Exception:  # noqa: BLE001 - a text failure must not break the app
+        log.exception("Could not send the PLOC reminder text")
+    finally:
+        ctx.service.mark_velocity_reminder_sent()
 
 
 def show_due_bills_alert(ctx: AppContext, on_view_bills: Callable[[], None]) -> bool:

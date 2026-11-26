@@ -46,6 +46,15 @@ class TextAlertsDialog:
             size=fs(12),
             color=ft.Colors.ON_SURFACE_VARIANT,
         )
+        self.notify_velocity = ft.Switch(
+            label="Text me about PLOC draw and sweep reminders",
+            value=self.config.notify_velocity,
+        )
+        self.notify_velocity_help = ft.Text(
+            "Uses the same phone and email account. Sends at most one PLOC reminder a month.",
+            size=fs(12),
+            color=ft.Colors.ON_SURFACE_VARIANT,
+        )
 
         self.host = ft.TextField(
             label="Email server",
@@ -125,6 +134,8 @@ class TextAlertsDialog:
                         self.gateway_hint,
                         self.notify,
                         self.notify_help,
+                        self.notify_velocity,
+                        self.notify_velocity_help,
                         ft.Divider(height=1, color=ft.Colors.OUTLINE_VARIANT),
                         ft.Text("Email account used to send", size=fs(14), weight=ft.FontWeight.W_600),
                         ft.Text(
@@ -234,6 +245,7 @@ class TextAlertsDialog:
             carrier=self.carrier.value or "",
             number=number,
             notify_due=bool(self.notify.value),
+            notify_velocity=bool(self.notify_velocity.value),
             host=self.host.value or "",
             port=port,
             security=self.security.value or "starttls",
@@ -277,7 +289,9 @@ class TextAlertsDialog:
     def _save(self, _: ft.Event | None = None) -> None:
         self._clear_errors()
         config = self._build_config()
-        errors = sms.config_errors(config, require_smtp=config.notify_due)
+        errors = sms.config_errors(
+            config, require_smtp=config.notify_due or config.notify_velocity
+        )
         if errors:
             self._show_errors(errors)
             return

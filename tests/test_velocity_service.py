@@ -155,6 +155,61 @@ class TestVelocityService(unittest.TestCase):
         inputs = self.service.velocity_input(settings)
         self.assertEqual(inputs.loc_limit_cents, 900_000)
 
+    def test_velocity_reminder_for_an_owed_ploc(self):
+        settings = VelocitySettings(
+            target_debt_ids=(self.card.id or 0,),
+            loc_limit_cents=1_200_000,
+            loc_apr_bps=399,
+            loc_balance_cents=50_000,
+            chunk_cents=300_000,
+            sweep_cents=30_000,
+            reserve_cents=100_000,
+            reminder_day=1,
+        )
+        reminder = self.service.velocity_reminder(
+            settings=settings, today=date(2026, 11, 15)
+        )
+        self.assertIsNotNone(reminder)
+        self.assertEqual(reminder.kind, "sweep")
+        self.assertIn("PLOC sweep due", reminder.title)
+        self.service.mark_velocity_reminder_sent(today=date(2026, 11, 15))
+        self.assertIsNone(
+            self.service.velocity_reminder(settings=settings, today=date(2026, 11, 20))
+        )
+
+    def test_velocity_reminder_for_a_cleared_ploc_is_a_draw(self):
+        settings = VelocitySettings(
+            target_debt_ids=(self.card.id or 0,),
+            loc_limit_cents=1_200_000,
+            loc_apr_bps=399,
+            loc_balance_cents=0,
+            chunk_cents=300_000,
+            sweep_cents=30_000,
+            reserve_cents=100_000,
+            reminder_day=1,
+        )
+        reminder = self.service.velocity_reminder(
+            settings=settings, today=date(2026, 11, 15)
+        )
+        self.assertIsNotNone(reminder)
+        self.assertEqual(reminder.kind, "draw")
+        self.assertIn("next chunk", reminder.title)
+
+    def test_velocity_reminder_waits_for_the_reminder_day(self):
+        settings = VelocitySettings(
+            target_debt_ids=(self.card.id or 0,),
+            loc_limit_cents=1_200_000,
+            loc_apr_bps=399,
+            loc_balance_cents=50_000,
+            chunk_cents=300_000,
+            sweep_cents=30_000,
+            reserve_cents=100_000,
+            reminder_day=15,
+        )
+        self.assertIsNone(
+            self.service.velocity_reminder(settings=settings, today=date(2026, 11, 14))
+        )
+
     def test_linked_non_revolving_loan_is_rejected(self):
         account = self.repo.add_account(Account(
             "Car Loan",

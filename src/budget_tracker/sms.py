@@ -72,7 +72,9 @@ CARRIERS_BY_KEY: dict[str, Carrier] = {carrier.key: carrier for carrier in CARRI
 CARRIER_SETTING = "sms_carrier"
 NUMBER_SETTING = "sms_number"
 NOTIFY_DUE_SETTING = "sms_notify_due"
+NOTIFY_VELOCITY_SETTING = "sms_notify_velocity"
 LAST_DUE_SENT_SETTING = "sms_last_due_sent"
+LAST_VELOCITY_SMS_SETTING = "sms_last_velocity_sent"
 SMTP_HOST_SETTING = "sms_smtp_host"
 SMTP_PORT_SETTING = "sms_smtp_port"
 SMTP_SECURITY_SETTING = "sms_smtp_security"
@@ -119,6 +121,7 @@ class SmsConfig:
     carrier: str = ""
     number: str = ""
     notify_due: bool = False
+    notify_velocity: bool = False
     host: str = ""
     port: int = DEFAULT_PORT
     security: str = "starttls"
@@ -137,7 +140,7 @@ class SmsConfig:
 
     @property
     def configured(self) -> bool:
-        """Whether a due-bill text can be sent with the saved values."""
+        """Whether a text alert can be sent with the saved values."""
         try:
             normalize_phone(self.number)
         except ValueError:
@@ -157,6 +160,7 @@ def load_config(repo: Repository) -> SmsConfig:
         carrier=repo.get_setting(CARRIER_SETTING, "") or "",
         number=repo.get_setting(NUMBER_SETTING, "") or "",
         notify_due=repo.get_setting(NOTIFY_DUE_SETTING, "0") == "1",
+        notify_velocity=repo.get_setting(NOTIFY_VELOCITY_SETTING, "0") == "1",
         host=repo.get_setting(SMTP_HOST_SETTING, "") or "",
         port=_port_setting(repo.get_setting(SMTP_PORT_SETTING)),
         security=repo.get_setting(SMTP_SECURITY_SETTING, "starttls") or "starttls",
@@ -168,7 +172,9 @@ def load_config(repo: Repository) -> SmsConfig:
 
 def save_config(repo: Repository, config: SmsConfig) -> None:
     """Validate and persist text-alert settings."""
-    errors = config_errors(config, require_smtp=config.notify_due)
+    errors = config_errors(
+        config, require_smtp=config.notify_due or config.notify_velocity
+    )
     if errors:
         raise ValueError(next(iter(errors.values())))
     repo.set_setting(CARRIER_SETTING, config.carrier)
@@ -176,6 +182,9 @@ def save_config(repo: Repository, config: SmsConfig) -> None:
         NUMBER_SETTING, normalize_phone(config.number) if config.number.strip() else ""
     )
     repo.set_setting(NOTIFY_DUE_SETTING, "1" if config.notify_due else "0")
+    repo.set_setting(
+        NOTIFY_VELOCITY_SETTING, "1" if config.notify_velocity else "0"
+    )
     repo.set_setting(SMTP_HOST_SETTING, config.host.strip())
     repo.set_setting(SMTP_PORT_SETTING, str(config.port))
     repo.set_setting(SMTP_SECURITY_SETTING, config.security)
@@ -202,13 +211,13 @@ def config_errors(config: SmsConfig, *, require_smtp: bool = False) -> dict[str,
             errors["carrier"] = "Choose your mobile carrier"
     elif config.carrier:
         errors["number"] = "Enter your 10-digit mobile number"
-    if config.notify_due:
+    if config.notify_due or config.notify_velocity:
         if not number:
             errors.setdefault("number", "Enter your 10-digit mobile number")
         if config.carrier not in CARRIERS_BY_KEY:
             errors.setdefault("carrier", "Choose your mobile carrier")
 
-    needs_smtp = require_smtp or config.notify_due or bool(
+    needs_smtp = require_smtp or config.notify_due or config.notify_velocity or bool(
         config.host.strip() or config.username.strip() or config.password
     )
     if needs_smtp:
@@ -366,6 +375,26 @@ def send_due_sms_for_today(
     finally:
         if owned:
             repo.close()
+
+
+def send_velocity_sms(
+    repo: Repository,
+    reminder,
+    *,
+    today: date | None = None,
+    sender=send_sms,
+) -> bool:
+    """Text one PLOC draw/sweep reminder at most once per month."""
+    config = load_config(repo)
+    if not config.notify_velocity or not config.configured:
+        return False
+    day = today or date.today()
+    month = f"{day.year:04d}-{day.month:02d}"
+    if repo.get_setting(LAST_VELOCITY_SMS_SETTING) == month:
+        return False
+    sender(config, f"{APP_NAME}: {reminder.title}. {reminder.body}")
+    repo.set_setting(LAST_VELOCITY_SMS_SETTING, month)
+    return True
 
 
 def _port_setting(value: str | None) -> int:

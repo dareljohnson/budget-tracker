@@ -255,7 +255,6 @@ def main(page: ft.Page) -> None:
     def apply_mode(dark: bool) -> None:
         page.theme_mode = ft.ThemeMode.DARK if dark else ft.ThemeMode.LIGHT
         set_dark(dark)
-        theme_button.icon = ft.Icons.LIGHT_MODE if dark else ft.Icons.DARK_MODE
         repo.set_setting(THEME_SETTING, "dark" if dark else "light")
         ctx.data_changed()
 
@@ -264,30 +263,50 @@ def main(page: ft.Page) -> None:
         current_preset = name
         apply_preset(page, repo, ctx, name)
 
-    def choose_appearance(_: ft.Event) -> None:
+    def quick_add(_: ft.Event) -> None:
+        rail.selected_index = TRANSACTIONS_INDEX
+        content.content = _pinned_page(views[TRANSACTIONS_INDEX].control)
+        views[TRANSACTIONS_INDEX].open_editor()
+
+    def choose_settings(_: ft.Event) -> None:
+        def open_backups(_: ft.Event) -> None:
+            page.pop_dialog()
+            BackupsDialog(ctx).open()
+
+        def open_help(_: ft.Event) -> None:
+            page.pop_dialog()
+            show_view(HELP_INDEX)
+
+        def mode_button(label: str, dark: bool, icon: ft.IconData):
+            active = (page.theme_mode == ft.ThemeMode.DARK) == dark
+            button = ft.FilledButton if active else ft.OutlinedButton
+            return button(content=label, icon=icon, on_click=lambda _: apply_mode(dark))
+
+        def size_button(label: str, scale: float, setting: str):
+            active = repo.get_setting(TEXT_SIZE_SETTING) == setting
+            button = ft.FilledButton if active else ft.OutlinedButton
+            return button(
+                content=label,
+                icon=ft.Icons.FORMAT_SIZE,
+                on_click=lambda _: apply_text_scale(scale, setting),
+            )
+
         page.show_dialog(
             ft.AlertDialog(
                 modal=True,
-                title=ft.Text("Appearance"),
+                title=ft.Text("Settings"),
                 content=ft.Container(
-                    width=340,
+                    width=420,
                     content=ft.Column(
                         [
-                            ft.Text("Mode", weight=ft.FontWeight.W_600),
+                            ft.Text("Appearance", weight=ft.FontWeight.W_600),
                             ft.Row(
                                 [
-                                    ft.FilledButton(
-                                        content="Light",
-                                        on_click=lambda _: apply_mode(False),
-                                    ),
-                                    ft.FilledButton(
-                                        content="Dark",
-                                        on_click=lambda _: apply_mode(True),
-                                    ),
+                                    mode_button("Light", False, ft.Icons.LIGHT_MODE),
+                                    mode_button("Dark", True, ft.Icons.DARK_MODE),
                                 ],
                                 spacing=8,
                             ),
-                            ft.Text("Theme", weight=ft.FontWeight.W_600),
                             ft.Dropdown(
                                 label="Theme",
                                 options=[
@@ -297,9 +316,31 @@ def main(page: ft.Page) -> None:
                                 value=current_preset,
                                 on_select=lambda event: choose_preset(event.control.value),
                             ),
+                            ft.Divider(),
+                            ft.Text("Text size", weight=ft.FontWeight.W_600),
+                            ft.Row(
+                                [
+                                    size_button("Normal", 1.0, "normal"),
+                                    size_button("Large", 1.15, "large"),
+                                ],
+                                spacing=8,
+                            ),
+                            ft.Divider(),
+                            ft.Text("Data", weight=ft.FontWeight.W_600),
+                            ft.OutlinedButton(
+                                content="Backups",
+                                icon=ft.Icons.BACKUP,
+                                on_click=open_backups,
+                            ),
+                            ft.OutlinedButton(
+                                content="Help & Guide",
+                                icon=ft.Icons.HELP_OUTLINE,
+                                on_click=open_help,
+                            ),
                         ],
                         spacing=12,
                         tight=True,
+                        scroll=ft.ScrollMode.AUTO,
                     ),
                 ),
                 actions=[
@@ -309,28 +350,10 @@ def main(page: ft.Page) -> None:
             )
         )
 
-    def quick_add(_: ft.Event) -> None:
-        rail.selected_index = TRANSACTIONS_INDEX
-        content.content = _pinned_page(views[TRANSACTIONS_INDEX].control)
-        views[TRANSACTIONS_INDEX].open_editor()
-
-    def choose_backups(_: ft.Event) -> None:
-        BackupsDialog(ctx).open()
-
-    theme_button = ft.IconButton(
-        icon=ft.Icons.LIGHT_MODE if page.theme_mode == ft.ThemeMode.DARK else ft.Icons.DARK_MODE,
-        tooltip="Appearance",
-        on_click=lambda event: choose_appearance(event),
-    )
-    text_button = ft.IconButton(
-        icon=ft.Icons.FORMAT_SIZE,
-        tooltip="Text size",
-        on_click=lambda event: choose_text_size(event),
-    )
-    backup_button = ft.IconButton(
-        icon=ft.Icons.BACKUP,
-        tooltip="Backups",
-        on_click=choose_backups,
+    settings_button = ft.IconButton(
+        icon=ft.Icons.SETTINGS_OUTLINED,
+        tooltip="Settings",
+        on_click=choose_settings,
     )
 
     rail = ft.NavigationRail(
@@ -365,7 +388,7 @@ def main(page: ft.Page) -> None:
         trailing=ft.Column(
             [
                 ft.Row(
-                    [theme_button, text_button, backup_button],
+                    [settings_button],
                     alignment=ft.MainAxisAlignment.CENTER,
                     spacing=0,
                 ),
@@ -398,36 +421,6 @@ def main(page: ft.Page) -> None:
         repo.set_setting(TEXT_SIZE_SETTING, label)
         page.pop_dialog()
         rebuild_views()
-
-    def choose_text_size(_: ft.Event) -> None:
-        page.show_dialog(
-            ft.AlertDialog(
-                modal=True,
-                title=ft.Text("Text size"),
-                content=ft.Column(
-                    [
-                        ft.Text(
-                            "Choose a larger size if small text is hard to read.",
-                            size=fs(13),
-                        ),
-                        ft.FilledButton(
-                            content="Normal",
-                            on_click=lambda _: apply_text_scale(1.0, "normal"),
-                        ),
-                        ft.FilledButton(
-                            content="Large",
-                            on_click=lambda _: apply_text_scale(1.15, "large"),
-                        ),
-                    ],
-                    spacing=12,
-                    tight=True,
-                ),
-                actions=[
-                    ft.TextButton(content="Cancel", on_click=lambda _: page.pop_dialog())
-                ],
-                actions_alignment=ft.MainAxisAlignment.END,
-            )
-        )
 
     def on_disconnect(_: ft.Event) -> None:
         auto_backup.cancel()

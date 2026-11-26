@@ -1,0 +1,578 @@
+"""In-app Help & Guide: searchable sections for every part of Budget Tracker.
+
+Keep this file current whenever a feature or user-visible workflow changes.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, replace
+
+import flet as ft
+
+from ..components import card, empty_state, page_header
+from ..context import AppContext
+from ..theme import GAP, SEED_COLOR, fs
+
+
+@dataclass(frozen=True)
+class HelpTopic:
+    title: str
+    body: str
+    keywords: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class HelpSection:
+    title: str
+    icon: ft.IconData
+    summary: str
+    topics: tuple[HelpTopic, ...]
+
+
+GUIDE: tuple[HelpSection, ...] = (
+    HelpSection(
+        "Quick start",
+        ft.Icons.PLAY_CIRCLE_OUTLINE,
+        "The five-minute path from an empty app to a working budget.",
+        (
+            HelpTopic(
+                "Add your accounts",
+                "Open Accounts → Add Account. Enter the current balance as the opening balance. "
+                "A credit card or loan asks for the amount currently owed instead. "
+                "Cash accounts can record where the money is kept.",
+                ("start", "account", "opening balance", "setup"),
+            ),
+            HelpTopic(
+                "Record a transaction",
+                "Open Transactions → Add Transaction, or use the + button on the navigation rail. "
+                "Choose Expense, Income, Refund, Transfer or Adjustment. Transfers move money "
+                "between your own accounts and are not spending.",
+                ("transaction", "expense", "income", "transfer"),
+            ),
+            HelpTopic(
+                "Set up repeating bills",
+                "Open Bills → Add Bill. Choose the amount, how often it repeats, the account it is "
+                "paid from, and either an expense category or a card/loan account it pays. "
+                "Mark paid advances it to the next due date.",
+                ("bill", "recurring", "reminder", "due"),
+            ),
+            HelpTopic(
+                "Scan a receipt",
+                "Open Transactions → Scan receipt. Use Scan with phone for a phone on the same "
+                "Wi-Fi, Scan with scanner for a Windows flatbed scanner, or Choose photo or scan "
+                "file. Review the recognised merchant, amount and date before saving.",
+                ("receipt", "scan", "phone", "camera", "ocr"),
+            ),
+            HelpTopic(
+                "Review the Dashboard",
+                "The Dashboard shows net worth, this month's income and spending, the savings "
+                "rate, spending by category, upcoming bills, account balances and recent activity.",
+                ("dashboard", "overview", "net worth"),
+            ),
+        ),
+    ),
+    HelpSection(
+        "Accounts",
+        ft.Icons.ACCOUNT_BALANCE,
+        "Bank accounts, cash, cards, loans, property and investments.",
+        (
+            HelpTopic(
+                "Account types",
+                "Checking, Savings, Credit Card, Loan, Cash, Real Estate and Other. Checking, "
+                "savings and cash are liquid by default. Credit cards and loans are liabilities; "
+                "their balance is the amount owed.",
+                ("account type", "checking", "savings", "cash", "other", "loan", "credit card"),
+            ),
+            HelpTopic(
+                "Where is the cash stored?",
+                "Cash accounts can record a location such as a home safe, wallet or safe deposit "
+                "box. The location appears on the account card. Change the account type away "
+                "from Cash and the location is cleared.",
+                ("cash location", "safe", "wallet", "safe deposit box"),
+            ),
+            HelpTopic(
+                "APR, loan type and promos",
+                "Credit-card and loan accounts record an APR and a loan type: Revolving, "
+                "Installment, Same as cash or Other. Same as cash adds a promo APR and end date. "
+                "A linked debt uses the account's rate for its payoff plan.",
+                ("apr", "interest rate", "revolving", "installment", "same as cash", "promo"),
+            ),
+            HelpTopic(
+                "Real estate and mortgages",
+                "A Real Estate account's balance is the property's market value. The mortgage is "
+                "a separate Loan account liability, and the mortgage debt can be linked to the "
+                "property. The card then shows market value, mortgage owed, equity and original "
+                "principal.",
+                ("property", "house", "home", "mortgage", "equity", "market value"),
+            ),
+            HelpTopic(
+                "Liquid and non-liquid",
+                "The cash-flow forecast counts only liquid accounts. Reports group assets into "
+                "Liquid, Real estate and Other non-liquid. A house or car still counts in net "
+                "worth even though it cannot be spent quickly.",
+                ("liquid", "non-liquid", "forecast", "net worth"),
+            ),
+        ),
+    ),
+    HelpSection(
+        "Transactions",
+        ft.Icons.RECEIPT_LONG,
+        "The five entry types, transfers, adjustments and receipts.",
+        (
+            HelpTopic(
+                "The five transaction types",
+                "Expense: money spent. Income: money received. Refund: money returned for an "
+                "earlier purchase; it reduces that category's spending. Transfer: money moved "
+                "between your own accounts. Adjustment: a signed balance correction excluded "
+                "from income, spending and budgets.",
+                ("expense", "income", "refund", "transfer", "adjustment"),
+            ),
+            HelpTopic(
+                "Transfers",
+                "A transfer needs a source and a destination account. Credit-card and loan "
+                "payments are transfers, so they lower the balance without counting as spending "
+                "a second time.",
+                ("transfer", "card payment", "loan payment"),
+            ),
+            HelpTopic(
+                "Editing and deleting",
+                "Open a transaction to edit it. Deleting removes it from the ledger; a saved "
+                "receipt image stays on disk. Adjustments are used for balance checks and other "
+                "corrections.",
+                ("edit", "delete", "adjustment"),
+            ),
+        ),
+    ),
+    HelpSection(
+        "Receipts",
+        ft.Icons.PHOTO_CAMERA,
+        "Turn a paper receipt into an expense, with the image attached.",
+        (
+            HelpTopic(
+                "Scan with your phone",
+                "Click Scan with phone in the receipt dialog. The PC shows a QR code and a local "
+                "address. On a phone on the same Wi-Fi, scan the code and take or choose a photo. "
+                "The photo uploads directly to the PC; no cloud service is used.",
+                ("phone", "qr", "wifi", "iphone", "android", "camera", "network"),
+            ),
+            HelpTopic(
+                "Scanner or file",
+                "Scan with scanner uses the first flatbed/WIA scanner on Windows. Choose photo or "
+                "scan file accepts a PDF, PNG or JPEG on Windows and macOS. Only page one of a "
+                "PDF is read.",
+                ("scanner", "flatbed", "pdf", "image", "mac"),
+            ),
+            HelpTopic(
+                "Review and match",
+                "The OCR draft fills merchant, amount, date, account and category. Save stays "
+                "disabled until the amount, date, account and category are valid. If an existing "
+                "transaction looks like the same purchase, the dialog can attach the receipt to "
+                "it instead of creating a duplicate.",
+                ("ocr", "review", "match", "duplicate", "attach"),
+            ),
+            HelpTopic(
+                "Where receipts are stored",
+                "Saved receipts are copied to the app's data folder under receipts/. The original "
+                "file is never changed. Deleting a transaction leaves its stored receipt.",
+                ("storage", "file", "image", "delete"),
+            ),
+        ),
+    ),
+    HelpSection(
+        "Bills",
+        ft.Icons.EVENT_NOTE,
+        "Recurring payments, due dates, reminders and temporary amounts.",
+        (
+            HelpTopic(
+                "Add and pay a bill",
+                "Bills → Add Bill. Choose the amount, repeat frequency and pay-from account. A "
+                "regular bill uses an expense category; a card or loan payment uses a target "
+                "account. Mark paid records the payment and advances the due date. Skip advances "
+                "without recording a payment.",
+                ("bill", "mark paid", "skip", "due date", "confirmation"),
+            ),
+            HelpTopic(
+                "Temporary reduced amount",
+                "A bill can have a lower amount until a date and a later amount. Set Reduced "
+                "until and Then amount. The bill, payment prefill and Bills row use the correct "
+                "amount for the due date.",
+                ("temporary", "reduced", "step", "2028", "payment change"),
+            ),
+            HelpTopic(
+                "Reminders and text alerts",
+                "The reminder window controls the startup pop-up and Windows notifications. SMS "
+                "alerts can be configured on the Bills page; they use the saved provider settings "
+                "and are sent by the reminder process.",
+                ("reminder", "notification", "sms", "text", "alert"),
+            ),
+        ),
+    ),
+    HelpSection(
+        "Debts",
+        ft.Icons.CREDIT_SCORE,
+        "What you owe, payment splits, extra principal and payoff planning.",
+        (
+            HelpTopic(
+                "Add or link a debt",
+                "A standalone debt keeps its own balance. A linked debt follows the live amount "
+                "owed on a credit-card or loan account. An account can be linked to one debt.",
+                ("debt", "standalone", "linked", "card", "loan"),
+            ),
+            HelpTopic(
+                "Principal, interest and escrow",
+                "For a linked loan, Log payment and a loan bill's Mark paid split the payment. "
+                "Principal is a transfer that reduces the loan; interest and escrow are expenses. "
+                "Only principal reduces the unpaid balance, and net worth falls by interest plus "
+                "escrow.",
+                ("principal", "interest", "escrow", "split", "mortgage", "p&i"),
+            ),
+            HelpTopic(
+                "Interest and escrow estimates",
+                "Interest starts at current balance × APR ÷ 12. Escrow is derived as the total "
+                "payment minus the scheduled principal-and-interest payment when a maturity date "
+                "or P&I payment is set. Replace either with the statement figure for an exact "
+                "match.",
+                ("estimate", "interest", "escrow", "maturity", "p&i", "amortization"),
+            ),
+            HelpTopic(
+                "Extra principal",
+                "Extra principal is additional money applied to the loan and is neither interest "
+                "nor escrow. The Debts payoff plan prefills each debt with its share of the "
+                "first-month extra; when a target is nearly paid off, the unused extra rolls to "
+                "the next debt. The plan's extra and strategy are remembered.",
+                ("extra", "principal", "payoff", "snowball", "avalanche", "split"),
+            ),
+            HelpTopic(
+                "Temporary higher payment",
+                "A mortgage can have a current minimum and a higher payment starting on a date. "
+                "The payoff plan steps up automatically. The combined schedule shows a payment "
+                "change note for both the debt payment (P&I) and the linked bill's cash payment.",
+                ("temporary", "higher", "step", "2029", "reduced", "payment change"),
+            ),
+        ),
+    ),
+    HelpSection(
+        "Goals",
+        ft.Icons.SAVINGS,
+        "Savings targets, monthly plans and contributions.",
+        (
+            HelpTopic(
+                "Create a goal",
+                "Goals → Add goal. Enter a name, target amount, target date and destination "
+                "savings account. Already saved is optional and changes the monthly plan.",
+                ("goal", "savings", "target"),
+            ),
+            HelpTopic(
+                "Contribute and track",
+                "Contribute moves money from a funding account into the goal's savings account as "
+                "a transfer. Schedule & history shows the plan and every contribution. Only "
+                "contributions recorded from the goal count toward its progress.",
+                ("contribute", "progress", "history", "plan"),
+            ),
+        ),
+    ),
+    HelpSection(
+        "Budgets and categories",
+        ft.Icons.TRACK_CHANGES,
+        "Monthly limits and the categories spending is grouped into.",
+        (
+            HelpTopic(
+                "Budgets",
+                "Budgets → Add budget sets a monthly limit for an expense category. The card "
+                "shows spent, remaining and status. Refunds reduce spending in their category.",
+                ("budget", "limit", "spent", "remaining"),
+            ),
+            HelpTopic(
+                "Categories and rules",
+                "Categories are income or expense. Category rules map text found in descriptions "
+                "to a category and are used to suggest categories during receipt and statement "
+                "review.",
+                ("category", "rule", "suggest", "income", "expense"),
+            ),
+        ),
+    ),
+    HelpSection(
+        "Year and cash flow",
+        ft.Icons.CALENDAR_MONTH,
+        "Year-to-date performance, forecasts and the income plan.",
+        (
+            HelpTopic(
+                "Year view",
+                "Year shows monthly budget versus actual spending, year-to-date totals, the same "
+                "period last year, and a run-rate year-end projection.",
+                ("year", "ytd", "projection", "comparison"),
+            ),
+            HelpTopic(
+                "Cash-flow forecast",
+                "The forecast projects liquid balances for the next 30, 60 or 90 days using bills, "
+                "scheduled income and recent spending. Only liquid accounts count. The income plan "
+                "lists scheduled income and where it lands.",
+                ("cash flow", "forecast", "income plan", "liquid", "30 60 90"),
+            ),
+        ),
+    ),
+    HelpSection(
+        "Reports",
+        ft.Icons.DESCRIPTION,
+        "Printable monthly, year and net-worth statements.",
+        (
+            HelpTopic(
+                "The three reports",
+                "Monthly summary: income, spending, budgets, categories and balances for the "
+                "month. Year in review: year-to-date totals, pacing and comparison. Net worth "
+                "statement: assets, liabilities, debt payoff estimates and goals.",
+                ("report", "pdf", "monthly", "year", "net worth"),
+            ),
+            HelpTopic(
+                "What the reports assume",
+                "Net worth is account-based, matching the Dashboard. Assets are grouped into "
+                "Liquid, Real estate and Other non-liquid. A standalone debt appears in the debt "
+                "table but is not part of account net worth. PDFs are local and unencrypted.",
+                ("assumption", "net worth", "liquidity", "pdf", "unencrypted"),
+            ),
+            HelpTopic(
+                "Excel workbook",
+                "Reports → Excel workbook saves the full data workbook with live SUMIFS formulas "
+                "for Summary, Transactions, Accounts, Budgets and Bills.",
+                ("excel", "workbook", "xlsx", "export"),
+            ),
+        ),
+    ),
+    HelpSection(
+        "Statement import",
+        ft.Icons.UPLOAD_FILE,
+        "Turn a bank statement into ledger rows.",
+        (
+            HelpTopic(
+                "Supported statements",
+                "The importer reads US checking and savings statements and Wise USD account "
+                "statements as PDF, PNG or JPEG. Text is taken from the PDF when available; scans "
+                "use the local OCR engine.",
+                ("statement", "import", "pdf", "png", "jpeg", "wise", "ocr"),
+            ),
+            HelpTopic(
+                "Review and match",
+                "The importer checks the statement's own totals or running balance, then shows a "
+                "review. Rows with an existing matching transaction can be marked already "
+                "recorded. Importing also records a reconciliation at the ending balance.",
+                ("statement", "review", "duplicate", "match", "reconciliation"),
+            ),
+        ),
+    ),
+    HelpSection(
+        "Reconciliation",
+        ft.Icons.FACT_CHECK,
+        "Check an account against the bank and correct the ledger.",
+        (
+            HelpTopic(
+                "Check balance",
+                "Accounts → Check balance. Enter the balance the bank shows and the date. The app "
+                "compares it with the ledger and shows the difference.",
+                ("reconcile", "check balance", "difference", "bank"),
+            ),
+            HelpTopic(
+                "Corrections",
+                "If the balances differ, record a correction. It changes the account balance only "
+                "and is excluded from income, spending and budgets. Previous checks are kept in "
+                "the dialog's history.",
+                ("correction", "adjustment", "history", "difference"),
+            ),
+        ),
+    ),
+    HelpSection(
+        "Currency conversion",
+        ft.Icons.CURRENCY_EXCHANGE,
+        "Convert JMD to USD with a cached rate.",
+        (
+            HelpTopic(
+                "JMD → USD",
+                "Open Transactions → JMD → USD, or use the JMD button while editing a "
+                "transaction. The app fetches a live USD/JMD rate and caches it, so the converter "
+                "still works offline. Enter a JMD amount to see the USD value.",
+                ("jmd", "usd", "currency", "rate", "converter"),
+            ),
+        ),
+    ),
+    HelpSection(
+        "Backups and data",
+        ft.Icons.BACKUP,
+        "Where the database lives, backups, restore and privacy.",
+        (
+            HelpTopic(
+                "Data folder",
+                "The database lives in the per-user app data folder, with receipts/ and backups/ "
+                "beside it. The app makes a pre-migration copy before a schema upgrade.",
+                ("data folder", "database", "sqlite", "location", "migration"),
+            ),
+            HelpTopic(
+                "Backups and restore",
+                "The backup button creates a manual snapshot and lists earlier ones. Restore "
+                "replaces the live database with a chosen backup. Automatic backups run on a "
+                "schedule while the app is open.",
+                ("backup", "restore", "snapshot", "automatic"),
+            ),
+            HelpTopic(
+                "Privacy",
+                "OCR, statement parsing, reports and the phone receipt hand-off run locally. The "
+                "phone upload uses your local network and a one-time token. Exported PDFs and the "
+                "Excel workbook are not encrypted.",
+                ("privacy", "local", "cloud", "security", "phone"),
+            ),
+        ),
+    ),
+    HelpSection(
+        "Troubleshooting",
+        ft.Icons.HELP_OUTLINE,
+        "Common reasons something does not look right.",
+        (
+            HelpTopic(
+                "The phone cannot connect",
+                "Make sure the phone and PC are on the same Wi-Fi. Allow Budget Tracker through "
+                "the Windows or macOS firewall. A VPN can make the QR address unreachable; use "
+                "the Wi-Fi address or disconnect the VPN. iPhone photos are converted to JPEG in "
+                "the browser; if one is rejected, use Camera → Formats → Most Compatible.",
+                ("phone", "wifi", "firewall", "vpn", "iphone", "heic", "connect"),
+            ),
+            HelpTopic(
+                "Net worth does not match",
+                "Net worth sums account balances. A standalone debt is not included; link it to a "
+                "card or loan account. A property needs a Real Estate account for its market "
+                "value. For a mortgage, only principal reduces the loan; escrow is not debt.",
+                ("net worth", "difference", "standalone", "property", "mortgage", "escrow"),
+            ),
+            HelpTopic(
+                "A payment amount changed unexpectedly",
+                "The Debts page schedule shows debt payments (principal + interest), not the cash "
+                "bill. Escrow is separate. A temporary reduced payment shows a payment-change "
+                "note with both the debt and bill steps.",
+                ("payment", "schedule", "changed", "temporary", "escrow", "p&i"),
+            ),
+            HelpTopic(
+                "Text recognition is unavailable",
+                "The local OCR engine may be missing on this platform. You can still enter the "
+                "merchant, amount and date by hand; the receipt image can still be attached.",
+                ("ocr", "recognition", "unavailable", "manual"),
+            ),
+            HelpTopic(
+                "Where is this guide updated?",
+                "This guide is part of the app and is revised whenever a feature or workflow "
+                "changes. Search for a feature name, or browse the sections above.",
+                ("help", "guide", "update", "new feature"),
+            ),
+        ),
+    ),
+)
+
+
+class HelpView:
+    def __init__(self, ctx: AppContext) -> None:
+        self.ctx = ctx
+        self.search = ft.TextField(
+            label="Search the guide",
+            hint_text="Try 'phone', 'escrow', 'budget' or 'backup'",
+            prefix_icon=ft.Icons.SEARCH,
+            on_change=self._search_changed,
+            on_submit=self._search_changed,
+        )
+        self.body = ft.Column(spacing=GAP)
+        self.control = ft.Column(
+            [
+                page_header(
+                    "Help & Guide",
+                    "How Budget Tracker works, and where each feature lives",
+                ),
+                ft.Text(
+                    "Search for a feature, or expand a section. The guide is updated with each release.",
+                    size=fs(13),
+                    color=ft.Colors.ON_SURFACE_VARIANT,
+                ),
+                self.search,
+                self.body,
+            ],
+            spacing=GAP,
+            scroll=ft.ScrollMode.AUTO,
+            expand=True,
+        )
+        self.refresh()
+
+    def _search_changed(self, _: ft.Event | None = None) -> None:
+        self.refresh()
+        self.ctx.page.update()
+
+    def _matching_sections(self) -> list[HelpSection]:
+        query = (self.search.value or "").strip().casefold()
+        if not query:
+            return list(GUIDE)
+        matches: list[HelpSection] = []
+        for section in GUIDE:
+            if query in section.title.casefold() or query in section.summary.casefold():
+                matches.append(section)
+                continue
+            topics = tuple(
+                topic
+                for topic in section.topics
+                if query in topic.title.casefold()
+                or query in topic.body.casefold()
+                or any(query in keyword.casefold() for keyword in topic.keywords)
+            )
+            if topics:
+                matches.append(replace(section, topics=topics))
+        return matches
+
+    def refresh(self) -> None:
+        query = (self.search.value or "").strip()
+        sections = self._matching_sections()
+        if not sections:
+            self.body.controls = [
+                card(
+                    empty_state(
+                        ft.Icons.SEARCH_OFF,
+                        "No guide topics match",
+                        "Try a different word, or clear the search to browse every section.",
+                    )
+                )
+            ]
+            return
+        self.body.controls = [
+            card(
+                ft.ExpansionTile(
+                    title=ft.Row(
+                        [
+                            ft.Icon(section.icon, size=fs(20), color=SEED_COLOR),
+                            ft.Text(section.title, size=fs(16), weight=ft.FontWeight.W_600),
+                        ],
+                        spacing=10,
+                    ),
+                    subtitle=ft.Text(section.summary, size=fs(13), color=ft.Colors.ON_SURFACE_VARIANT),
+                    controls=[
+                        ft.Column(
+                            [
+                                ft.Column(
+                                    [
+                                        ft.Text(
+                                            topic.title,
+                                            size=fs(14),
+                                            weight=ft.FontWeight.W_600,
+                                            color=ft.Colors.ON_SURFACE,
+                                        ),
+                                        ft.Text(
+                                            topic.body,
+                                            size=fs(13),
+                                            color=ft.Colors.ON_SURFACE_VARIANT,
+                                            selectable=True,
+                                        ),
+                                    ],
+                                    spacing=4,
+                                )
+                                for topic in section.topics
+                            ],
+                            spacing=14,
+                        )
+                    ],
+                    expanded=bool(query) or section is sections[0],
+                    maintain_state=False,
+                ),
+                padding=4,
+            )
+            for section in sections
+        ]

@@ -2006,6 +2006,54 @@ class TestEditors(unittest.TestCase):
         view.custom_calculate.on_click(None)
         self.assertEqual(view.extra_cents, 7_500)
 
+    def test_debts_chart_shows_stacked_bands_and_a_debt_panel(self):
+        from budget_tracker.models import DebtKind
+        from budget_tracker.ui.views.debts import DebtsView
+
+        self.ctx.service.create_debt("Visa", DebtKind.CREDIT_CARD, 180_000, 2499, 4_800)
+        self.ctx.service.create_debt("Auto", DebtKind.AUTO, 280_000, 690, 5_600)
+        view = DebtsView(self.ctx)
+
+        texts = self._texts(view.chart_panel)
+        self.assertIn("Debt reduction", texts)
+        self.assertIn("Debts in this plan", texts)
+        self.assertIn("Visa", texts)
+        self.assertIn("Auto", texts)
+        self.assertTrue(any(text.startswith("Debt-free ") for text in texts))
+        self.assertTrue(any(text.startswith("Est. interest ") for text in texts))
+        self.assertTrue(any(text.startswith("5-year view · ") for text in texts))
+        self.assertIn("escrow excluded", " ".join(texts))
+
+    def test_debts_chart_horizon_changes_the_view(self):
+        from budget_tracker.models import DebtKind
+        from budget_tracker.ui.views.debts import DebtsView
+
+        self.ctx.service.create_debt("Loan", DebtKind.PERSONAL, 100_000, 0, 5_000)
+        view = DebtsView(self.ctx)
+        self.assertEqual(view.chart_horizon, "60")
+
+        view._set_horizon("12")
+
+        self.assertEqual(view.chart_horizon, "12")
+        self.assertIn(
+            "1-year view", " ".join(self._texts(view.chart_panel))
+        )
+
+    def test_debts_chart_groups_debts_after_the_eighth_band(self):
+        from budget_tracker.models import DebtKind
+        from budget_tracker.ui.views.debts import DebtsView
+
+        for index in range(9):
+            self.ctx.service.create_debt(
+                f"Debt {index}", DebtKind.PERSONAL, 10_000, 0, 5_000
+            )
+        view = DebtsView(self.ctx)
+
+        texts = self._texts(view.chart_panel)
+        self.assertIn("Other (2 debts)", texts)
+        self.assertNotIn("Debt 8", texts)
+        self.assertIn("Debt 6", texts)
+
     def test_debt_editor_lists_loan_accounts_and_uses_loan_kind(self):
         from budget_tracker.models import Account, AccountKind, DebtKind
         from budget_tracker.ui.views.debts import DebtEditor

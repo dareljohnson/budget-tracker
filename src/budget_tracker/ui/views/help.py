@@ -216,7 +216,7 @@ GUIDE: tuple[HelpSection, ...] = (
     HelpSection(
         "Debts",
         ft.Icons.CREDIT_SCORE,
-        "What you owe, payment splits, extra principal and payoff planning.",
+        "What you owe, payment splits, the reduction chart and payoff planning.",
         (
             HelpTopic(
                 "Add or link a debt",
@@ -247,6 +247,16 @@ GUIDE: tuple[HelpSection, ...] = (
                 "first-month extra; when a target is nearly paid off, the unused extra rolls to "
                 "the next debt. The plan's extra and strategy are remembered.",
                 ("extra", "principal", "payoff", "snowball", "avalanche", "split"),
+            ),
+            HelpTopic(
+                "Debt reduction chart",
+                "The chart above the payoff plan stacks every debt's balance from today to the end "
+                "of the current plan. Use 1y, 3y, 5y or All to change the time horizon. The side "
+                "panel lists each debt's balance, APR and payoff month; hover a month for that "
+                "month's balances. The chart uses the selected strategy and extra payment, and "
+                "groups extras as Other when there are more than eight debts. Escrow is not "
+                "included; the yearly and monthly tables below are the full data view.",
+                ("chart", "graph", "stacked", "horizon", "1y", "3y", "5y", "debt reduction"),
             ),
             HelpTopic(
                 "Temporary higher payment",

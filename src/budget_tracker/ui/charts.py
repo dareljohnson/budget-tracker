@@ -1,10 +1,12 @@
-"""Local Pillow rendering for the cash-flow and cumulative year charts.
+"""Local Pillow rendering for the cash-flow, cumulative year and debt charts.
 
 Flet 1.1.x has no chart control, so charts are drawn into an RGBA PNG and handed to an ``ft.Image``.
 The renderers are deliberately Flet-free: callers pass theme colors and a text scale. The cash-flow
 line carries only the line, the zero line, the grid, and the markers; axis labels remain the view's
 responsibility. The cumulative year chart is self-contained: it draws its own compact y-axis labels
-and month labels. Everything is drawn at 2x so the bitmap stays crisp on high-DPI screens.
+and month labels. The debt chart stacks one colored band per debt and adds direct labels, a total
+line, year labels and a visible surface gap between bands. Everything is drawn at 2x so the bitmap
+stays crisp on high-DPI screens.
 """
 
 from __future__ import annotations
@@ -22,8 +24,35 @@ DEFAULT_WIDTH = 900
 DEFAULT_HEIGHT = 260
 CUMULATIVE_WIDTH = 1200
 CUMULATIVE_HEIGHT = 320
+DEBT_WIDTH = 900
+DEBT_HEIGHT = 280
 
 NEGATIVE_COLOR = "#C62828"
+
+# The categorical order is fixed. The dark steps are the same hues selected for a dark card
+# surface, not an automatic lightening of the light values.
+DEBT_SERIES_COLORS_LIGHT = (
+    "#2a78d6",
+    "#eb6834",
+    "#1baf7a",
+    "#eda100",
+    "#e87ba4",
+    "#008300",
+    "#6250d6",
+    "#e34948",
+)
+DEBT_SERIES_COLORS_DARK = (
+    "#3987e5",
+    "#d95926",
+    "#199e70",
+    "#c98500",
+    "#d55181",
+    "#0ca30c",
+    "#9085e9",
+    "#e66767",
+)
+DEBT_OTHER_COLOR_LIGHT = "#757780"
+DEBT_OTHER_COLOR_DARK = "#938F99"
 _FALLBACK_RGB = (63, 81, 181)
 _GRID_LINES = 3
 _CUMULATIVE_STEPS = 4
@@ -33,6 +62,7 @@ _MARKER_RADIUS = 3.5
 _END_MARKER_RADIUS = 2.5
 _PAD = 8.0
 _LABEL_FONT_SIZE = 11
+_DEBT_LABEL_FONT_SIZE = 11
 _BAND_ALPHA = 26
 _FILL_ALPHA = 30
 _GRID_ALPHA = 80
@@ -52,6 +82,7 @@ class ChartColors:
     zero: str
     lowest: str
     negative: str = NEGATIVE_COLOR
+    surface: str = "#F7F2FA"
 
 
 DEFAULT_COLORS = ChartColors(
@@ -106,6 +137,15 @@ class CumulativeMonth:
     is_current: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class DebtSeries:
+    """One stacked debt band; balances start at today and continue at each month end."""
+
+    label: str
+    balances_cents: Sequence[int]
+    color: str
+
+
 def cumulative_chart_png(
     months: Sequence[CumulativeMonth] | None,
     *,
@@ -130,6 +170,292 @@ def cumulative_chart_png(
     if rows:
         _draw_cumulative_chart(image, rows, colors=colors, text_scale=text_scale)
     return _png_bytes(image)
+
+
+def debt_stack_chart_png(
+    series: Sequence[DebtSeries] | None,
+    month_keys: Sequence[str] | None,
+    *,
+    width: int = DEBT_WIDTH,
+    height: int = DEBT_HEIGHT,
+    colors: ChartColors | None = None,
+    text_scale: float = 1.0,
+) -> bytes:
+    """Render debt balances as a stacked area chart with a debt name in each band.
+
+    ``balances_cents`` includes the current balance at index 0, then the ending balance for
+    each simulation month. ``month_keys`` are ``YYYY-MM`` values for those points. The chart
+    keeps its own compact axis labels and draws a 2px surface-colored gap between bands.
+    """
+    colors = colors or DEFAULT_COLORS
+    text_scale = _positive_float(text_scale, 1.0)
+    pixel_width, pixel_height = _pixel_size(width, height, DEBT_WIDTH, DEBT_HEIGHT)
+    image = Image.new("RGBA", (pixel_width, pixel_height), (0, 0, 0, 0))
+
+    rows, keys = _debt_rows(series, month_keys)
+    if rows:
+        _draw_debt_stack(image, rows, keys, colors=colors, text_scale=text_scale)
+    return _png_bytes(image)
+
+
+def _debt_rows(
+    series: Sequence[Any] | None, month_keys: Sequence[str] | None
+) -> tuple[list[tuple[str, tuple[int, ...], str]], list[str]]:
+    try:
+        keys = [str(key) for key in (month_keys or ())]
+        rows: list[tuple[str, tuple[int, ...], str]] = []
+        for item in series or ():
+            balances = tuple(max(0, int(value)) for value in item.balances_cents)
+            rows.append((str(item.label), balances, str(item.color)))
+    except (AttributeError, TypeError, ValueError):
+        return [], []
+    if not rows or not keys:
+        return [], []
+    count = min([len(keys), *(len(balances) for _, balances, _ in rows)])
+    if count <= 0:
+        return [], []
+    return (
+        [(label, balances[:count], color) for label, balances, color in rows if balances],
+        keys[:count],
+    )
+
+
+def _draw_debt_stack(
+    image: Image.Image,
+    rows: list[tuple[str, tuple[int, ...], str]],
+    keys: list[str],
+    *,
+    colors: ChartColors,
+    text_scale: float,
+) -> None:
+    draw = ImageDraw.Draw(image)
+    width, height = image.size
+    pad = max(2, round(_PAD * text_scale * SCALE))
+    gap = max(2, round(4 * text_scale * SCALE))
+    font = ImageFont.load_default(size=max(1, int(_DEBT_LABEL_FONT_SIZE * text_scale * SCALE)))
+
+    totals = [sum(balances[index] for _, balances, _ in rows) for index in range(len(keys))]
+    axis_top, ticks = _debt_axis(max(totals, default=0))
+    tick_labels = [_money_label(tick) for tick in ticks]
+    tick_sizes = [_text_size(draw, label, font) for label in tick_labels]
+    label_height = max(size[1] for size in tick_sizes)
+
+    left = pad + max(size[0] for size in tick_sizes) + gap
+    right = max(left + 1, width - pad)
+    top = pad
+    bottom = max(top + 1, height - pad - label_height - gap)
+
+    def x_for(index: int) -> float:
+        if len(keys) == 1:
+            return left + (right - left) / 2
+        return left + (right - left) * index / (len(keys) - 1)
+
+    def y_for(cents: float) -> float:
+        clamped = min(max(float(cents), 0.0), axis_top)
+        return bottom - clamped / axis_top * (bottom - top)
+
+    for index, (tick, label) in enumerate(zip(ticks, tick_labels, strict=True)):
+        y = y_for(tick)
+        draw.line(
+            (left, y, right, y),
+            fill=_rgba(colors.zero if index == 0 else colors.grid, 170 if index == 0 else 90),
+            width=SCALE,
+        )
+        draw.text(
+            (left - gap, y),
+            label,
+            font=font,
+            fill=_rgba(colors.text, _LABEL_ALPHA),
+            anchor="rm",
+        )
+
+    cumulative = [0] * len(keys)
+    boundaries: list[list[tuple[float, float]]] = []
+    direct_labels: list[tuple[str, float, float]] = []
+    for label, balances, color in rows:
+        tops = [cumulative[index] + balances[index] for index in range(len(keys))]
+        top_points = [(x_for(index), y_for(value)) for index, value in enumerate(tops)]
+        bottom_points = [
+            (x_for(index), y_for(value)) for index, value in enumerate(cumulative)
+        ]
+        draw.polygon(
+            [*top_points, *reversed(bottom_points)],
+            fill=_rgba(color),
+        )
+        boundaries.append(top_points)
+        direct_labels.append((label, cumulative[0], tops[0]))
+        cumulative = tops
+
+    # The gap belongs to the surface, so the bands stay separable even when their hues meet.
+    for points in boundaries[:-1]:
+        draw.line(
+            points,
+            fill=_rgba(colors.surface),
+            width=max(1, round(2 * SCALE)),
+            joint="curve",
+        )
+
+    total_points = [
+        (x_for(index), y_for(value)) for index, value in enumerate(cumulative)
+    ]
+    draw.line(
+        total_points,
+        fill=_rgba(colors.zero, 210),
+        width=max(1, round(1.6 * SCALE)),
+        joint="curve",
+    )
+    if cumulative and cumulative[-1] <= 1:
+        _disc(
+            draw,
+            total_points[-1][0],
+            total_points[-1][1],
+            max(2.0, 4.0 * SCALE),
+            _rgba(colors.primary),
+        )
+
+    _draw_debt_direct_labels(
+        draw,
+        direct_labels,
+        left=left,
+        plot_width=right - left,
+        y_for=y_for,
+        font=font,
+        text_scale=text_scale,
+        colors=colors,
+    )
+    _draw_debt_x_labels(
+        draw,
+        keys,
+        x_for=x_for,
+        bottom=bottom,
+        gap=gap,
+        pad=pad,
+        width=width,
+        font=font,
+        colors=colors,
+    )
+
+
+def _debt_axis(max_cents: int) -> tuple[int, list[int]]:
+    """A zero-based axis with four intervals and a readable money step."""
+    if max_cents <= 0:
+        return 100, [0, 25, 50, 75, 100]
+    raw_step = max_cents / 4
+    magnitude = 10.0 ** math.floor(math.log10(raw_step))
+    step = 10.0 * magnitude
+    for candidate in (1.0, 2.0, 2.5, 5.0, 10.0):
+        proposed = candidate * magnitude
+        if proposed * 4 >= max_cents:
+            step = proposed
+            break
+    top = int(round(step * 4))
+    return top, [int(round(step * index)) for index in range(5)]
+
+
+def _draw_debt_direct_labels(
+    draw: ImageDraw.ImageDraw,
+    labels: list[tuple[str, float, float]],
+    *,
+    left: float,
+    plot_width: float,
+    y_for: Callable[[float], float],
+    font: ImageFont.FreeTypeFont,
+    text_scale: float,
+    colors: ChartColors,
+) -> None:
+    label_height = _text_size(draw, "Ag", font)[1]
+    max_width = max(1.0, plot_width * 0.34)
+    for label, first_bottom, first_top in labels:
+        if first_top - first_bottom < label_height + 5 * SCALE:
+            continue
+        text = _truncate_text(draw, label, font, max_width)
+        draw.text(
+            (left + round(6 * text_scale * SCALE), y_for((first_bottom + first_top) / 2)),
+            text,
+            font=font,
+            fill=_rgba(colors.text, _LABEL_ALPHA),
+            anchor="lm",
+            stroke_width=max(1, SCALE),
+            stroke_fill=_rgba(colors.surface),
+        )
+
+
+def _draw_debt_x_labels(
+    draw: ImageDraw.ImageDraw,
+    keys: list[str],
+    *,
+    x_for: Callable[[int], float],
+    bottom: float,
+    gap: int,
+    pad: int,
+    width: int,
+    font: ImageFont.FreeTypeFont,
+    colors: ChartColors,
+) -> None:
+    candidates: list[tuple[int, str]] = []
+    for index, key in enumerate(keys):
+        year, month = _month_parts(key)
+        if month == 1:
+            candidates.append((index, str(year)))
+    last_index = len(keys) - 1
+    last_year, last_month = _month_parts(keys[last_index])
+    if last_month != 1 and 1 <= last_month <= 12:
+        candidates.append((last_index, f"{_SHORT_MONTHS[last_month - 1]} ’{str(last_year)[-2:]}"))
+
+    placed: list[tuple[float, float]] = []
+    for index, text in sorted(candidates):
+        text_width = _text_size(draw, text, font)[0]
+        center = min(max(x_for(index), pad + text_width / 2), width - pad - text_width / 2)
+        if any(
+            abs(center - previous_center) < (text_width + previous_width) / 2 + gap
+            for previous_center, previous_width in placed
+        ):
+            continue
+        draw.text(
+            (center, bottom + gap),
+            text,
+            font=font,
+            fill=_rgba(colors.text, _LABEL_ALPHA),
+            anchor="mt",
+        )
+        placed.append((center, text_width))
+    if not placed and keys:
+        text = keys[-1]
+        text_width = _text_size(draw, text, font)[0]
+        draw.text(
+            (min(max(x_for(last_index), pad + text_width / 2), width - pad - text_width / 2), bottom + gap),
+            text,
+            font=font,
+            fill=_rgba(colors.text, _LABEL_ALPHA),
+            anchor="mt",
+        )
+
+
+_SHORT_MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
+def _month_parts(key: str) -> tuple[int, int]:
+    try:
+        year, month = key.split("-")[:2]
+        return int(year), int(month)
+    except (TypeError, ValueError):
+        return 0, 0
+
+
+def _truncate_text(
+    draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont, max_width: float
+) -> str:
+    if _text_size(draw, text, font)[0] <= max_width:
+        return text
+    ellipsis = "…"
+    low, high = 0, len(text)
+    while low < high:
+        middle = (low + high + 1) // 2
+        if _text_size(draw, text[:middle] + ellipsis, font)[0] <= max_width:
+            low = middle
+        else:
+            high = middle - 1
+    return text[:low] + ellipsis if low else ellipsis
 
 
 def _pixel_size(

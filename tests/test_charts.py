@@ -10,7 +10,9 @@ from budget_tracker.ui.charts import (
     NEGATIVE_COLOR,
     ChartColors,
     CumulativeMonth,
+    DebtSeries,
     cumulative_chart_png,
+    debt_stack_chart_png,
     line_chart_png,
 )
 
@@ -201,3 +203,80 @@ def test_cumulative_invalid_text_scale_falls_back_to_the_default(invalid):
     fallback = cumulative_chart_png(months, width=300, height=120, colors=COLORS, text_scale=invalid)
 
     assert fallback == normal
+
+
+def _debt_series() -> list[DebtSeries]:
+    return [
+        DebtSeries("Visa", (180_000, 150_000, 120_000, 0), "#2a78d6"),
+        DebtSeries("Auto", (280_000, 260_000, 230_000, 0), "#eb6834"),
+        DebtSeries("Personal", (220_000, 210_000, 190_000, 0), "#1baf7a"),
+    ]
+
+
+def test_debt_stack_png_has_magic_and_renders_at_twice_the_requested_size():
+    data = debt_stack_chart_png(
+        _debt_series(),
+        ["2026-11", "2026-12", "2027-01", "2027-02"],
+        width=600,
+        height=220,
+        colors=COLORS,
+    )
+
+    assert data.startswith(PNG_MAGIC)
+    assert _image(data).size == (1200, 440)
+
+
+def test_debt_stack_uses_each_series_color():
+    image = _image(debt_stack_chart_png(
+        _debt_series(),
+        ["2026-11", "2026-12", "2027-01", "2027-02"],
+        width=600,
+        height=220,
+        colors=COLORS,
+    ))
+
+    colors = _colors(image)
+    assert _rgb("#2a78d6") in colors
+    assert _rgb("#eb6834") in colors
+    assert _rgb("#1baf7a") in colors
+
+
+@pytest.mark.parametrize(
+    "series, keys",
+    [
+        ([], ["2026-11"]),
+        (None, ["2026-11"]),
+        ([DebtSeries("Visa", (100, 50), "#2a78d6")], []),
+        ([DebtSeries("Visa", (100, 50), "#2a78d6")], None),
+        ([DebtSeries("Visa", (), "#2a78d6")], ["2026-11"]),
+    ],
+)
+def test_debt_stack_empty_or_invalid_data_returns_a_blank_chart(series, keys):
+    data = debt_stack_chart_png(series, keys, width=120, height=80, colors=COLORS)
+
+    image = _image(data)
+    assert data.startswith(PNG_MAGIC)
+    assert image.size == (240, 160)
+    assert image.getextrema()[3] == (0, 0)
+
+
+def test_debt_stack_text_scale_changes_the_output():
+    normal = debt_stack_chart_png(
+        _debt_series(),
+        ["2026-11", "2026-12", "2027-01", "2027-02"],
+        width=300,
+        height=120,
+        colors=COLORS,
+        text_scale=1.0,
+    )
+    large = debt_stack_chart_png(
+        _debt_series(),
+        ["2026-11", "2026-12", "2027-01", "2027-02"],
+        width=300,
+        height=120,
+        colors=COLORS,
+        text_scale=1.5,
+    )
+
+    assert normal != large
+    assert _image(normal).size == _image(large).size

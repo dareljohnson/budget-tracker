@@ -70,6 +70,12 @@ class TestHelpGuide(unittest.TestCase):
         texts = _texts(self.view.body.controls)
         self.assertIn("Cloud sync to iCloud Drive, Google Drive or OneDrive", texts)
 
+    def test_debt_chart_topic_is_searchable(self):
+        self.view.search.value = "horizon"
+        self.view.refresh()
+        texts = _texts(self.view.body.controls)
+        self.assertIn("Debt reduction chart", texts)
+
     def test_empty_search_restores_every_section(self):
         self.view.search.value = "zzzz-no-match"
         self.view.refresh()

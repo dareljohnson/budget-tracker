@@ -10,7 +10,7 @@ user needs nothing else installed.
 |---|---|---|---|---|
 | **Launcher** (run from source) | Start menu + desktop shortcut | `~/Applications/Budget Tracker.app` | App-menu `.desktop` entry | Yes (the project's `.venv`) |
 | **Native build** (`flet build`) | `BudgetTracker.exe` folder → Inno Setup `setup.exe` + portable `.zip` | `Budget Tracker.app` → `.dmg` | Bundle → `.tar.gz` (+ `.AppImage`) | No, Python is bundled |
-| **CI build** (GitHub Actions) | All three, built on the right OS automatically | | | No |
+| **CI build** (GitHub Actions) | All three, built automatically for pull requests into `main` | | | No |
 
 **Each platform must be built on that platform** (or on a CI runner for it): Windows on Windows, macOS on a Mac,
 Linux on Linux or WSL. This is a Flutter restriction; `flet build` uses Flutter under the hood.
@@ -70,6 +70,10 @@ the venv launcher fail silently.
 ---
 
 ## 2. Native installers (`flet build`)
+
+Release installers are built by the pull-request workflow in [section 3](#3-build-installers-on-github-pull-requests-only).
+The local commands in this section are only for debugging the packaging setup on a platform; don't use them
+to produce release installers.
 
 ### How it works
 
@@ -222,23 +226,23 @@ version lives. They must match, and `tests/test_app_shell.py` fails if they drif
 release — minor for feature releases, patch for fixes. The build scripts and installer read the packaged
 executable and `pyproject.toml`, so no other file carries the number. The app's nav rail shows the value.
 
-## 3. Build all three with GitHub Actions
+## 3. Build installers on GitHub (pull requests only)
 
-`.github/workflows/build-installers.yml`:
-1. Runs the tests.
-2. Builds on `windows-latest`, `macos-latest` and `ubuntu-24.04` in parallel.
-3. Uploads the installers as workflow artifacts.
+Installers are built by `.github/workflows/build-installers.yml`, and only for pull requests into `main`.
+Don't build release installers locally.
 
-To use it:
-1. Push the project to a GitHub repository.
-2. **Actions → Build installers → Run workflow** builds the installers and attaches them as artifacts.
-3. Or tag a release to also publish a **GitHub Release** with all installers attached:
-   ```bash
-   git tag v1.8.4 && git push origin v1.8.4
-   ```
+1. Push a branch and open a pull request into `main`.
+2. The **Build installers** run starts automatically. It runs the tests, then builds on `windows-latest`,
+   `macos-latest` and `ubuntu-24.04` in parallel.
+3. Open the run from the pull request's **Checks** tab, then download `installers-Windows`,
+   `installers-macOS` and/or `installers-Linux` from **Artifacts**.
 
-Signing secrets aren't wired in by default. Add them as repository secrets and export `MACOS_SIGN_IDENTITY` /
-`NOTARY_PROFILE` (macOS) or a `signtool` step (Windows) when you have certificates.
+There is no manual **Run workflow** button and no tag-triggered release. Each new pull request run replaces
+the previous run's artifacts for that PR.
+
+The workflow does not sign or notarize the installers. To add that, put the certificate material in
+repository secrets and add signing steps (`signtool` on Windows, `MACOS_SIGN_IDENTITY` / `NOTARY_PROFILE`
+on macOS) to the workflow.
 
 ---
 

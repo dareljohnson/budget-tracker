@@ -50,7 +50,7 @@ Copying an existing checkout to another PC? Don't copy its `.venv` — recreate 
 See **[PACKAGING.md](PACKAGING.md)** for:
 - launchers that run the app from this source folder on Windows, macOS and Linux;
 - standalone installers that bundle Python, so users don't need it installed: a Windows `setup.exe` or `.zip`, a macOS `.dmg` for Apple Silicon, and a Linux `.tar.gz` or AppImage;
-- a GitHub Actions workflow that builds all three;
+- a GitHub Actions workflow that builds all three on pull requests into `main`;
 - moving the project and its data to another PC.
 
 The statement importer's libraries (`pdfplumber`, `pypdfium2`, `Pillow`, and RapidOCR on ONNX Runtime) are normal runtime dependencies, so the standalone installers bundle them automatically — no extra packaging step is needed. They add roughly 200 MB to the installed app.

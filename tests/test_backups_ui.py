@@ -470,21 +470,22 @@ class TestMainWiring(unittest.TestCase):
 
         self.assertIn(message, page.errors)
 
-    def test_rail_trailing_row_includes_the_backup_button(self):
+    def test_rail_trailing_row_has_one_settings_button(self):
         page = _PageStub()
 
         self._run_main(page)
 
         [row] = page.added[0]
         rail = next(c for c in row.controls if isinstance(c, ft.NavigationRail))
-        row = rail.trailing.controls[0]
-        self.assertTrue(any(c.tooltip == "Backups" for c in row.controls))
-        backup = next(c for c in row.controls if c.tooltip == "Backups")
-        self.assertIsInstance(backup, ft.IconButton)
-        self.assertEqual(backup.icon, ft.Icons.BACKUP)
+        trailing_row = rail.trailing.controls[0]
+        self.assertEqual(len(trailing_row.controls), 1)
+        settings = trailing_row.controls[0]
+        self.assertIsInstance(settings, ft.IconButton)
+        self.assertEqual(settings.tooltip, "Settings")
+        self.assertEqual(settings.icon, ft.Icons.SETTINGS_OUTLINED)
         self.assertEqual(rail.min_width, 120)
 
-    def test_rail_backup_button_opens_exactly_one_dialog(self):
+    def test_settings_dialog_exposes_backups(self):
         from budget_tracker import main as shell
 
         page = _PageStub()
@@ -501,9 +502,11 @@ class TestMainWiring(unittest.TestCase):
             self._run_main(page)
             [row] = page.added[0]
             rail = next(c for c in row.controls if isinstance(c, ft.NavigationRail))
-            backup = next(
-                c for c in rail.trailing.controls[0].controls if c.tooltip == "Backups"
-            )
+            settings = rail.trailing.controls[0].controls[0]
+            settings.on_click(None)
+            [dialog] = page.open_dialogs
+            backup = _find_button(dialog, "Backups")
+            self.assertIsNotNone(backup)
             backup.on_click(None)
 
         self.assertEqual(len(opened), 1)

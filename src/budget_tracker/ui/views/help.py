@@ -64,6 +64,12 @@ GUIDE: tuple[HelpSection, ...] = (
                 ("receipt", "scan", "phone", "camera", "ocr"),
             ),
             HelpTopic(
+                "Settings and appearance",
+                "The gear at the bottom of the navigation rail opens Settings: light or dark "
+                "mode, the color theme, text size, Backups and this Help guide.",
+                ("settings", "appearance", "dark", "light", "text size", "theme", "backups", "help"),
+            ),
+            HelpTopic(
                 "Review the Dashboard",
                 "The Dashboard shows net worth, this month's income and spending, the savings "
                 "rate, spending by category, upcoming bills, account balances and recent activity.",
@@ -411,14 +417,15 @@ GUIDE: tuple[HelpSection, ...] = (
             ),
             HelpTopic(
                 "Backups and restore",
-                "The backup button creates a manual snapshot and lists earlier ones. Restore "
+                "Open Settings (the gear at the bottom of the navigation rail) → Backups to "
+                "create a manual snapshot and list earlier ones. Restore "
                 "replaces the live database with a chosen backup. Automatic backups run on a "
                 "schedule while the app is open. Add a cloud sync folder for off-PC copies.",
                 ("backup", "restore", "snapshot", "automatic"),
             ),
             HelpTopic(
                 "Cloud sync to iCloud Drive, Google Drive or OneDrive",
-                "In Backups → Cloud sync, choose a folder inside iCloud Drive, Google Drive or "
+                "In Settings → Backups → Cloud sync, choose a folder inside iCloud Drive, Google Drive or "
                 "OneDrive (the desktop sync client). Each new automatic or manual backup is copied there, "
                 "and Sync now copies existing snapshots. The app does not connect to the cloud "
                 "account directly; your normal sync client uploads the files. Copied backups "

@@ -64,6 +64,12 @@ class TestHelpGuide(unittest.TestCase):
         self.assertIn("The phone cannot connect", texts)
         self.assertNotIn("Quick start", texts)
 
+    def test_cloud_sync_topic_is_searchable(self):
+        self.view.search.value = "icloud"
+        self.view.refresh()
+        texts = _texts(self.view.body.controls)
+        self.assertIn("Cloud sync to iCloud Drive, Google Drive or OneDrive", texts)
+
     def test_empty_search_restores_every_section(self):
         self.view.search.value = "zzzz-no-match"
         self.view.refresh()

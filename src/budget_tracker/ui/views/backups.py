@@ -16,14 +16,22 @@ from pathlib import Path
 
 import flet as ft
 
+from ...config import actual_data_dir
 from ...backups import (
+    BACKUP_SYNC_SETTING,
+    SYNC_FOLDER_NAME,
     BackupError,
     BackupInfo,
     backups_dir,
     create_backup,
     list_backups,
     read_status,
+    read_sync_status,
     stage_restore,
+    suggest_sync_dirs,
+    sync_all_backups,
+    sync_backup,
+    sync_dir_from_setting,
 )
 from ..components import empty_state
 from ..context import AppContext
@@ -32,8 +40,8 @@ from ..theme import EXPENSE_COLOR, GAP, INCOME_COLOR, WARNING_COLOR, fs
 RESTART_INSTRUCTION = "Restore will apply when Budget Tracker restarts."
 RETENTION_COPY = (
     "Keeps 14 automatic backups. Manual backups and the copy taken before a "
-    "restore are never pruned automatically. Restore asks for confirmation and applies "
-    "after a restart."
+    "restore are never pruned automatically; synced copies are also left in place. "
+    "Restore asks for confirmation and applies after a restart."
 )
 KIND_LABELS = {"auto": "Automatic", "manual": "Manual", "pre-restore": "Pre-restore"}
 
@@ -115,19 +123,84 @@ class BackupsDialog:
             "Choose Back up now to protect your database and receipts.",
             action=self.empty_backup_button,
         )
+        display_folder = actual_data_dir() / "backups"
         self.location_text = ft.Text(
-            f"Backups are stored in {backups_dir()}",
+            f"Backups are stored in {display_folder}",
             size=fs(12),
             color=ft.Colors.ON_SURFACE_VARIANT,
+        )
+        self.redirect_text = ft.Text(
+            "Windows redirects the Microsoft Store Python's data folder into the package "
+            "cache; this is the real location.",
+            size=fs(11),
+            color=ft.Colors.ON_SURFACE_VARIANT,
+            visible=os.path.normcase(str(display_folder)) != os.path.normcase(str(backups_dir())),
         )
         self.retention_text = ft.Text(
             RETENTION_COPY, size=fs(12), color=ft.Colors.ON_SURFACE_VARIANT
         )
         self.encryption_text = ft.Text(
-            "Backups aren't encrypted. Protect this PC with disk encryption such as "
-            "BitLocker (Windows) or FileVault (macOS).",
+            "Backups and synced copies aren't encrypted. Protect this PC with disk "
+            "encryption such as BitLocker (Windows) or FileVault (macOS); a cloud provider "
+            "sees the unencrypted ZIP files in the sync folder.",
             size=fs(12),
             color=ft.Colors.ON_SURFACE_VARIANT,
+        )
+        self.sync_folder_text = ft.Text(
+            "", size=fs(12), color=ft.Colors.ON_SURFACE_VARIANT, selectable=True
+        )
+        self.sync_status_text = ft.Text(
+            "", size=fs(12), color=ft.Colors.ON_SURFACE_VARIANT
+        )
+        self.sync_choose_button = ft.OutlinedButton(
+            content="Choose sync folder…",
+            icon=ft.Icons.CLOUD_UPLOAD,
+            on_click=self._choose_sync_folder,
+        )
+        self.sync_now_button = ft.OutlinedButton(
+            content="Sync now",
+            icon=ft.Icons.SYNC,
+            visible=False,
+            on_click=self._sync_now,
+        )
+        self.sync_stop_button = ft.TextButton(
+            content="Stop syncing",
+            visible=False,
+            on_click=self._stop_sync,
+        )
+        self.open_sync_folder_button = ft.OutlinedButton(
+            content="Open sync folder",
+            icon=ft.Icons.FOLDER_OPEN,
+            visible=False,
+            on_click=self._open_sync_folder,
+        )
+        self.sync_shortcuts = ft.Row(spacing=8, wrap=True)
+        self.sync_block = ft.Column(
+            [
+                ft.Text("Cloud sync (optional)", weight=ft.FontWeight.W_600),
+                self.sync_folder_text,
+                self.sync_status_text,
+                ft.Row(
+                    [
+                        self.sync_choose_button,
+                        self.sync_now_button,
+                        self.open_sync_folder_button,
+                        self.sync_stop_button,
+                    ],
+                    spacing=8,
+                    wrap=True,
+                ),
+                self.sync_shortcuts,
+                ft.Text(
+                    "The app copies backups into the iCloud Drive, Google Drive or OneDrive "
+                    "folder on this computer; your normal sync client uploads them. If they "
+                    "do not appear online, check that the provider's app is signed in, the "
+                    "sync folder is on, and the account has free space.",
+                    size=fs(11),
+                    color=ft.Colors.ON_SURFACE_VARIANT,
+                ),
+            ],
+            spacing=6,
         )
 
         self.dialog = ft.AlertDialog(
@@ -135,11 +208,11 @@ class BackupsDialog:
             title=ft.Text("Backups"),
             content=ft.Container(
                 width=760,
-                height=520,
+                height=600,
                 content=ft.Column(
                     [
                         ft.Text(
-                            "Database and receipts · stored on this PC",
+                            "Database and receipts · stored locally, optionally synced",
                             size=fs(13),
                             color=ft.Colors.ON_SURFACE_VARIANT,
                         ),
@@ -156,6 +229,8 @@ class BackupsDialog:
                             padding=ft.Padding.symmetric(vertical=2),
                         ),
                         self.location_text,
+                        self.redirect_text,
+                        self.sync_block,
                         self.retention_text,
                         self.encryption_text,
                         ft.Row(
@@ -223,7 +298,128 @@ class BackupsDialog:
         self.list_column.controls = [self._row(info) for info in self._backups]
         self.list_column.visible = bool(self._backups)
         self.empty_state.visible = not self._backups
+        self._refresh_sync()
         self._refresh_ui()
+
+    def _refresh_sync(self) -> None:
+        try:
+            sync_dir = sync_dir_from_setting(self.ctx.repo)
+        except Exception:  # noqa: BLE001 - a settings read must not break the dialog
+            sync_dir = None
+        suggested = suggest_sync_dirs()
+        self.sync_shortcuts.controls = [
+            ft.TextButton(
+                content=f"Use {name}",
+                icon=ft.Icons.CLOUD,
+                disabled=self._busy,
+                on_click=lambda _, root=root: self._use_sync_root(root),
+            )
+            for name, root in suggested.items()
+            if sync_dir is None
+            or not (
+                sync_dir == root / SYNC_FOLDER_NAME
+                or sync_dir.is_relative_to(root)
+            )
+        ]
+        if sync_dir is None:
+            self.sync_folder_text.value = (
+                "Backups are stored locally. Choose a folder inside iCloud Drive, "
+                "Google Drive or OneDrive to sync copies."
+            )
+            self.sync_choose_button.content = "Choose sync folder…"
+            self.sync_now_button.visible = False
+            self.sync_stop_button.visible = False
+            self.open_sync_folder_button.visible = False
+            self.sync_status_text.value = ""
+            return
+        self.sync_folder_text.value = f"Copying backups to {sync_dir}"
+        self.sync_choose_button.content = "Change sync folder…"
+        self.sync_now_button.visible = True
+        self.sync_stop_button.visible = True
+        self.open_sync_folder_button.visible = sync_dir.is_dir()
+        status = read_sync_status()
+        if not sync_dir.is_dir():
+            self.sync_status_text.value = "The sync folder is not available right now."
+            self.sync_status_text.color = WARNING_COLOR
+        elif not status:
+            self.sync_status_text.value = "No sync has run yet."
+            self.sync_status_text.color = ft.Colors.ON_SURFACE_VARIANT
+        else:
+            when = _date_label(str(status.get("at") or ""))
+            if status.get("ok"):
+                message = str(status.get('message') or 'Copied').replace(
+                    'Synced ', 'Copied '
+                )
+                self.sync_status_text.value = f"Last copy {when} · {message}"
+                self.sync_status_text.color = INCOME_COLOR
+            else:
+                self.sync_status_text.value = (
+                    f"Last copy {when} failed · {status.get('message') or 'Unknown error'}"
+                )
+                self.sync_status_text.color = EXPENSE_COLOR
+
+    def _use_sync_root(self, root: Path) -> None:
+        self._set_sync_dir(root / SYNC_FOLDER_NAME)
+
+    def _set_sync_dir(self, path: Path) -> None:
+        try:
+            folder = Path(path).expanduser()
+            folder.mkdir(parents=True, exist_ok=True)
+            local = backups_dir().resolve()
+            target = folder.resolve()
+            if target == local or target.is_relative_to(local):
+                raise ValueError("Choose a folder outside the local backups folder")
+        except (OSError, ValueError) as exc:
+            self.ctx.notify(f"Could not use that sync folder: {exc}", error=True)
+            return
+        self.ctx.repo.set_setting(BACKUP_SYNC_SETTING, str(folder))
+        self._refresh()
+        self.ctx.notify(f"Backups will sync to {folder}")
+
+    async def _choose_sync_folder(self, _: ft.Event | None = None) -> None:
+        if self._busy:
+            return
+        try:
+            chosen = await self._file_picker.get_directory_path(
+                dialog_title="Choose a folder for synced backups"
+            )
+        except Exception as exc:  # noqa: BLE001 - the native picker can be unavailable
+            if not self._closed_notified:
+                self.ctx.notify(f"Could not open the folder picker: {exc}", error=True)
+            return
+        if chosen and not self._closed_notified:
+            self._set_sync_dir(Path(chosen))
+
+    def _stop_sync(self, _: ft.Event | None = None) -> None:
+        self.ctx.repo.set_setting(BACKUP_SYNC_SETTING, "")
+        self._refresh()
+        self.ctx.notify("Cloud backup sync is off")
+
+    async def _sync_now(self, _: ft.Event | None = None) -> None:
+        if self._busy:
+            return
+        sync_dir = sync_dir_from_setting(self.ctx.repo)
+        if sync_dir is None:
+            return
+        self._set_busy(True)
+        try:
+            copied, errors = await asyncio.to_thread(sync_all_backups, sync_dir)
+        except Exception as exc:  # noqa: BLE001 - sync failures leave local backups intact
+            if not self._closed_notified:
+                self.ctx.notify(f"Could not sync backups: {exc}", error=True)
+        else:
+            if not self._closed_notified:
+                if errors:
+                    self.ctx.notify(
+                        f"Synced {copied} backup(s); {len(errors)} failed: {errors[0]}",
+                        error=True,
+                    )
+                else:
+                    self.ctx.notify(f"Synced {copied} backup(s) to {sync_dir}")
+        finally:
+            self._set_busy(False)
+        if not self._closed_notified:
+            self._refresh()
 
     def _row(self, info: BackupInfo) -> ft.Container:
         kind = _kind_label(info.kind)
@@ -269,6 +465,12 @@ class BackupsDialog:
         self.empty_backup_button.disabled = busy
         self.restore_file_button.disabled = busy
         self.open_folder_button.disabled = busy
+        self.sync_choose_button.disabled = busy
+        self.sync_now_button.disabled = busy
+        self.open_sync_folder_button.disabled = busy
+        self.sync_stop_button.disabled = busy
+        for control in self.sync_shortcuts.controls:
+            control.disabled = busy
         self.list_column.controls = [self._row(info) for info in self._backups]
         self._refresh_ui()
 
@@ -287,8 +489,25 @@ class BackupsDialog:
             if not self._closed_notified:
                 self.ctx.notify(f"Could not create a backup: {exc}", error=True)
         else:
+            sync_dir = sync_dir_from_setting(self.ctx.repo)
+            synced = False
+            sync_error = None
+            if sync_dir is not None:
+                try:
+                    await asyncio.to_thread(sync_backup, path, sync_dir)
+                except BackupError as exc:
+                    sync_error = str(exc)
+                except Exception as exc:  # noqa: BLE001 - the local backup is still valid
+                    sync_error = str(exc)
+                else:
+                    synced = True
             if not self._closed_notified:
-                self.ctx.notify(f"Backup saved to {Path(path).name}")
+                message = f"Backup saved to {Path(path).name}"
+                if synced:
+                    message += f" and synced to {sync_dir}"
+                elif sync_error:
+                    message += f"; sync failed: {sync_error}"
+                self.ctx.notify(message, error=bool(sync_error))
         finally:
             self._set_busy(False)
         if not self._closed_notified:
@@ -393,7 +612,17 @@ class BackupsDialog:
         self._ask_restore(Path(chosen.path))
 
     def _open_folder(self, _: ft.Event | None = None) -> None:
-        folder = backups_dir()
+        folder = actual_data_dir() / "backups"
+        if not folder.is_dir():
+            folder = backups_dir()
+        self._open_path(folder)
+
+    def _open_sync_folder(self, _: ft.Event | None = None) -> None:
+        folder = sync_dir_from_setting(self.ctx.repo)
+        if folder is not None:
+            self._open_path(folder)
+
+    def _open_path(self, folder: Path) -> None:
         try:
             if os.name == "nt":
                 os.startfile(str(folder))  # type: ignore[attr-defined]  # Windows-only
@@ -402,4 +631,4 @@ class BackupsDialog:
             else:
                 subprocess.Popen(["xdg-open", str(folder)])
         except OSError as exc:
-            self.ctx.notify(f"Could not open the backup folder: {exc}", error=True)
+            self.ctx.notify(f"Could not open {folder}: {exc}", error=True)

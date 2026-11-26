@@ -17,6 +17,8 @@ from .backups import (
     RESTORE_APPLIED_MESSAGE,
     apply_pending_restore,
     create_backup_if_due,
+    sync_backup,
+    sync_dir_from_setting,
 )
 from .config import APP_NAME, db_path
 from .db import connect
@@ -78,16 +80,24 @@ DAY_CHECK_INTERVAL_SECONDS = 60
 TEXT_NOT_BEFORE_HOUR = 8
 
 
-async def auto_backup_task() -> None:
+async def auto_backup_task(repo: Repository) -> None:
     """Take a due automatic snapshot on startup, then check again every six hours.
 
     ``create_backup_if_due`` holds the backup lock and re-checks the 24-hour window, so an
     overlapping tick or a manual backup never produces a second snapshot. The backup core
-    records failures in ``backups/status.json``; a failure must not stop the timer.
+    records failures in ``backups/status.json``; a failure must not stop the timer. When a
+    cloud sync folder is configured, the new snapshot is copied there as well.
     """
     while True:
         try:
-            await asyncio.to_thread(create_backup_if_due)
+            path = await asyncio.to_thread(create_backup_if_due)
+            if path is not None:
+                sync_dir = sync_dir_from_setting(repo)
+                if sync_dir is not None:
+                    try:
+                        await asyncio.to_thread(sync_backup, path, sync_dir)
+                    except Exception:  # noqa: BLE001 - the local backup is still valid
+                        log.exception("Automatic backup sync failed")
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001 - a failed automatic backup must not stop the timer
@@ -426,7 +436,7 @@ def main(page: ft.Page) -> None:
 
     page.on_disconnect = on_disconnect
     page.add(ft.Row([rail, ft.VerticalDivider(width=1), content], expand=True, spacing=0))
-    auto_backup = page.run_task(auto_backup_task)
+    auto_backup = page.run_task(auto_backup_task, repo)
     payment_alerts = page.run_task(payment_alert_task, ctx)
     if restore_message:
         ctx.notify(

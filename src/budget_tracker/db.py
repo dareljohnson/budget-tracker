@@ -368,6 +368,10 @@ MIGRATIONS: list[str] = [
     ALTER TABLE debts ADD COLUMN minimum_after_cents INTEGER;
     ALTER TABLE debts ADD COLUMN minimum_after_date TEXT;
     """,
+    # v18: where a Cash account's money is kept (home safe, wallet, safe deposit box).
+    """
+    ALTER TABLE accounts ADD COLUMN storage_location TEXT;
+    """,
 ]
 
 FOREIGN_KEYS_OFF_MIGRATIONS = {8, 14}

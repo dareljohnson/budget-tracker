@@ -922,6 +922,28 @@ class TestEditors(unittest.TestCase):
             (card.promo_apr_bps, card.promo_end_date), (0, date(2027, 3, 1))
         )
 
+    def test_account_editor_saves_a_cash_location(self):
+        from budget_tracker.ui.views.accounts import AccountEditor
+
+        editor = AccountEditor(self.ctx, None)
+        editor.name.value = "Wallet"
+        editor.kind = AccountKind.CASH
+        editor.storage_location.value = "Home safe"
+        editor._render()
+        self.assertTrue(editor.storage_location.visible)
+        editor._save(None)
+        wallet = next(a for a in self.repo.list_accounts() if a.name == "Wallet")
+        self.assertEqual(wallet.storage_location, "Home safe")
+
+    def test_accounts_card_shows_the_cash_location(self):
+        from budget_tracker.ui.views.accounts import AccountsView
+
+        self.repo.add_account(Account(
+            "Wallet", AccountKind.CASH, 10_000, storage_location="Home safe"
+        ))
+        texts = self._texts(AccountsView(self.ctx).grid)
+        self.assertIn("Location: Home safe", texts)
+
     def test_accounts_card_shows_rate_type_and_promo(self):
         from budget_tracker.models import Account, AccountKind, LoanType
         from budget_tracker.ui.views.accounts import AccountsView

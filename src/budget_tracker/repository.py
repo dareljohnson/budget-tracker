@@ -143,7 +143,7 @@ class Repository:
     # ---------- accounts ----------
     _ACCOUNT_SELECT = (
         "SELECT id, name, kind, opening_balance_cents, color, number_last4, liquid, "
-        "apr_bps, loan_type, promo_apr_bps, promo_end_date FROM accounts"
+        "apr_bps, loan_type, promo_apr_bps, promo_end_date, storage_location FROM accounts"
     )
 
     @staticmethod
@@ -162,6 +162,7 @@ class Repository:
             promo_end_date=(
                 date.fromisoformat(row["promo_end_date"]) if row["promo_end_date"] else None
             ),
+            storage_location=row["storage_location"],
         )
 
     @staticmethod
@@ -170,6 +171,9 @@ class Repository:
             raise RepositoryError("APR must be between 0 and 100")
         if account.promo_apr_bps is not None and not (0 <= account.promo_apr_bps <= 10_000):
             raise RepositoryError("Promo APR must be between 0 and 100")
+        storage_location = (account.storage_location or "").strip() or None
+        if storage_location is not None and len(storage_location) > 60:
+            raise RepositoryError("Cash location must be 60 characters or fewer")
         return (
             account.name.strip(),
             account.kind.value,
@@ -181,6 +185,7 @@ class Repository:
             account.loan_type.value if account.loan_type is not None else None,
             account.promo_apr_bps,
             account.promo_end_date.isoformat() if account.promo_end_date is not None else None,
+            storage_location,
         )
 
     def list_accounts(self) -> list[Account]:
@@ -204,8 +209,8 @@ class Repository:
             with self.conn:
                 cur = self.conn.execute(
                     "INSERT INTO accounts (name, kind, opening_balance_cents, color, number_last4, "
-                    "liquid, apr_bps, loan_type, promo_apr_bps, promo_end_date) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "liquid, apr_bps, loan_type, promo_apr_bps, promo_end_date, storage_location) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     params,
                 )
         except sqlite3.IntegrityError as exc:
@@ -251,7 +256,7 @@ class Repository:
                 self.conn.execute(
                     "UPDATE accounts SET name = ?, kind = ?, opening_balance_cents = ?, color = ?, "
                     "number_last4 = ?, liquid = ?, apr_bps = ?, loan_type = ?, promo_apr_bps = ?, "
-                    "promo_end_date = ? WHERE id = ?",
+                    "promo_end_date = ?, storage_location = ? WHERE id = ?",
                     (*params, account.id),
                 )
                 if account.kind.is_liability and account.apr_bps is not None:
@@ -324,7 +329,7 @@ class Repository:
         """Current balance of every account. Credit cards go negative as you spend on them."""
         rows = self.conn.execute(
             "SELECT a.id, a.name, a.kind, a.opening_balance_cents, a.color, a.number_last4, a.liquid, "
-            "a.apr_bps, a.loan_type, a.promo_apr_bps, a.promo_end_date, "
+            "a.apr_bps, a.loan_type, a.promo_apr_bps, a.promo_end_date, a.storage_location, "
             "a.opening_balance_cents "
             "+ COALESCE((SELECT SUM(CASE t.type WHEN 'expense' THEN -t.amount_cents WHEN 'transfer' THEN -t.amount_cents "
             "WHEN 'adjustment' THEN t.amount_cents ELSE t.amount_cents END) FROM transactions t WHERE t.account_id = a.id), 0) "

@@ -400,16 +400,30 @@ GUIDE: tuple[HelpSection, ...] = (
         (
             HelpTopic(
                 "Data folder",
-                "The database lives in the per-user app data folder, with receipts/ and backups/ "
-                "beside it. The app makes a pre-migration copy before a schema upgrade.",
-                ("data folder", "database", "sqlite", "location", "migration"),
+                "The database lives in %LOCALAPPDATA%\\BudgetTracker on Windows or "
+                "~/.local/share/budget_tracker on macOS and Linux (or $XDG_DATA_HOME/"
+                "budget_tracker); BUDGET_TRACKER_HOME overrides it. The backups/ and receipts/ "
+                "folders sit beside it. With a Microsoft Store Python, Windows redirects the "
+                "folder into %LOCALAPPDATA%\\Packages\\PythonSoftwareFoundation.Python.*\\"
+                "LocalCache\\Local\\BudgetTracker; the Backups dialog shows that real path. "
+                "The app makes a pre-migration copy before a schema upgrade.",
+                ("data folder", "database", "sqlite", "location", "migration", "mac", "linux", "store python", "redirect"),
             ),
             HelpTopic(
                 "Backups and restore",
                 "The backup button creates a manual snapshot and lists earlier ones. Restore "
                 "replaces the live database with a chosen backup. Automatic backups run on a "
-                "schedule while the app is open.",
+                "schedule while the app is open. Add a cloud sync folder for off-PC copies.",
                 ("backup", "restore", "snapshot", "automatic"),
+            ),
+            HelpTopic(
+                "Cloud sync to iCloud Drive, Google Drive or OneDrive",
+                "In Backups → Cloud sync, choose a folder inside iCloud Drive, Google Drive or "
+                "OneDrive (the desktop sync client). Each new automatic or manual backup is copied there, "
+                "and Sync now copies existing snapshots. The app does not connect to the cloud "
+                "account directly; your normal sync client uploads the files. Copied backups "
+                "are unencrypted and are not pruned by the app.",
+                ("icloud", "google drive", "onedrive", "cloud", "sync", "backup", "offsite"),
             ),
             HelpTopic(
                 "Privacy",
@@ -446,6 +460,15 @@ GUIDE: tuple[HelpSection, ...] = (
                 "bill. Escrow is separate. A temporary reduced payment shows a payment-change "
                 "note with both the debt and bill steps.",
                 ("payment", "schedule", "changed", "temporary", "escrow", "p&i"),
+            ),
+            HelpTopic(
+                "The backup folder path does not exist",
+                "If the Backups dialog shows a path under AppData\\Local\\BudgetTracker but "
+                "Explorer cannot open it, the app is running under the Microsoft Store Python. "
+                "Windows redirects that folder into %LOCALAPPDATA%\\Packages\\"
+                "PythonSoftwareFoundation.Python.*\\LocalCache\\Local\\BudgetTracker. "
+                "The dialog now shows the real path; use Open backup folder. Your backups are safe.",
+                ("backup", "folder", "path", "missing", "does not exist", "store python", "redirect"),
             ),
             HelpTopic(
                 "Text recognition is unavailable",

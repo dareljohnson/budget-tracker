@@ -13,6 +13,7 @@ import ntpath
 import os
 import shutil
 import sqlite3
+import sys
 import tempfile
 import threading
 import time
@@ -31,6 +32,9 @@ REPLACED_KEEP = 2
 DUE_AFTER_SECONDS = 24 * 60 * 60
 DB_FILENAME = "budget_tracker.db"
 RESTORE_APPLIED_MESSAGE = "Restore applied; your restored data is in place."
+BACKUP_SYNC_SETTING = "backup_sync_dir"
+SYNC_STATUS_FILENAME = "sync-status.json"
+SYNC_FOLDER_NAME = "BudgetTracker Backups"
 
 BACKUP_LOCK = threading.Lock()
 
@@ -87,6 +91,153 @@ def read_status() -> dict | None:
     except (OSError, ValueError):
         return None
     return data if isinstance(data, dict) else None
+
+
+# -- optional cloud-folder sync ------------------------------------------
+
+
+def sync_status_path() -> Path:
+    return backups_dir() / SYNC_STATUS_FILENAME
+
+
+def write_sync_status(
+    ok: bool, message: str, folder: Path | str, file_name: str = ""
+) -> None:
+    """Record the last sync outcome. Never raises."""
+    try:
+        payload = {
+            "ok": bool(ok),
+            "at": datetime.now().isoformat(timespec="seconds"),
+            "folder": str(folder),
+            "file": file_name,
+            "message": message,
+        }
+        target = sync_status_path()
+        tmp = target.with_name(target.name + ".tmp")
+        tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        os.replace(tmp, target)
+    except Exception:  # noqa: BLE001 - status reporting must never break a backup
+        pass
+
+
+def read_sync_status() -> dict | None:
+    path = sync_status_path()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def sync_dir_from_setting(repo) -> Path | None:
+    """The configured sync folder, or ``None`` when sync is off."""
+    value = repo.get_setting(BACKUP_SYNC_SETTING)
+    return Path(value).expanduser() if value else None
+
+
+def sync_backup(backup_path: Path, sync_dir: Path | str) -> Path:
+    """Copy one backup ZIP into the sync folder, replacing an older copy atomically."""
+    source = Path(backup_path)
+    if not source.is_file():
+        raise BackupError("The backup file to sync does not exist")
+    folder = Path(sync_dir).expanduser()
+    if not folder.is_dir():
+        raise BackupError(f"The sync folder is not available: {folder}")
+    try:
+        local = backups_dir().resolve()
+        target_folder = folder.resolve()
+    except OSError as exc:
+        raise BackupError(f"Could not read the sync folder: {exc}") from exc
+    if target_folder == local or target_folder.is_relative_to(local):
+        raise BackupError("Choose a sync folder outside the local backups folder")
+    target = folder / source.name
+    try:
+        if target.exists() and os.path.normcase(str(target.resolve())) == os.path.normcase(str(source.resolve())):
+            return target
+    except OSError:
+        pass
+    partial = target.with_name(target.name + ".part")
+    try:
+        shutil.copy2(source, partial)
+        os.replace(partial, target)
+    except OSError as exc:
+        _unlink(partial)
+        write_sync_status(False, str(exc), folder, source.name)
+        raise BackupError(f"Could not copy the backup to {folder}: {exc}") from exc
+    write_sync_status(True, "Copied", folder, source.name)
+    return target
+
+
+def sync_all_backups(sync_dir: Path | str) -> tuple[int, list[str]]:
+    """Copy every local snapshot into ``sync_dir``; return the count and any errors."""
+    folder = Path(sync_dir).expanduser()
+    infos = list_backups()
+    copied = 0
+    errors: list[str] = []
+    for info in infos:
+        try:
+            sync_backup(info.path, folder)
+        except BackupError as exc:
+            errors.append(f"{info.path.name}: {exc}")
+        else:
+            copied += 1
+    if errors:
+        write_sync_status(False, "; ".join(errors[:3]), folder, "")
+    else:
+        write_sync_status(
+            True,
+            f"Copied {copied} backup{'s' if copied != 1 else ''}",
+            folder,
+            "",
+        )
+    return copied, errors
+
+
+def suggest_sync_dirs() -> dict[str, Path]:
+    """Common iCloud Drive, Google Drive and OneDrive folders on this computer."""
+    home = Path.home()
+    candidates: list[tuple[str, Path]] = []
+    if sys.platform == "darwin":
+        candidates.append(
+            ("iCloud Drive", home / "Library" / "Mobile Documents" / "com~apple~CloudDocs")
+        )
+    if os.name == "nt":
+        candidates.append(("iCloud Drive", home / "iCloudDrive"))
+    google_roots = [
+        home / "Google Drive" / "My Drive",
+        home / "Google Drive",
+        home / "My Drive",
+    ]
+    if sys.platform == "darwin":
+        google_roots += sorted(home.glob("Library/CloudStorage/GoogleDrive-*/My Drive"))
+        google_roots += sorted(home.glob("Library/CloudStorage/GoogleDrive-*"))
+    if os.name != "nt":
+        google_roots += sorted(home.glob("Insync/*/Google Drive"))
+    for root in google_roots:
+        if root.is_dir():
+            candidates.append(("Google Drive", root))
+            break
+
+    onedrive_roots: list[Path] = []
+    for variable in ("OneDrive", "OneDriveConsumer", "OneDriveCommercial"):
+        value = (os.environ.get(variable) or "").strip().strip('"')
+        if value:
+            onedrive_roots.append(Path(value))
+    onedrive_roots.append(home / "OneDrive")
+    if sys.platform == "darwin":
+        onedrive_roots += sorted(home.glob("Library/CloudStorage/OneDrive-*"))
+    if os.name == "nt":
+        onedrive_roots += sorted(home.glob("OneDrive - *"))
+    for root in onedrive_roots:
+        if root.is_dir():
+            candidates.append(("OneDrive", root))
+            break
+
+    found: dict[str, Path] = {}
+    for name, root in candidates:
+        if root.is_dir():
+            found[name] = root
+    return found
 
 
 # -- creation ------------------------------------------------------------

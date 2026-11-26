@@ -212,6 +212,45 @@ class TestBackupsDialogList(_BackupTestCase):
         self.assertIn("BitLocker", joined)
 
 
+class TestBackupSyncDialog(_BackupTestCase):
+    def _cloud(self) -> Path:
+        cloud = self.home / "cloud"
+        cloud.mkdir()
+        self.repo.set_setting(backups.BACKUP_SYNC_SETTING, str(cloud))
+        return cloud
+
+    def test_sync_folder_and_buttons_are_shown(self):
+        cloud = self._cloud()
+        dialog = self._dialog()
+        self.assertIn(str(cloud), dialog.sync_folder_text.value)
+        self.assertTrue(dialog.sync_now_button.visible)
+        self.assertTrue(dialog.sync_stop_button.visible)
+        self.assertTrue(dialog.open_sync_folder_button.visible)
+
+    def test_back_up_now_copies_to_the_sync_folder(self):
+        cloud = self._cloud()
+        dialog = self._dialog()
+        asyncio.run(dialog._back_up_now(None))
+        self.assertEqual(len(list(cloud.glob("*.zip"))), 1)
+
+    def test_sync_now_copies_existing_backups(self):
+        self._backup()
+        cloud = self._cloud()
+        dialog = self._dialog()
+        asyncio.run(dialog._sync_now(None))
+        self.assertEqual(
+            [path.name for path in cloud.glob("*.zip")],
+            [dialog._backups[0].path.name],
+        )
+
+    def test_stop_sync_clears_the_setting(self):
+        self._cloud()
+        dialog = self._dialog()
+        dialog._stop_sync(None)
+        self.assertFalse(self.repo.get_setting(backups.BACKUP_SYNC_SETTING))
+        self.assertFalse(dialog.sync_now_button.visible)
+
+
 class TestBackUpNow(_BackupTestCase):
     def test_back_up_now_runs_in_a_worker_shows_progress_and_refreshes(self):
         dialog = self._dialog()
@@ -476,7 +515,9 @@ class TestMainWiring(unittest.TestCase):
 
         self._run_main(page)
 
-        page.run_task.assert_any_call(shell.auto_backup_task)
+        self.assertTrue(
+            any(call.args and call.args[0] is shell.auto_backup_task for call in page.run_task.call_args_list)
+        )
         self.assertTrue(
             any(call.args and call.args[0] is shell.payment_alert_task for call in page.run_task.call_args_list)
         )
@@ -498,6 +539,8 @@ class TestAutoBackupTask(unittest.TestCase):
     def test_loop_creates_a_due_backup_then_sleeps_six_hours(self):
         from budget_tracker import main as shell
 
+        repo = mock.Mock()
+        repo.get_setting.return_value = None
         with mock.patch.object(shell, "create_backup_if_due") as due, \
                 mock.patch.object(
                     shell.asyncio,
@@ -505,7 +548,7 @@ class TestAutoBackupTask(unittest.TestCase):
                     new=mock.AsyncMock(side_effect=asyncio.CancelledError),
                 ) as sleep:
             with self.assertRaises(asyncio.CancelledError):
-                asyncio.run(shell.auto_backup_task())
+                asyncio.run(shell.auto_backup_task(repo))
 
         due.assert_called_once_with()
         sleep.assert_called_once_with(6 * 60 * 60)
@@ -513,6 +556,8 @@ class TestAutoBackupTask(unittest.TestCase):
     def test_a_failed_automatic_backup_is_swallowed_and_logged(self):
         from budget_tracker import main as shell
 
+        repo = mock.Mock()
+        repo.get_setting.return_value = None
         with mock.patch.object(
             shell, "create_backup_if_due", side_effect=RuntimeError("disk full")
         ), mock.patch.object(
@@ -521,9 +566,27 @@ class TestAutoBackupTask(unittest.TestCase):
             new=mock.AsyncMock(side_effect=asyncio.CancelledError),
         ), mock.patch.object(shell.log, "exception") as logged:
             with self.assertRaises(asyncio.CancelledError):
-                asyncio.run(shell.auto_backup_task())
+                asyncio.run(shell.auto_backup_task(repo))
 
         logged.assert_called_once()
+
+    def test_automatic_backup_is_synced_when_configured(self):
+        from budget_tracker import main as shell
+
+        path = Path("auto-20260101-000000.zip")
+        repo = mock.Mock()
+        repo.get_setting.return_value = "/tmp/cloud backups"
+        with mock.patch.object(shell, "create_backup_if_due", return_value=path), \
+                mock.patch.object(shell, "sync_backup") as sync, \
+                mock.patch.object(
+                    shell.asyncio,
+                    "sleep",
+                    new=mock.AsyncMock(side_effect=asyncio.CancelledError),
+                ):
+            with self.assertRaises(asyncio.CancelledError):
+                asyncio.run(shell.auto_backup_task(repo))
+
+        sync.assert_called_once_with(path, Path("/tmp/cloud backups"))
 
 
 if __name__ == "__main__":

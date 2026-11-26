@@ -63,18 +63,19 @@ python -m pytest
 
 ## Data storage
 
-Data is stored in SQLite at `%LOCALAPPDATA%\BudgetTracker\budget_tracker.db` on Windows (`~/.local/share/budget_tracker` on Linux and macOS). To use a different folder, set the `BUDGET_TRACKER_HOME` environment variable. With a Microsoft Store Python, Windows redirects the file into the package cache — see [Where data lives](PACKAGING.md#where-data-lives) for the exact paths.
+Data is stored in SQLite at `%LOCALAPPDATA%\BudgetTracker\budget_tracker.db` on Windows (`~/.local/share/budget_tracker` on Linux and macOS). To use a different folder, set the `BUDGET_TRACKER_HOME` environment variable. With a Microsoft Store Python, Windows redirects the folder into `%LOCALAPPDATA%\Packages\PythonSoftwareFoundation.Python.*\LocalCache\Local\BudgetTracker`; the Backups dialog shows that real path. See [Where data lives](PACKAGING.md#where-data-lives) for the exact paths.
 
 Statement files (PDFs and images) are never copied into the database. Of the statement file itself, an import keeps only its SHA-256 hash and, if you choose to remember it, the last four account digits; the statement summary and its imported transactions are saved as normal local data.
 
 ## Backups and restore
 
-Budget Tracker keeps local snapshots of your data and lets you take and restore one yourself. Snapshots are ordinary ZIP files in the `backups` folder inside your data folder — `%LOCALAPPDATA%\BudgetTracker\backups` on Windows and `~/.local/share/budget_tracker/backups` elsewhere (with `BUDGET_TRACKER_HOME`, it follows that folder).
+Budget Tracker keeps local snapshots of your data and lets you take and restore one yourself. Snapshots are ordinary ZIP files in the `backups` folder inside your data folder — `%LOCALAPPDATA%\BudgetTracker\backups` on Windows and `~/.local/share/budget_tracker/backups` on macOS and Linux (or under `XDG_DATA_HOME`; with `BUDGET_TRACKER_HOME`, it follows that folder).
 
 - **Automatic:** after startup and on a six-hour check, the app takes a snapshot when the newest automatic one is more than 24 hours old. That is at most one automatic backup a day, not a fixed time. The newest **14 automatic** snapshots are kept and older ones are deleted.
 - **Manual:** click the backup icon in the navigation rail (next to the appearance and text-size buttons) and choose **Back up now**. Manual backups are never deleted automatically.
 - **Before changes:** a copy is taken before a database migration and before a restore replaces data. The newest 3 pre-migration copies are kept, along with the pre-restore copy.
-- **Contents:** each ZIP holds a consistent copy of the database, your receipt images, and a `manifest.json` describing the snapshot. Backups are **not encrypted** and are never uploaded — they stay on this PC. Use disk encryption such as BitLocker (Windows) or FileVault (macOS) if the folder needs protection.
+- **Cloud sync (optional):** in the Backups dialog, choose a **Cloud sync** folder inside iCloud Drive, Google Drive or OneDrive. The app copies each new automatic or manual snapshot there, and **Sync now** copies existing snapshots. This uses the provider's desktop sync client; the app never connects to the cloud account directly, so iCloud Drive, Google Drive or OneDrive must be signed in and running for the copies to appear online. Copied backups are not pruned by the app.
+- **Contents:** each ZIP holds a consistent copy of the database, your receipt images, and a `manifest.json` describing the snapshot. Backups are **not encrypted**. They stay on this PC unless you choose a cloud sync folder, and then your provider uploads the unencrypted ZIP files. Use disk encryption such as BitLocker (Windows) or FileVault (macOS) if the folders need protection.
 - **Restore:** choose **Restore** on a snapshot, or **Restore from file…** to pick a ZIP. The app checks and stages the backup, then applies it when you close and restart; before replacing anything it copies your current data. The live database is never replaced while the app is open. If the restore cannot be applied, your current data is kept and the reason is shown.
 
 Pre-migration `.db` copies are manual recovery files, not offered in the restore list.

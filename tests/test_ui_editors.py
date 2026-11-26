@@ -899,6 +899,77 @@ class TestEditors(unittest.TestCase):
             self.assertTrue(spacer.expand)
             self.assertEqual(footer.alignment, ft.MainAxisAlignment.END)
 
+    def test_account_editor_saves_apr_loan_type_and_promo(self):
+        from budget_tracker.models import AccountKind, LoanType
+        from budget_tracker.ui.views.accounts import AccountEditor
+
+        editor = AccountEditor(self.ctx, None)
+        editor.name.value = "Promo Card"
+        editor.kind = AccountKind.CREDIT_CARD
+        editor.loan_type.value = LoanType.SAME_AS_CASH.value
+        editor.apr.value = "24.99"
+        editor.promo_apr.value = "0"
+        editor.promo_end.value = "2027-03-01"
+        editor._render()
+        editor._save(None)
+
+        card = next(a for a in self.repo.list_accounts() if a.name == "Promo Card")
+        self.assertEqual(
+            (card.kind, card.apr_bps, card.loan_type),
+            (AccountKind.CREDIT_CARD, 2499, LoanType.SAME_AS_CASH),
+        )
+        self.assertEqual(
+            (card.promo_apr_bps, card.promo_end_date), (0, date(2027, 3, 1))
+        )
+
+    def test_accounts_card_shows_rate_type_and_promo(self):
+        from budget_tracker.models import Account, AccountKind, LoanType
+        from budget_tracker.ui.views.accounts import AccountsView
+
+        self.repo.add_account(Account(
+            "Promo Card",
+            AccountKind.CREDIT_CARD,
+            0,
+            apr_bps=2499,
+            loan_type=LoanType.SAME_AS_CASH,
+            promo_apr_bps=0,
+            promo_end_date=date(2027, 3, 1),
+        ))
+        texts = self._texts(AccountsView(self.ctx).grid)
+        self.assertTrue(
+            any(
+                "Same as cash • 0% until Mar 01, 2027, then 24.99%" in text
+                for text in texts
+            )
+        )
+
+    def test_debt_card_shows_loan_type_and_account_apr(self):
+        from budget_tracker.models import DebtKind
+        from budget_tracker.ui.views.debts import DebtsView
+
+        card = self.accts["Credit Card"]
+        card.apr_bps = 2499
+        self.repo.update_account(card)
+        self.ctx.service.create_debt(
+            "Visa", DebtKind.CREDIT_CARD, 0, 999, 10_500, account_id=card.id
+        )
+        texts = self._texts(DebtsView(self.ctx).grid)
+        self.assertIn("Revolving • APR 24.99%", texts)
+
+    def test_debt_editor_uses_the_linked_account_rate(self):
+        from budget_tracker.models import DebtKind
+        from budget_tracker.ui.views.debts import DebtEditor
+
+        card = self.accts["Credit Card"]
+        card.apr_bps = 2499
+        self.repo.update_account(card)
+        debt = self.ctx.service.create_debt(
+            "Visa", DebtKind.CREDIT_CARD, 0, 999, 10_500, account_id=card.id
+        )
+        editor = DebtEditor(self.ctx, debt)
+        self.assertTrue(editor.apr.disabled)
+        self.assertEqual(editor.apr.value, "24.99")
+
     def test_year_view_builds_with_empty_data(self):
         from budget_tracker.ui.views.year import YearView
 
@@ -1384,6 +1455,297 @@ class TestEditors(unittest.TestCase):
         dialog._save(None)
         [tx] = self.ctx.repo.list_debt_payments(debt.id)
         self.assertEqual((tx.type, tx.transfer_account_id), (TransactionType.TRANSFER, card.id))
+
+    def test_loan_payment_dialog_splits_principal_interest_and_escrow(self):
+        from budget_tracker.models import Account, AccountKind, Category, DebtKind, TransactionType
+        from budget_tracker.ui.views.debts import DebtPaymentDialog
+
+        loan = self.repo.add_account(Account("Mortgage", AccountKind.LOAN, -10_000_000))
+        debt = self.ctx.service.create_debt(
+            "Mortgage", DebtKind.MORTGAGE, 0, 365, 105_549, account_id=loan.id
+        )
+        interest = self.repo.add_category(Category("Mortgage interest", TransactionType.EXPENSE))
+        escrow = self.repo.add_category(Category("Escrow", TransactionType.EXPENSE))
+        dialog = DebtPaymentDialog(self.ctx, self.ctx.service.debt_summary(debt.id))
+        self.assertIsNotNone(dialog.split)
+        self.assertEqual(dialog.amount.value, "1055.49")
+        dialog.split.interest.value = "355.49"
+        dialog.split.escrow.value = "50.00"
+        dialog.split.interest_category.value = str(interest.id)
+        dialog.split.escrow_category.value = str(escrow.id)
+        dialog.funding.value = str(self.accts["Checking"].id)
+        dialog._save(None)
+
+        self.assertEqual([p.amount_cents for p in self.repo.list_debt_payments(debt.id)], [65_000])
+        balances = {b.account.name: b.balance_cents for b in self.repo.account_balances()}
+        self.assertEqual(balances["Mortgage"], -9_935_000)
+        self.assertEqual(balances["Checking"], -105_549)
+        categories = {
+            tx.category_name for tx in self.repo.list_transactions() if tx.category_name
+        }
+        self.assertEqual(categories, {"Mortgage interest", "Escrow"})
+
+    def test_loan_payment_dialog_prefills_estimated_interest(self):
+        from budget_tracker.models import Account, AccountKind, DebtKind
+        from budget_tracker.ui.views.debts import DebtPaymentDialog
+
+        loan = self.repo.add_account(Account("Mortgage", AccountKind.LOAN, -10_000_000))
+        debt = self.ctx.service.create_debt(
+            "Mortgage", DebtKind.MORTGAGE, 0, 365, 105_549, account_id=loan.id
+        )
+        dialog = DebtPaymentDialog(self.ctx, self.ctx.service.debt_summary(debt.id))
+        self.assertEqual(dialog.split.interest.value, "304.17")
+        dialog.split.interest.value = ""
+        dialog.split.estimate()
+        self.assertEqual(dialog.split.interest.value, "304.17")
+
+    def test_mark_paid_dialog_prefills_estimated_interest(self):
+        from budget_tracker.models import (
+            Account,
+            AccountKind,
+            Bill,
+            BillFrequency,
+            DebtKind,
+        )
+        from budget_tracker.ui.views.bills import MarkPaidDialog
+
+        loan = self.repo.add_account(Account("Mortgage", AccountKind.LOAN, -10_000_000))
+        self.ctx.service.create_debt(
+            "Mortgage", DebtKind.MORTGAGE, 0, 365, 105_549, account_id=loan.id
+        )
+        self.repo.add_bill(Bill(
+            "Mortgage - Chase",
+            105_549,
+            BillFrequency.MONTHLY,
+            date(2026, 11, 1),
+            self.accts["Checking"].id,
+            pay_to_account_id=loan.id,
+            anchor_day=1,
+        ))
+        bill = next(b for b in self.repo.list_bills() if b.name == "Mortgage - Chase")
+        dialog = MarkPaidDialog(self.ctx, bill)
+        self.assertEqual(dialog.split.interest.value, "304.17")
+
+    def test_debts_view_splits_the_extra_across_accounts(self):
+        from budget_tracker.debt_planner import DebtStrategy
+        from budget_tracker.models import DebtKind
+        from budget_tracker.ui.views.debts import DebtsView
+
+        first = self.ctx.service.create_debt("Card", DebtKind.PERSONAL, 15_000, 0, 10_000)
+        second = self.ctx.service.create_debt("Loan", DebtKind.PERSONAL, 100_000, 0, 10_000)
+        view = DebtsView(self.ctx)
+        view.extra_cents = 20_000
+        view.strategy = DebtStrategy.AVALANCHE
+        self.assertEqual(view._plan_extra_for(first.id), 5_000)
+        self.assertEqual(view._plan_extra_for(second.id), 15_000)
+
+    def test_debt_payment_dialog_prefills_plan_extra(self):
+        from budget_tracker.models import Account, AccountKind, DebtKind
+        from budget_tracker.ui.views.debts import DebtPaymentDialog
+
+        loan = self.repo.add_account(Account("Mortgage", AccountKind.LOAN, -10_000_000))
+        debt = self.ctx.service.create_debt(
+            "Mortgage", DebtKind.MORTGAGE, 0, 365, 105_549, account_id=loan.id
+        )
+        dialog = DebtPaymentDialog(
+            self.ctx, self.ctx.service.debt_summary(debt.id), extra_cents=10_000
+        )
+        self.assertEqual(dialog.split.extra.value, "100.00")
+
+    def test_debts_view_loads_the_saved_plan_extra_and_strategy(self):
+        from budget_tracker.debt_planner import DebtStrategy
+        from budget_tracker.ui.views.debts import DebtsView
+
+        self.ctx.service.set_debt_plan_extra(12_345)
+        self.ctx.service.set_debt_plan_strategy(DebtStrategy.SNOWBALL)
+        view = DebtsView(self.ctx)
+        self.assertEqual(view.extra_cents, 12_345)
+        self.assertEqual(view.strategy, DebtStrategy.SNOWBALL)
+
+    def test_mark_paid_dialog_prefills_the_plan_extra(self):
+        from budget_tracker.models import (
+            Account,
+            AccountKind,
+            Bill,
+            BillFrequency,
+            DebtKind,
+        )
+        from budget_tracker.ui.views.bills import MarkPaidDialog
+
+        loan = self.repo.add_account(Account("Mortgage", AccountKind.LOAN, -10_000_000))
+        self.ctx.service.create_debt(
+            "Mortgage", DebtKind.MORTGAGE, 0, 365, 105_549, account_id=loan.id
+        )
+        self.repo.add_bill(Bill(
+            "Mortgage - Chase",
+            105_549,
+            BillFrequency.MONTHLY,
+            date(2026, 11, 1),
+            self.accts["Checking"].id,
+            pay_to_account_id=loan.id,
+            anchor_day=1,
+        ))
+        bill = next(b for b in self.repo.list_bills() if b.name == "Mortgage - Chase")
+        self.ctx.service.set_debt_plan_extra(20_000)
+        dialog = MarkPaidDialog(self.ctx, bill)
+        self.assertEqual(dialog.split.extra.value, "200.00")
+
+    def test_mark_paid_dialog_includes_extra_principal(self):
+        from budget_tracker.models import (
+            Account,
+            AccountKind,
+            Bill,
+            BillFrequency,
+            DebtKind,
+        )
+        from budget_tracker.ui.views.bills import MarkPaidDialog
+
+        loan = self.repo.add_account(Account("Mortgage", AccountKind.LOAN, -10_000_000))
+        debt = self.ctx.service.create_debt(
+            "Mortgage", DebtKind.MORTGAGE, 0, 365, 105_549, account_id=loan.id
+        )
+        self.repo.add_bill(Bill(
+            "Mortgage - Chase",
+            105_549,
+            BillFrequency.MONTHLY,
+            date(2026, 11, 1),
+            self.accts["Checking"].id,
+            pay_to_account_id=loan.id,
+            anchor_day=1,
+        ))
+        bill = next(b for b in self.repo.list_bills() if b.name == "Mortgage - Chase")
+        dialog = MarkPaidDialog(self.ctx, bill)
+        dialog.split.extra.value = "100.00"
+        dialog._save(None)
+        self.assertEqual(
+            [p.amount_cents for p in self.repo.list_debt_payments(debt.id)],
+            [85_132],
+        )
+
+    def test_loan_payment_dialog_autofills_escrow_from_pi(self):
+        from budget_tracker.models import Account, AccountKind, DebtKind
+        from budget_tracker.ui.views.debts import DebtPaymentDialog
+
+        loan = self.repo.add_account(Account("Mortgage", AccountKind.LOAN, -12_053_185))
+        debt = self.ctx.service.create_debt(
+            "Mortgage",
+            DebtKind.MORTGAGE,
+            0,
+            365,
+            105_549,
+            account_id=loan.id,
+            pi_payment_cents=78_849,
+        )
+        dialog = DebtPaymentDialog(self.ctx, self.ctx.service.debt_summary(debt.id))
+        self.assertEqual(dialog.split.interest.value, "366.62")
+        self.assertEqual(dialog.split.escrow.value, "267.00")
+
+        dialog.split.escrow.value = "10.00"
+        dialog.split._escrow_changed()
+        dialog._total_changed()
+        self.assertEqual(dialog.split.escrow.value, "10.00")
+        dialog.split.auto_fill_escrow()
+        self.assertEqual(dialog.split.escrow.value, "267.00")
+
+    def test_mark_paid_dialog_autofills_escrow_from_maturity(self):
+        from budget_tracker.debt_planner import remaining_payments, scheduled_pi_payment_cents
+        from budget_tracker.models import (
+            Account,
+            AccountKind,
+            Bill,
+            BillFrequency,
+            DebtKind,
+        )
+        from budget_tracker.ui.views.bills import MarkPaidDialog
+
+        loan = self.repo.add_account(Account("Mortgage", AccountKind.LOAN, -10_000_000))
+        self.ctx.service.create_debt(
+            "Mortgage",
+            DebtKind.MORTGAGE,
+            0,
+            365,
+            105_549,
+            account_id=loan.id,
+            maturity_date=date(2046, 4, 1),
+        )
+        self.repo.add_bill(Bill(
+            "Mortgage - Chase",
+            105_549,
+            BillFrequency.MONTHLY,
+            date(2026, 11, 1),
+            self.accts["Checking"].id,
+            pay_to_account_id=loan.id,
+            anchor_day=1,
+        ))
+        bill = next(b for b in self.repo.list_bills() if b.name == "Mortgage - Chase")
+        dialog = MarkPaidDialog(self.ctx, bill)
+        expected = 105_549 - scheduled_pi_payment_cents(
+            10_000_000, 365, remaining_payments(date.today(), date(2046, 4, 1))
+        )
+        self.assertEqual(dialog.split.escrow.value, f"{expected / 100:.2f}")
+
+    def test_debt_editor_saves_maturity_and_pi(self):
+        from budget_tracker.models import Account, AccountKind, DebtKind
+        from budget_tracker.ui.views.debts import DebtEditor
+
+        loan = self.repo.add_account(Account("Mortgage", AccountKind.LOAN, -10_000_000))
+        debt = self.ctx.service.create_debt(
+            "Mortgage", DebtKind.MORTGAGE, 0, 365, 105_549, account_id=loan.id
+        )
+        editor = DebtEditor(self.ctx, debt)
+        editor.maturity.value = "2046-04-01"
+        editor.pi_payment.value = "788.49"
+        editor._save(None)
+        saved = self.repo.get_debt(debt.id)
+        self.assertEqual(saved.maturity_date, date(2046, 4, 1))
+        self.assertEqual(saved.pi_payment_cents, 78_849)
+
+    def test_mark_paid_dialog_splits_a_loan_bill(self):
+        from budget_tracker.models import (
+            Account,
+            AccountKind,
+            Bill,
+            BillFrequency,
+            Category,
+            DebtKind,
+            TransactionType,
+        )
+        from budget_tracker.ui.views.bills import MarkPaidDialog
+
+        loan = self.repo.add_account(Account("Mortgage", AccountKind.LOAN, -10_000_000))
+        debt = self.ctx.service.create_debt(
+            "Mortgage", DebtKind.MORTGAGE, 0, 365, 105_549, account_id=loan.id
+        )
+        interest = self.repo.add_category(Category("Mortgage interest", TransactionType.EXPENSE))
+        escrow = self.repo.add_category(Category("Escrow", TransactionType.EXPENSE))
+        self.repo.add_bill(Bill(
+            "Mortgage - Chase",
+            105_549,
+            BillFrequency.MONTHLY,
+            date(2026, 11, 1),
+            self.accts["Checking"].id,
+            pay_to_account_id=loan.id,
+            anchor_day=1,
+        ))
+        bill = next(b for b in self.repo.list_bills() if b.name == "Mortgage - Chase")
+        dialog = MarkPaidDialog(self.ctx, bill)
+        self.assertIsNotNone(dialog.split)
+        self.assertEqual(dialog.amount.value, "1055.49")
+        dialog.split.interest.value = "355.49"
+        dialog.split.escrow.value = "50.00"
+        dialog.split.interest_category.value = str(interest.id)
+        dialog.split.escrow_category.value = str(escrow.id)
+        dialog._save(None)
+
+        self.assertEqual(self.repo.get_bill(bill.id).next_due, date(2026, 12, 1))
+        self.assertEqual([p.amount_cents for p in self.repo.list_debt_payments(debt.id)], [65_000])
+        balances = {b.account.name: b.balance_cents for b in self.repo.account_balances()}
+        self.assertEqual(balances["Mortgage"], -9_935_000)
+        self.assertEqual(balances["Checking"], -105_549)
+        self.assertEqual(
+            {tx.category_name for tx in self.repo.list_transactions() if tx.category_name},
+            {"Mortgage interest", "Escrow"},
+        )
 
     def test_history_lists_payments_newest_first(self):
         from budget_tracker.models import DebtKind

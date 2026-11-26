@@ -6,19 +6,31 @@ from datetime import date
 
 import flet as ft
 
-from ...formatting import format_money, month_label, parse_signed_money
-from ...models import Account, AccountBalance, AccountKind, TransactionType
+from ...formatting import (
+    format_money,
+    format_percent,
+    month_label,
+    parse_date,
+    parse_percent_bps,
+    parse_signed_money,
+)
+from ...models import Account, AccountBalance, AccountKind, LoanType, TransactionType
 from ...repository import RepositoryError
 from ..components import account_avatar, balance_text, card, confirm_dialog, empty_state, page_header, stat_card
 from ..context import AppContext
-from ..theme import EXPENSE_COLOR, GAP, INCOME_COLOR, PALETTE, SEED_COLOR, fs
+from ..theme import EXPENSE_COLOR, GAP, INCOME_COLOR, PALETTE, SEED_COLOR, WARNING_COLOR, fs
 from .minimum_payments import MinimumPaymentDialog, minimum_status_chip
 from .reconcile import BalanceCheckDialog
 from .transactions import TransactionEditor
 
 # Every account card gets the same height so the grid stays on a single rhythm.
 # Scaled with the text-size setting so larger text cannot clip the content.
-ACCOUNT_CARD_HEIGHT = 250
+ACCOUNT_CARD_HEIGHT = 260
+
+
+def _compact_percent(bps: int) -> str:
+    """A rate without trailing zero cents, e.g. 0% instead of 0.00%."""
+    return f"{bps // 100}%" if bps % 100 == 0 else format_percent(bps)
 
 
 def _equity_metric(label: str, value: str, *, emphasize: bool = False) -> ft.Column:
@@ -192,6 +204,32 @@ class AccountsView:
                 spacing=0,
             )
         ]
+        if is_liability:
+            standard = (
+                format_percent(account.apr_bps)
+                if account.apr_bps is not None
+                else "the standard rate"
+            )
+            if (
+                account.loan_type is LoanType.SAME_AS_CASH
+                and account.promo_end_date is not None
+            ):
+                promo_rate = _compact_percent(account.promo_apr_bps or 0)
+                rate = (
+                    f"Same as cash • {promo_rate} until "
+                    f"{account.promo_end_date:%b %d, %Y}, then {standard}"
+                )
+                color = WARNING_COLOR
+            else:
+                rate = (
+                    f"APR {standard}"
+                    if account.apr_bps is not None
+                    else "APR not set"
+                )
+                if account.loan_type is not None:
+                    rate += f" • {account.loan_type.label}"
+                color = ft.Colors.ON_SURFACE_VARIANT
+            body.append(ft.Text(rate, size=fs(12), color=color))
         if is_real_estate:
             property_debt = self.ctx.repo.debt_for_property(account.id)
             if property_debt is not None:
@@ -312,6 +350,49 @@ class AccountEditor:
             options=[ft.DropdownOption(key=k.value, text=k.label) for k in AccountKind],
             on_select=self._kind_changed,
         )
+        self.apr = ft.TextField(
+            label="APR (%)",
+            value=(
+                format_percent(account.apr_bps).rstrip("%")
+                if account is not None and account.apr_bps is not None
+                else ""
+            ),
+            keyboard_type=ft.KeyboardType.NUMBER,
+            on_submit=self._save,
+        )
+        self.loan_type = ft.Dropdown(
+            label="Loan type",
+            options=[ft.DropdownOption(key=t.value, text=t.label) for t in LoanType],
+            value=(
+                account.loan_type.value
+                if account is not None and account.loan_type is not None
+                else self._default_loan_type().value
+            ),
+            on_select=lambda _: self._loan_type_changed(),
+        )
+        self.promo_apr = ft.TextField(
+            label="Promo APR (%)",
+            value=(
+                format_percent(account.promo_apr_bps).rstrip("%")
+                if account is not None and account.promo_apr_bps is not None
+                else ""
+            ),
+            keyboard_type=ft.KeyboardType.NUMBER,
+            on_submit=self._save,
+        )
+        self.promo_end = ft.TextField(
+            label="Promo ends (YYYY-MM-DD)",
+            value=(
+                account.promo_end_date.isoformat()
+                if account is not None and account.promo_end_date is not None
+                else ""
+            ),
+            on_submit=self._save,
+        )
+        self.liability_block = ft.Column(
+            [self.apr, self.loan_type, self.promo_apr, self.promo_end],
+            spacing=12,
+        )
         self.liquid = account.liquid if account is not None else self.kind.default_liquid
         self.liquid_switch = ft.Switch(
             label="Liquid",
@@ -355,6 +436,7 @@ class AccountEditor:
                     [
                         ft.Row([self.preview, ft.Column([self.name], expand=True)], spacing=GAP, vertical_alignment=ft.CrossAxisAlignment.START),
                         self.kind_dropdown,
+                        self.liability_block,
                         self.liquid_block,
                         self.number_last4,
                         self.opening,
@@ -364,6 +446,7 @@ class AccountEditor:
                     spacing=12,
                     tight=True,
                     horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
+                    scroll=ft.ScrollMode.AUTO,
                 ),
             ),
             actions=[
@@ -376,9 +459,38 @@ class AccountEditor:
     def open(self) -> None:
         self.ctx.page.show_dialog(self.dialog)
 
+    def _is_mounted(self) -> bool:
+        control: ft.Control | None = self.dialog
+        while control is not None:
+            if isinstance(control, ft.Page):
+                return True
+            control = control.parent
+        return False
+
+    def _refresh_dialog(self) -> None:
+        """Repaint only when mounted; direct tests build the editor without a page."""
+        if self._is_mounted():
+            self.dialog.update()
+
+    def _default_loan_type(self) -> LoanType:
+        return (
+            LoanType.REVOLVING
+            if self.kind is AccountKind.CREDIT_CARD
+            else LoanType.INSTALLMENT
+        )
+
     def _render(self) -> None:
         self.liquid_block.visible = not self.kind.is_liability
         self.liquid_switch.value = bool(self.liquid)
+        self.liability_block.visible = self.kind.is_liability
+        promo = (
+            self.kind.is_liability
+            and self.loan_type.value == LoanType.SAME_AS_CASH.value
+        )
+        self.promo_apr.visible = promo
+        self.promo_end.visible = promo
+        if promo and not (self.promo_apr.value or "").strip():
+            self.promo_apr.value = "0.00"
         if self.kind.is_liability:
             self.opening.label = "Amount currently owed"
             self.opening.hint_text = "Balance before your first tracked transaction"
@@ -407,7 +519,7 @@ class AccountEditor:
     def _select_color(self, color: str) -> None:
         self.color = color
         self._render()
-        self.dialog.update()
+        self._refresh_dialog()
 
     def _liquid_changed(self, e: ft.Event[ft.Switch]) -> None:
         self.liquid = bool(e.control.value)
@@ -415,7 +527,14 @@ class AccountEditor:
     def _kind_changed(self, e: ft.Event[ft.Dropdown]) -> None:
         self.kind = AccountKind(e.control.value)
         self.liquid = self.kind.default_liquid
+        if self.kind.is_liability:
+            self.loan_type.value = self._default_loan_type().value
         self._render()
+        self._refresh_dialog()
+
+    def _loan_type_changed(self) -> None:
+        self._render()
+        self._refresh_dialog()
 
     def _save(self, _: ft.Event) -> None:
         name = (self.name.value or "").strip()
@@ -424,6 +543,10 @@ class AccountEditor:
         self.name.error = None
         self.opening.error = None
         self.number_last4.error = None
+        self.apr.error = None
+        self.promo_apr.error = None
+        self.promo_end.error = None
+        self.loan_type.error_text = None
         if not name:
             self.name.error = "Name is required"
             valid = False
@@ -435,8 +558,45 @@ class AccountEditor:
         except ValueError as exc:
             self.opening.error = str(exc)
             valid = False
+        apr_bps = None
+        loan_type = None
+        promo_apr_bps = None
+        promo_end_date = None
+        if self.kind.is_liability:
+            apr_text = (self.apr.value or "").strip()
+            if apr_text:
+                try:
+                    apr_bps = parse_percent_bps(apr_text)
+                except ValueError as exc:
+                    self.apr.error = str(exc)
+                    valid = False
+            try:
+                loan_type = LoanType(self.loan_type.value)
+            except (TypeError, ValueError):
+                self.loan_type.error_text = "Choose a loan type"
+                valid = False
+            if loan_type is LoanType.SAME_AS_CASH:
+                promo_text = (self.promo_apr.value or "").strip()
+                if promo_text:
+                    try:
+                        promo_apr_bps = parse_percent_bps(promo_text)
+                    except ValueError as exc:
+                        self.promo_apr.error = str(exc)
+                        valid = False
+                else:
+                    promo_apr_bps = 0
+                end_text = (self.promo_end.value or "").strip()
+                if not end_text:
+                    self.promo_end.error = "Enter the promo end date"
+                    valid = False
+                else:
+                    try:
+                        promo_end_date = parse_date(end_text)
+                    except ValueError as exc:
+                        self.promo_end.error = str(exc)
+                        valid = False
         if not valid:
-            self.dialog.update()
+            self._refresh_dialog()
             return
         if self.kind.is_liability:
             opening = -opening
@@ -448,6 +608,10 @@ class AccountEditor:
             color=self.color,
             number_last4=last4 or None,
             liquid=self.liquid,
+            apr_bps=apr_bps,
+            loan_type=loan_type,
+            promo_apr_bps=promo_apr_bps,
+            promo_end_date=promo_end_date,
         )
         try:
             if account.id:
@@ -456,7 +620,7 @@ class AccountEditor:
                 self.ctx.repo.add_account(account)
         except RepositoryError as exc:
             self.name.error = str(exc)
-            self.dialog.update()
+            self._refresh_dialog()
             return
         self.ctx.page.pop_dialog()
         self.ctx.notify(f"Account '{name}' saved")

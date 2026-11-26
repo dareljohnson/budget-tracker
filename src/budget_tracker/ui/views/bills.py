@@ -6,6 +6,7 @@ from datetime import date
 
 import flet as ft
 
+from ...debt_planner import escrow_from_amortization, monthly_interest_cents
 from ...formatting import format_money, parse_date, parse_money, parse_signed_money
 from ...matching import STRONG_SCORE, MatchCandidate, source_label
 from ...models import AccountKind, Bill, BillFrequency, DueBill, TransactionType
@@ -13,6 +14,7 @@ from ...repository import RepositoryError
 from ..components import card, category_avatar, confirm_dialog, date_field, empty_state, page_header, stat_card
 from ..context import AppContext
 from ..theme import EXPENSE_COLOR, GAP, INCOME_COLOR, SEED_COLOR, WARNING_COLOR, fs
+from .loan_payment import LoanSplitFields
 from .text_alerts import TextAlertsDialog
 
 REMINDER_CHOICES = (0, 1, 2, 3, 5, 7, 14)
@@ -228,6 +230,12 @@ class MarkPaidDialog:
         self._candidate_by_id: dict[str, MatchCandidate] = {}
         self._saving = False
         self._closed = False
+        loan_target = (
+            ctx.repo.get_account(bill.pay_to_account_id)
+            if bill.pay_to_account_id is not None
+            else None
+        )
+        self.is_loan_bill = loan_target is not None and loan_target.kind is AccountKind.LOAN
         sources = [a for a in ctx.repo.list_accounts() if a.id != bill.pay_to_account_id]
         amount = ctx.repo.amount_due(bill)
         self.amount = ft.TextField(
@@ -247,6 +255,18 @@ class MarkPaidDialog:
             options=[ft.DropdownOption(key=str(a.id), text=f"{a.name} ({a.kind.label})") for a in sources],
             value=str(bill.account_id) if any(a.id == bill.account_id for a in sources) else None,
             on_select=self._account_changed,
+        )
+        self.split = (
+            LoanSplitFields(
+                ctx.repo.list_categories(),
+                lambda: self.amount.value,
+                on_change=self._split_changed,
+                interest_estimator=self._estimated_interest,
+                escrow_estimator=self._escrow_estimate,
+                initial_extra_cents=self._plan_extra(),
+            )
+            if self.is_loan_bill
+            else None
         )
         self.confirmation = ft.TextField(
             label="Confirmation number (optional)",
@@ -287,24 +307,33 @@ class MarkPaidDialog:
                 spacing=6,
             ),
         )
-        target = f"to {bill.pay_to_account_name} (transfer)" if bill.is_card_payment else f"as {bill.category_name} expense"
+        target = (
+            f"to {bill.pay_to_account_name} (loan payment)"
+            if self.is_loan_bill
+            else (
+                f"to {bill.pay_to_account_name} (transfer)"
+                if bill.is_card_payment
+                else f"as {bill.category_name} expense"
+            )
+        )
+        self.error = ft.Text("", size=fs(13), color=EXPENSE_COLOR, visible=False)
         self.save_button = ft.FilledButton(
             content="Mark paid", icon=ft.Icons.CHECK, on_click=self._save
         )
+        content: list[ft.Control] = [
+            ft.Text(f"Due {bill.next_due:%b %d, %Y}. Records the payment {target}.", size=fs(13), color=ft.Colors.ON_SURFACE_VARIANT),
+            self.amount,
+        ]
+        if self.split is not None:
+            content.append(self.split.control)
+        content += [self.date, self.account, self.confirmation, self.error, self.match_panel]
         self.dialog = ft.AlertDialog(
             modal=True,
             title=ft.Text(f"Pay {bill.name}"),
             content=ft.Container(
-                width=420,
+                width=460,
                 content=ft.Column(
-                    [
-                        ft.Text(f"Due {bill.next_due:%b %d, %Y}. Records the payment {target}.", size=fs(13), color=ft.Colors.ON_SURFACE_VARIANT),
-                        self.amount,
-                        self.date,
-                        self.account,
-                        self.confirmation,
-                        self.match_panel,
-                    ],
+                    content,
                     spacing=14,
                     tight=True,
                     horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
@@ -321,6 +350,83 @@ class MarkPaidDialog:
 
     def open(self) -> None:
         self.ctx.page.show_dialog(self.dialog)
+
+    def _estimated_interest(self) -> int | None:
+        """Interest for one month on the linked loan, for prefilling the split."""
+        if not self.is_loan_bill or self.bill.pay_to_account_id is None:
+            return None
+        debt = next(
+            (
+                debt
+                for debt in self.ctx.repo.list_debts()
+                if debt.account_id == self.bill.pay_to_account_id
+            ),
+            None,
+        )
+        if debt is not None:
+            summary = self.ctx.service.debt_summary(debt.id)
+            return monthly_interest_cents(summary.balance_cents, summary.apr_bps)
+        account = self.ctx.repo.get_account(self.bill.pay_to_account_id)
+        if account is None:
+            return None
+        owed = next(
+            (
+                balance.owed_cents
+                for balance in self.ctx.repo.account_balances()
+                if balance.account.id == account.id
+            ),
+            0,
+        )
+        return monthly_interest_cents(owed, account.apr_bps or 0)
+
+    def _plan_extra(self) -> int:
+        """This bill's loan share of the Debts payoff plan's shared extra."""
+        if not self.is_loan_bill or self.bill.pay_to_account_id is None:
+            return 0
+        debt = next(
+            (
+                debt
+                for debt in self.ctx.repo.list_debts()
+                if debt.account_id == self.bill.pay_to_account_id
+            ),
+            None,
+        )
+        if debt is None:
+            return 0
+        allocation = self.ctx.service.debt_extra_allocation(
+            self.ctx.service.debt_plan_extra(),
+            self.ctx.service.debt_plan_strategy(),
+        )
+        return allocation.get(debt.id, 0)
+
+    def _payment_date(self) -> date:
+        try:
+            return parse_date(self.date.value)
+        except ValueError:
+            return date.today()
+
+    def _escrow_estimate(self, total_cents: int) -> int | None:
+        if not self.is_loan_bill or self.bill.pay_to_account_id is None:
+            return None
+        debt = next(
+            (
+                debt
+                for debt in self.ctx.repo.list_debts()
+                if debt.account_id == self.bill.pay_to_account_id
+            ),
+            None,
+        )
+        if debt is None:
+            return None
+        summary = self.ctx.service.debt_summary(debt.id)
+        return escrow_from_amortization(
+            total_cents,
+            summary.balance_cents,
+            summary.apr_bps,
+            summary.maturity_date,
+            self._payment_date(),
+            pi_payment_cents=summary.pi_payment_cents,
+        )
 
     # ---------- match panel ----------
     def _search_values(self) -> tuple[int, date, int] | None:
@@ -348,6 +454,12 @@ class MarkPaidDialog:
         self.match_group.content.controls = []
         self.match_group.value = None
         self.match_panel.visible = False
+        if self.split is not None and (
+            self.split.non_principal_cents() > 0 or self.split.has_extra()
+        ):
+            # A split records several rows, so a single existing transaction cannot stand in.
+            self._set_use_existing(False)
+            return
 
         values = self._search_values()
         if values is None:
@@ -427,6 +539,13 @@ class MarkPaidDialog:
 
     def _value_changed(self, _: ft.Event | None = None) -> None:
         """Amount or date edits change what can match; recompute from the fields as typed."""
+        if self.split is not None:
+            self.split.refresh()
+        self._refresh_candidates(auto_select=False)
+
+    def _split_changed(self) -> None:
+        """Interest or escrow edits can rule out reusing a single existing transaction."""
+        self.error.visible = False
         self._refresh_candidates(auto_select=False)
 
     def _account_changed(self, _: ft.Event | None = None) -> None:
@@ -451,6 +570,10 @@ class MarkPaidDialog:
         if self._saving or self._closed:
             return
         valid = True
+        self.error.visible = False
+        if self.split is not None:
+            self.split.interest_category.error_text = None
+            self.split.escrow_category.error_text = None
         try:
             amount = parse_money(self.amount.value)
             self.amount.error = None
@@ -468,6 +591,25 @@ class MarkPaidDialog:
         if not valid:
             self.dialog.update()
             return
+        interest = escrow = 0
+        interest_category = escrow_category = None
+        if self.split is not None:
+            try:
+                interest, escrow, extra = self.split.amounts(amount)
+            except ValueError as exc:
+                self.error.value = str(exc)
+                self.error.visible = True
+                self._refresh_ui()
+                return
+            interest_category, escrow_category = self.split.category_ids()
+            if interest and interest_category is None:
+                self.split.interest_category.error_text = "Choose a category"
+                self._refresh_ui()
+                return
+            if escrow and escrow_category is None:
+                self.split.escrow_category.error_text = "Choose a category"
+                self._refresh_ui()
+                return
         self._saving = True
         self.save_button.disabled = True
         self._refresh_ui()
@@ -477,7 +619,19 @@ class MarkPaidDialog:
             else None
         )
         try:
-            if existing_id is not None:
+            if self.split is not None and (interest or escrow or extra):
+                self.ctx.repo.mark_bill_paid_split(
+                    self.bill.id,
+                    paid_on=paid_on,
+                    principal_cents=amount - interest - escrow + extra,
+                    interest_cents=interest,
+                    escrow_cents=escrow,
+                    interest_category_id=interest_category,
+                    escrow_category_id=escrow_category,
+                    account_id=int(self.account.value),
+                    confirmation_number=self.confirmation.value,
+                )
+            elif existing_id is not None:
                 self.ctx.repo.mark_bill_paid(
                     self.bill.id,
                     paid_on=paid_on,

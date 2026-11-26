@@ -112,6 +112,8 @@ tests/             data-layer and UI editor tests
 3. When you pay the bill, click **Pay card** (or add a **Transfer** from checking to the card). Checking goes down and the amount owed goes down. Your spending doesn't change, because you already counted it when you made the purchases.
 4. Each month, record the **minimum payment** printed on the card's statement — from the card's **Minimum** row, or while using **Check balance**. The card shows whether that month's minimum has been paid: payments into the card are matched oldest-unpaid first, so a payment made the following month still counts, and anything above a minimum rolls into the next recorded month.
 
+A credit card or loan account also records its **APR** and **loan type**: Revolving, Installment, Same as cash, or Other. For **Same as cash**, enter the **promo APR** and **promo end date**; the account card shows the promo rate, its end date, and the standard rate afterward. The account is the source of truth: linking a debt copies the debt's APR onto an account that has none, and changing the account APR updates the linked debt's payoff rate.
+
 Existing databases are upgraded automatically: transactions recorded before accounts existed are assigned to a **Checking** account.
 
 ## Savings goals
@@ -147,8 +149,13 @@ Use the **Debts** page to track what you owe and see how different monthly payme
 To track a mortgage, auto, student, or personal loan alongside your other accounts, create an account with the **Loan** kind and enter the amount owed as its opening balance.
 
 - Link a debt to the loan account to make the debt's balance follow the account's live amount owed, just like a linked credit card.
-- Pay the loan with **Log payment** on the debt's card, **Pay loan** on the Accounts page, or a bill whose target is the loan account. Each payment is a transfer into the loan, so the owed balance drops without counting it as spending.
-- Loan payments are tracked as a single amount: the app does not split them into principal and interest.
+- Pay the loan with **Log payment** on the debt's card, **Pay loan** on the Accounts page, or a bill whose target is the loan account.
+- **Log payment** and a loan bill's **Mark paid** split a payment into **principal**, **interest**, and **escrow**. Principal is a transfer into the loan, so the unpaid principal drops by that part only; interest and escrow are expenses. Leave interest and escrow at zero to record a principal-only payment.
+- **Extra principal** is separate from the scheduled payment. It reduces the loan in full and is neither interest nor escrow. The Debts page's payoff plan prefills each debt with its share of the plan's first-month extra; when the plan's first target is nearly paid off, the unused extra rolls to the next debt. The dialog shows the resulting **Principal** and **Total cash**.
+- The plan's **extra** and **strategy** are remembered between sessions. A loan bill's **Mark paid** uses the same first-month split, so the Bills and Debts pages agree.
+- The **Interest** field starts with an estimate of one month's interest — current balance × APR ÷ 12. Use **Estimate interest** to recompute it; replace it with the figure on your statement for an exact match. The estimate does not include the servicer's day-count.
+- A mortgage can also store its **Maturity date** in the debt editor (for example `2046-04-01`) and, optionally, its **Principal & interest payment**. The payment dialog then computes the scheduled P&I from the current balance, APR and remaining payments, and adds **Escrow = total payment − scheduled P&I**. With the interest estimate, that gives the scheduled principal. The escrow is filled automatically; typing your own escrow stops the automatic replacement, and **Auto-fill escrow** turns it back on.
+- The split defaults to **Mortgage interest** for interest and **Escrow** for escrow when those categories exist; otherwise it uses **Housing** and **Taxes** (or the first expense category). You can choose another category in the dialog.
 
 ### Real estate and mortgages
 
@@ -160,12 +167,15 @@ A property is an account whose balance is its **market value**, and its mortgage
 
 The property's account card shows the market value, mortgage owed, equity, and — when you record it — the original principal. The debt card shows the same linked property and equity. If a mortgage has a property but is not linked to a Loan account, its balance is not part of account-based net worth, and the debt card says so.
 
+Mortgage payments use the principal/interest/escrow split described under [Loan accounts](#loan-accounts), so the equity figure moves by the principal portion only.
+
 ### Logging payments
 
 Every payment moves real money and appears on the **Transactions** page.
 
 - A **standalone debt** payment is an **expense** from the funding account you choose, categorized as **Debt payments** by default. It lowers the debt's balance, and the amount cannot exceed the current balance.
 - A **linked card** payment is a **transfer** from the funding account into the card, so the card's amount owed goes down. Paying more than the balance is allowed and leaves a credit on the card, like any other card payment.
+- A **linked loan** payment is split into principal, interest, and escrow. The principal is a transfer into the loan and the other two are expenses; only the principal appears in the debt's **History**, while all three appear on the **Transactions** page. Net worth falls by interest plus escrow, not by the whole payment.
 - Payments logged from a debt's **Log payment** dialog are tagged to that debt and listed in its **History**. Card payments made elsewhere (for example **Pay card** on the Accounts page) still change the card's balance but are not listed in the debt's history.
 - The payment date cannot be in the future, and a liability account cannot fund a payment.
 

@@ -74,6 +74,22 @@ class AccountKind(StrEnum):
         }[self]
 
 
+class LoanType(StrEnum):
+    REVOLVING = "revolving"
+    INSTALLMENT = "installment"
+    SAME_AS_CASH = "same_as_cash"
+    OTHER = "other"
+
+    @property
+    def label(self) -> str:
+        return {
+            LoanType.REVOLVING: "Revolving",
+            LoanType.INSTALLMENT: "Installment",
+            LoanType.SAME_AS_CASH: "Same as cash",
+            LoanType.OTHER: "Other",
+        }[self]
+
+
 class DebtKind(StrEnum):
     CREDIT_CARD = "credit_card"
     AUTO = "auto"
@@ -103,12 +119,30 @@ class Account:
     id: int | None = None
     number_last4: str | None = None
     liquid: bool | None = None  # None -> the kind's default; liabilities are always non-liquid
+    apr_bps: int | None = None  # annual percentage rate, for liability accounts
+    loan_type: LoanType | None = None  # revolving, installment, same-as-cash, other
+    promo_apr_bps: int | None = None  # rate during a same-as-cash promotion
+    promo_end_date: date | None = None  # when a same-as-cash promotion ends
 
     def __post_init__(self) -> None:
         if self.kind.is_liability:
             self.liquid = False
-        elif self.liquid is None:
-            self.liquid = self.kind.default_liquid
+            if self.loan_type is None:
+                self.loan_type = (
+                    LoanType.REVOLVING
+                    if self.kind is AccountKind.CREDIT_CARD
+                    else LoanType.INSTALLMENT
+                )
+            if self.loan_type is not LoanType.SAME_AS_CASH:
+                self.promo_apr_bps = None
+                self.promo_end_date = None
+        else:
+            if self.liquid is None:
+                self.liquid = self.kind.default_liquid
+            self.apr_bps = None
+            self.loan_type = None
+            self.promo_apr_bps = None
+            self.promo_end_date = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -170,6 +204,8 @@ class Debt:
     original_balance_cents: int | None = None
     account_id: int | None = None  # set only for a debt linked to a credit card or loan
     property_account_id: int | None = None  # real estate account securing this debt, if any
+    maturity_date: date | None = None  # mortgage maturity, used to derive the scheduled P&I
+    pi_payment_cents: int | None = None  # principal-and-interest payment, optional override
     id: int | None = None
 
     @property

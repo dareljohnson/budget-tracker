@@ -1532,6 +1532,8 @@ class TestEditors(unittest.TestCase):
 
         category = next(c for c in self.repo.list_categories() if c.type is TransactionType.EXPENSE)
         editor = BillEditor(self.ctx, None)
+        self.assertTrue(editor.reduced_until.expand)
+        self.assertTrue(editor.amount_after.expand)
         editor.name.value = "Rent"
         editor.amount.value = "1000.00"
         editor.category.value = str(category.id)
@@ -1587,6 +1589,63 @@ class TestEditors(unittest.TestCase):
         ))
         dialog = DebtPaymentDialog(self.ctx, self.ctx.service.debt_summary(debt.id))
         self.assertEqual(dialog.amount.value, "1055.49")
+
+    def test_debts_plan_notes_a_later_minimum(self):
+        from budget_tracker.models import DebtKind
+        from budget_tracker.ui.views.debts import DebtsView
+
+        self.ctx.service.create_debt(
+            "Mortgage",
+            DebtKind.MORTGAGE,
+            100_000,
+            365,
+            10_000,
+            minimum_after_cents=75_618,
+            minimum_after_date=date(2029, 1, 1),
+        )
+        view = DebtsView(self.ctx)
+        texts = self._texts(view.plan_panel)
+        self.assertTrue(
+            any(
+                "debt payment (P&I) changes to $756.18 from January 2029" in text
+                for text in texts
+            )
+        )
+
+    def test_debts_plan_notes_the_bill_cash_step(self):
+        from budget_tracker.models import (
+            Account,
+            AccountKind,
+            Bill,
+            BillFrequency,
+            DebtKind,
+        )
+        from budget_tracker.ui.views.debts import DebtsView
+
+        loan = self.repo.add_account(Account("Mortgage", AccountKind.LOAN, -10_000_000))
+        self.ctx.service.create_debt(
+            "Mortgage", DebtKind.MORTGAGE, 0, 365, 56_713, account_id=loan.id
+        )
+        self.repo.add_bill(Bill(
+            "Mortgage - Chase",
+            105_549,
+            BillFrequency.MONTHLY,
+            date(2028, 12, 1),
+            self.accts["Checking"].id,
+            pay_to_account_id=loan.id,
+            anchor_day=1,
+            amount_after_cents=124_454,
+            reduced_until=date(2028, 12, 31),
+        ))
+        view = DebtsView(self.ctx)
+        texts = self._texts(view.plan_panel)
+        self.assertTrue(
+            any(
+                "Mortgage - Chase: cash payment changes to $1,244.54 from "
+                "January 2029 (currently $1,055.49)." in text
+                for text in texts
+            )
+        )
 
     def test_debts_view_splits_the_extra_across_accounts(self):
         from budget_tracker.debt_planner import DebtStrategy

@@ -719,13 +719,14 @@ class BillEditor:
             on_submit=self._save,
         )
         self.reduced_until = ft.TextField(
-            label="Reduced amount until (YYYY-MM-DD)",
+            label="Reduced until (YYYY-MM-DD)",
             hint_text="Optional; e.g. 2028-12-31",
             value=(
                 bill.reduced_until.isoformat()
                 if bill and bill.reduced_until is not None
                 else ""
             ),
+            expand=True,
         )
         self.amount_after = ft.TextField(
             label="Then amount",
@@ -737,6 +738,7 @@ class BillEditor:
                 if bill and bill.amount_after_cents is not None
                 else ""
             ),
+            expand=True,
         )
         self.frequency = ft.Dropdown(
             label="Repeats",
@@ -784,6 +786,7 @@ class BillEditor:
                     spacing=14,
                     tight=True,
                     horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
+                    scroll=ft.ScrollMode.AUTO,
                 ),
             ),
             actions=[

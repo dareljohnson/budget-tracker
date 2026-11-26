@@ -685,7 +685,7 @@ class ReportService:
                     name=summary.debt.name,
                     kind_label=summary.debt.kind.label,
                     balance_cents=summary.balance_cents,
-                    apr_bps=summary.debt.apr_bps,
+                    apr_bps=summary.apr_bps,
                     minimum_cents=summary.effective_minimum_cents,
                     interest_cents=summary.monthly_interest_cents,
                     payoff_month=plan.debt_free_month if plan.finished else None,

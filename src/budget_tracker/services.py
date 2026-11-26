@@ -17,7 +17,14 @@ from .cashflow import (
     forecast,
     income_dates,
 )
-from .debt_planner import DebtInput, DebtPlan, DebtStrategy, monthly_interest_cents, plan_payoff
+from .debt_planner import (
+    DebtInput,
+    DebtPlan,
+    DebtStrategy,
+    monthly_interest_cents,
+    next_month_extra_allocation,
+    plan_payoff,
+)
 from .formatting import month_key, shift_month
 from .matching import MatchCandidate, match_candidates as _match_candidates
 from .models import (
@@ -33,6 +40,7 @@ from .models import (
     DueBill,
     IncomeFrequency,
     IncomeSchedule,
+    LoanType,
     MonthTotal,
     MinimumPayment,
     MinimumPaymentStatus,
@@ -49,6 +57,10 @@ from .repository import Repository, RepositoryError
 from .statements import load_statement
 from .statements.model import ImportPreview, ImportRow
 from .workbook_export import export_workbook
+
+# The Debts payoff plan's extra and strategy are shared with the Bills page.
+DEBT_EXTRA_SETTING = "debt_extra_cents"
+DEBT_STRATEGY_SETTING = "debt_strategy"
 
 
 RECEIPT_CATEGORY_KEYWORDS: list[tuple[tuple[str, ...], str]] = [
@@ -170,8 +182,12 @@ class DebtSummary:
     monthly_interest_cents: int
     minimum_below_interest: bool
     account_name: str | None
+    apr_bps: int = 0
+    loan_type: LoanType | None = None
     property_name: str | None = None
     property_value_cents: int | None = None
+    maturity_date: date | None = None
+    pi_payment_cents: int | None = None
 
     @property
     def property_equity_cents(self) -> int | None:
@@ -983,6 +999,19 @@ class BudgetService:
         return f"budget_tracker_{(now or datetime.now()):%Y%m%d_%H%M%S}.xlsx"
 
     # ---------- debts ----------
+    def _linked_apr(self, account_id: int | None, apr_bps: int) -> int:
+        """The linked account's APR wins; copy the debt's rate onto an account that has none."""
+        if account_id is None:
+            return apr_bps
+        account = self.repo.get_account(account_id)
+        if account is None:
+            return apr_bps
+        if account.apr_bps is not None:
+            return account.apr_bps
+        account.apr_bps = apr_bps
+        self.repo.update_account(account)
+        return apr_bps
+
     def _validate_debt_record(
         self,
         name: str,
@@ -994,6 +1023,8 @@ class BudgetService:
         account_id: int | None,
         *,
         property_account_id: int | None = None,
+        maturity_date: date | None = None,
+        pi_payment_cents: int | None = None,
         debt_id: int | None = None,
     ) -> None:
         name = (name or "").strip()
@@ -1011,6 +1042,8 @@ class BudgetService:
             raise RepositoryError("Minimum payment cannot be negative")
         if original_balance_cents is not None and original_balance_cents < 0:
             raise RepositoryError("Original balance cannot be negative")
+        if pi_payment_cents is not None and pi_payment_cents <= 0:
+            raise RepositoryError("Principal and interest payment must be greater than zero")
         if account_id is not None:
             account = self.repo.get_account(account_id)
             if account is None or not account.kind.is_liability:
@@ -1046,12 +1079,18 @@ class BudgetService:
         else:
             balance = debt.balance_cents
         account_name = None
+        apr_bps = debt.apr_bps
+        loan_type = None
         minimum = debt.minimum_cents
         from_statement = False
         statement_month = None
         if debt.account_id is not None:
             account = self.repo.get_account(debt.account_id)
             account_name = account.name if account else None
+            if account is not None:
+                if account.apr_bps is not None:
+                    apr_bps = account.apr_bps
+                loan_type = account.loan_type
             if account is not None and account.kind is AccountKind.CREDIT_CARD:
                 status = self.current_minimum_payment(debt.account_id, as_of=as_of or date.today())
                 if status is not None:
@@ -1073,7 +1112,7 @@ class BudgetService:
                         ),
                         None,
                     )
-        interest = monthly_interest_cents(balance, debt.apr_bps)
+        interest = monthly_interest_cents(balance, apr_bps)
         return DebtSummary(
             debt=debt,
             balance_cents=balance,
@@ -1083,8 +1122,12 @@ class BudgetService:
             monthly_interest_cents=interest,
             minimum_below_interest=balance > 0 and minimum < interest,
             account_name=account_name,
+            apr_bps=apr_bps,
+            loan_type=loan_type,
             property_name=property_name,
             property_value_cents=property_value,
+            maturity_date=debt.maturity_date,
+            pi_payment_cents=debt.pi_payment_cents,
         )
 
     def list_debt_summaries(self, *, as_of: date | None = None) -> list[DebtSummary]:
@@ -1101,15 +1144,21 @@ class BudgetService:
         original_balance_cents: int | None = None,
         account_id: int | None = None,
         property_account_id: int | None = None,
+        maturity_date: date | None = None,
+        pi_payment_cents: int | None = None,
     ) -> Debt:
         balance = self._card_owed(account_id) if account_id is not None else balance_cents
         self._validate_debt_record(name, kind, balance, apr_bps, minimum_cents,
                                    original_balance_cents, account_id,
-                                   property_account_id=property_account_id)
+                                   property_account_id=property_account_id,
+                                   maturity_date=maturity_date,
+                                   pi_payment_cents=pi_payment_cents)
+        apr_bps = self._linked_apr(account_id, apr_bps)
         return self.repo.add_debt(Debt(
             name=name.strip(), kind=kind, balance_cents=balance, apr_bps=apr_bps,
             minimum_cents=minimum_cents, original_balance_cents=original_balance_cents,
             account_id=account_id, property_account_id=property_account_id,
+            maturity_date=maturity_date, pi_payment_cents=pi_payment_cents,
         ))
 
     def update_debt(
@@ -1124,6 +1173,8 @@ class BudgetService:
         original_balance_cents: int | None,
         account_id: int | None,
         property_account_id: int | None = None,
+        maturity_date: date | None = None,
+        pi_payment_cents: int | None = None,
     ) -> None:
         existing = self.repo.get_debt(debt_id)
         if existing is None:
@@ -1136,7 +1187,10 @@ class BudgetService:
             balance = balance_cents
         self._validate_debt_record(name, kind, balance, apr_bps, minimum_cents,
                                    original_balance_cents, account_id,
-                                   property_account_id=property_account_id, debt_id=debt_id)
+                                   property_account_id=property_account_id,
+                                   maturity_date=maturity_date,
+                                   pi_payment_cents=pi_payment_cents, debt_id=debt_id)
+        apr_bps = self._linked_apr(account_id, apr_bps)
         if existing.account_id is None and account_id is not None:
             # Pre-link payments are superseded by the card's live balance snapshot.
             self.repo.clear_debt_payments(debt_id)
@@ -1148,6 +1202,7 @@ class BudgetService:
             id=debt_id, name=name.strip(), kind=kind, balance_cents=balance, apr_bps=apr_bps,
             minimum_cents=minimum_cents, original_balance_cents=original_balance_cents,
             account_id=account_id, property_account_id=property_account_id,
+            maturity_date=maturity_date, pi_payment_cents=pi_payment_cents,
         ))
 
     def delete_debt(self, debt_id: int) -> None:
@@ -1208,6 +1263,88 @@ class BudgetService:
             account_id=funding.id, transfer_account_id=debt.account_id, debt_id=debt.id,
         )))
 
+    def record_loan_payment(
+        self,
+        debt_id: int,
+        funding_account_id: int,
+        total_cents: int,
+        interest_cents: int,
+        escrow_cents: int,
+        on_date: date,
+        interest_category_id: int | None = None,
+        escrow_category_id: int | None = None,
+        note: str = "",
+        *,
+        extra_principal_cents: int = 0,
+        today: date | None = None,
+    ) -> list[Transaction]:
+        """Split a loan payment: principal reduces the loan, interest and escrow are expenses."""
+        today = today or date.today()
+        debt = self.repo.get_debt(debt_id)
+        if debt is None:
+            raise RepositoryError("Debt not found")
+        if debt.account_id is None:
+            raise RepositoryError("Link this debt to a loan account first")
+        loan = self.repo.get_account(debt.account_id)
+        if loan is None or loan.kind is not AccountKind.LOAN:
+            raise RepositoryError("Split payments are only for loan accounts")
+        funding = self.repo.get_account(funding_account_id)
+        if funding is None:
+            raise RepositoryError("Select a funding account")
+        if funding.kind.is_liability:
+            raise RepositoryError("Pay from a checking, savings or cash account")
+        if funding.id == loan.id:
+            raise RepositoryError("Choose a different account to pay from")
+        if total_cents <= 0:
+            raise RepositoryError("Amount must be greater than zero")
+        if interest_cents < 0 or escrow_cents < 0:
+            raise RepositoryError("Interest and escrow cannot be negative")
+        if extra_principal_cents < 0:
+            raise RepositoryError("Extra principal cannot be negative")
+        if on_date > today:
+            raise RepositoryError("Payment date cannot be in the future")
+        principal = total_cents - interest_cents - escrow_cents + extra_principal_cents
+        if principal < 0:
+            raise RepositoryError("Interest and escrow cannot exceed the total payment")
+        if interest_cents and interest_category_id is None:
+            raise RepositoryError("Choose a category for the interest portion")
+        if escrow_cents and escrow_category_id is None:
+            raise RepositoryError("Choose a category for the escrow portion")
+        description = note.strip() or f"Payment: {debt.name}"
+        rows: list[Transaction] = []
+        if principal:
+            rows.append(Transaction(
+                amount_cents=principal,
+                type=TransactionType.TRANSFER,
+                category_id=None,
+                occurred_on=on_date,
+                description=description,
+                account_id=funding.id,
+                transfer_account_id=loan.id,
+                debt_id=debt.id,
+            ))
+        if interest_cents:
+            rows.append(Transaction(
+                amount_cents=interest_cents,
+                type=TransactionType.EXPENSE,
+                category_id=interest_category_id,
+                occurred_on=on_date,
+                description=f"Interest: {debt.name}",
+                account_id=funding.id,
+            ))
+        if escrow_cents:
+            rows.append(Transaction(
+                amount_cents=escrow_cents,
+                type=TransactionType.EXPENSE,
+                category_id=escrow_category_id,
+                occurred_on=on_date,
+                description=f"Escrow: {debt.name}",
+                account_id=funding.id,
+            ))
+        if not rows:
+            raise RepositoryError("Payment must be greater than zero")
+        return self.repo.add_transactions(rows)
+
     def _describe_transaction(self, tx: Transaction) -> Transaction:
         """Fill the display names a freshly inserted transaction does not carry yet."""
         if tx.category_id is not None:
@@ -1243,8 +1380,43 @@ class BudgetService:
             inputs, extra_cents=extra_cents, strategy=strategy, start_month=self.current_month(today)
         )
 
+    def debt_plan_extra(self) -> int:
+        """The extra-per-month setting shared by the Debts and Bills pages."""
+        try:
+            return max(0, int(self.repo.get_setting(DEBT_EXTRA_SETTING) or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    def set_debt_plan_extra(self, cents: int) -> None:
+        self.repo.set_setting(DEBT_EXTRA_SETTING, str(max(0, int(cents))))
+
+    def debt_plan_strategy(self) -> DebtStrategy:
+        try:
+            return DebtStrategy(
+                self.repo.get_setting(DEBT_STRATEGY_SETTING)
+                or DebtStrategy.AVALANCHE.value
+            )
+        except ValueError:
+            return DebtStrategy.AVALANCHE
+
+    def set_debt_plan_strategy(self, strategy: DebtStrategy) -> None:
+        self.repo.set_setting(DEBT_STRATEGY_SETTING, strategy.value)
+
     def debt_plans(self, extra_cents: int, *, today: date | None = None) -> dict[DebtStrategy, DebtPlan]:
         return {strategy: self.debt_plan(extra_cents, strategy, today=today) for strategy in DebtStrategy}
+
+    def debt_extra_allocation(
+        self, extra_cents: int, strategy: DebtStrategy, *, as_of: date | None = None
+    ) -> dict[int, int]:
+        """The plan's first-month extra for each debt, including the roll-over split."""
+        inputs = [
+            DebtInput(summary.debt, summary.balance_cents, summary.effective_minimum_cents)
+            for summary in self.list_debt_summaries(as_of=as_of)
+            if summary.balance_cents > 0
+        ]
+        return next_month_extra_allocation(
+            inputs, extra_cents=extra_cents, strategy=strategy
+        )
 
     def debt_extra_comparison(
         self, strategy: DebtStrategy, amounts: list[int], *, today: date | None = None

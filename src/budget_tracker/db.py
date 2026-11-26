@@ -332,6 +332,33 @@ MIGRATIONS: list[str] = [
     ALTER TABLE debts ADD COLUMN property_account_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL;
     CREATE INDEX ix_debts_property ON debts(property_account_id) WHERE property_account_id IS NOT NULL;
     """,
+    # v15: APR, loan type and same-as-cash promos on liability accounts. The account is the
+    # source of truth; linked debts keep their own apr_bps for the payoff planner and are
+    # synchronised when the account is saved. Existing linked-debt rates are copied over.
+    """
+    ALTER TABLE accounts ADD COLUMN apr_bps INTEGER;
+    ALTER TABLE accounts ADD COLUMN loan_type TEXT;
+    ALTER TABLE accounts ADD COLUMN promo_apr_bps INTEGER;
+    ALTER TABLE accounts ADD COLUMN promo_end_date TEXT;
+
+    UPDATE accounts SET apr_bps = (
+        SELECT d.apr_bps FROM debts d WHERE d.account_id = accounts.id
+    )
+    WHERE kind IN ('credit_card','loan')
+      AND EXISTS (SELECT 1 FROM debts d WHERE d.account_id = accounts.id);
+
+    UPDATE accounts SET loan_type = CASE
+        WHEN kind = 'credit_card' THEN 'revolving'
+        WHEN kind = 'loan' THEN 'installment'
+    END
+    WHERE kind IN ('credit_card','loan') AND loan_type IS NULL;
+    """,
+    # v16: mortgage amortization inputs. The maturity date lets the payment dialog derive the
+    # scheduled principal-and-interest payment; the optional P&I payment overrides it.
+    """
+    ALTER TABLE debts ADD COLUMN maturity_date TEXT;
+    ALTER TABLE debts ADD COLUMN pi_payment_cents INTEGER;
+    """,
 ]
 
 FOREIGN_KEYS_OFF_MIGRATIONS = {8, 14}

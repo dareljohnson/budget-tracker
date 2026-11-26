@@ -86,7 +86,7 @@ class TestMigrationV14(unittest.TestCase):
 
         migrate(conn)
 
-        self.assertEqual(schema_version(conn), 14)
+        self.assertEqual(schema_version(conn), len(MIGRATIONS))
         self.assertEqual(conn.execute("PRAGMA foreign_key_check").fetchall(), [])
         self.assertEqual(conn.execute("PRAGMA foreign_keys").fetchone()[0], 1)
         self.assertEqual(

@@ -6,7 +6,12 @@ from datetime import date
 
 import flet as ft
 
-from ...debt_planner import DebtPlan, DebtStrategy
+from ...debt_planner import (
+    DebtPlan,
+    DebtStrategy,
+    escrow_from_amortization,
+    monthly_interest_cents,
+)
 from ...formatting import (
     format_money,
     format_percent,
@@ -23,6 +28,7 @@ from ...services import DebtSummary
 from ..components import card, confirm_dialog, date_field, empty_state, page_header, section_title
 from ..context import AppContext
 from ..theme import EXPENSE_COLOR, GAP, INCOME_COLOR, RADIUS, SEED_COLOR, fs
+from .loan_payment import LoanSplitFields
 
 EXTRA_PRESETS = [0, 5_000, 10_000, 20_000]
 
@@ -68,9 +74,9 @@ class DebtsView:
         # body, so the cards (and the empty state) never appear. Cards size to their content.
         self.grid = ft.ResponsiveRow(spacing=GAP, run_spacing=GAP)
         self.plan_panel = ft.Column(spacing=GAP)
-        self.extra_cents = 0
+        self.extra_cents = ctx.service.debt_plan_extra()
         self.custom_text = ""
-        self.strategy = DebtStrategy.AVALANCHE
+        self.strategy = ctx.service.debt_plan_strategy()
         self.schedule_limit = 24
         self._payoff_months: dict[int, int] = {}
         self._start_month = ctx.service.current_month()
@@ -127,14 +133,24 @@ class DebtsView:
             self.extra_cents = parse_money(self.custom_text)
         except ValueError:
             pass
+        self.ctx.service.set_debt_plan_extra(self.extra_cents)
         self.refresh()
         self.ctx.page.update()
 
     def _set_extra(self, cents: int) -> None:
         self.extra_cents = max(0, int(cents))
+        self.ctx.service.set_debt_plan_extra(self.extra_cents)
         self.schedule_limit = 24
         self.refresh()
         self.ctx.page.update()
+
+    def _plan_extra_for(self, debt_id: int) -> int:
+        """This debt's share of the plan's first-month extra, including roll-over from a paid-off target."""
+        if self.extra_cents <= 0:
+            return 0
+        return self.ctx.service.debt_extra_allocation(
+            self.extra_cents, self.strategy
+        ).get(debt_id, 0)
 
     def _extra_selected(self, event: ft.Event[ft.Dropdown]) -> None:
         value = event.control.value
@@ -147,6 +163,7 @@ class DebtsView:
 
     def _select_strategy(self, strategy: DebtStrategy) -> None:
         self.strategy = strategy
+        self.ctx.service.set_debt_plan_strategy(strategy)
         self.schedule_limit = 24
         self.refresh()
         self.ctx.page.update()
@@ -439,7 +456,7 @@ class DebtsView:
                 [
                     summary.debt.name,
                     format_money(summary.balance_cents),
-                    format_percent(summary.debt.apr_bps),
+                    format_percent(summary.apr_bps),
                     format_money(summary.effective_minimum_cents),
                 ],
                 widths,
@@ -484,9 +501,12 @@ class DebtsView:
 
     def _debt_card(self, summary: DebtSummary, payoff_month: int | None = None) -> ft.Container:
         debt = summary.debt
+        rate = f"APR {format_percent(summary.apr_bps)}"
+        if summary.loan_type is not None:
+            rate = f"{summary.loan_type.label} • {rate}"
         details = [
             ft.Text(f"{format_money(summary.balance_cents)} owed", size=fs(20), weight=ft.FontWeight.W_700),
-            ft.Text(f"APR {format_percent(debt.apr_bps)}", size=fs(13), color=ft.Colors.ON_SURFACE_VARIANT),
+            ft.Text(rate, size=fs(13), color=ft.Colors.ON_SURFACE_VARIANT),
             ft.Text(
                 f"Minimum {format_money(summary.effective_minimum_cents)}"
                 + (f" · {month_label(summary.statement_month)} statement"
@@ -538,7 +558,9 @@ class DebtsView:
             details.append(ft.Text("The minimum does not cover monthly interest", size=fs(13), color=EXPENSE_COLOR))
         actions = [
             ft.FilledTonalButton(content="Log payment", icon=ft.Icons.PAYMENT,
-                                 on_click=lambda _: DebtPaymentDialog(self.ctx, summary).open()),
+                                 on_click=lambda _: DebtPaymentDialog(
+                                     self.ctx, summary, self._plan_extra_for(summary.debt.id)
+                                 ).open()),
             ft.OutlinedButton(content="History", icon=ft.Icons.HISTORY,
                               on_click=lambda _: DebtHistoryDialog(self.ctx, debt).open()),
             ft.OutlinedButton(content="Edit", icon=ft.Icons.EDIT_OUTLINED,
@@ -587,6 +609,16 @@ class DebtEditor:
             if a.kind in (AccountKind.CREDIT_CARD, AccountKind.LOAN) and a.id not in linked
         ]
         properties = [a for a in ctx.repo.list_accounts() if a.kind.is_real_estate]
+        linked_account = (
+            ctx.repo.get_account(debt.account_id)
+            if debt is not None and debt.account_id is not None
+            else None
+        )
+        initial_apr = (
+            linked_account.apr_bps
+            if linked_account is not None and linked_account.apr_bps is not None
+            else (debt.apr_bps if debt is not None else None)
+        )
         self.name = ft.TextField(
             label="Name",
             value=debt.name if debt else "",
@@ -601,7 +633,16 @@ class DebtEditor:
         self.kind.on_select = lambda _: self._kind_selected()
         self.balance = ft.TextField(label="Balance owed", prefix_icon=ft.Icons.ATTACH_MONEY,
                                     value=f"{debt.balance_cents / 100:.2f}" if debt else "")
-        self.apr = ft.TextField(label="APR (%)", value=format_percent(debt.apr_bps).rstrip("%") if debt else "")
+        self.apr = ft.TextField(
+            label="APR (%)",
+            value=format_percent(initial_apr).rstrip("%") if initial_apr is not None else "",
+        )
+        self.apr_note = ft.Text(
+            "APR comes from the linked account.",
+            size=fs(12),
+            color=ft.Colors.ON_SURFACE_VARIANT,
+            visible=False,
+        )
         self.minimum = ft.TextField(label="Minimum / month", prefix_icon=ft.Icons.ATTACH_MONEY,
                                     value=f"{debt.minimum_cents / 100:.2f}" if debt and debt.minimum_cents else "")
         self.minimum_note = ft.Text("", size=fs(12), color=ft.Colors.ON_SURFACE_VARIANT, visible=False)
@@ -609,6 +650,25 @@ class DebtEditor:
                                      prefix_icon=ft.Icons.ATTACH_MONEY,
                                      value=(f"{debt.original_balance_cents / 100:.2f}"
                                             if debt and debt.original_balance_cents is not None else ""))
+        self.maturity = ft.TextField(
+            label="Maturity date (YYYY-MM-DD)",
+            hint_text="For example 2046-04-01",
+            value=(
+                debt.maturity_date.isoformat()
+                if debt and debt.maturity_date is not None
+                else ""
+            ),
+        )
+        self.pi_payment = ft.TextField(
+            label="Principal & interest payment (optional)",
+            hint_text="Leave blank to calculate from balance, APR and maturity",
+            prefix_icon=ft.Icons.ATTACH_MONEY,
+            value=(
+                f"{debt.pi_payment_cents / 100:.2f}"
+                if debt and debt.pi_payment_cents is not None
+                else ""
+            ),
+        )
         self.link = ft.Dropdown(
             label="Link to credit-card or loan account",
             options=[ft.DropdownOption(key="none", text="None")]
@@ -639,9 +699,11 @@ class DebtEditor:
             modal=True,
             title=ft.Text("Edit Debt" if debt else "New Debt"),
             content=ft.Container(width=460, content=ft.Column(
-                [self.name, self.kind, self.balance, self.apr, self.minimum, self.minimum_note,
-                 self.original, self.link, self.property, self.property_note, self.error],
-                spacing=14, tight=True, horizontal_alignment=ft.CrossAxisAlignment.STRETCH)),
+                [self.name, self.kind, self.balance, self.apr, self.apr_note, self.minimum,
+                 self.minimum_note, self.original, self.maturity, self.pi_payment, self.link,
+                 self.property, self.property_note, self.error],
+                spacing=14, tight=True, horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
+                scroll=ft.ScrollMode.AUTO)),
             actions=[
                 ft.TextButton(content="Cancel", on_click=lambda _: ctx.page.pop_dialog()),
                 ft.FilledButton(content="Save", icon=ft.Icons.CHECK, on_click=self._save),
@@ -663,6 +725,8 @@ class DebtEditor:
         visible = self.kind.value == DebtKind.MORTGAGE.value
         self.property.visible = visible
         self.property_note.visible = visible
+        self.maturity.visible = visible
+        self.pi_payment.visible = visible
 
     def _stored_minimum_value(self) -> str:
         if self.debt is not None and self.debt.minimum_cents:
@@ -708,6 +772,13 @@ class DebtEditor:
                 self.minimum.value = self._stored_minimum_value()
             self.minimum.disabled = False
             self.minimum_note.visible = False
+        if account is not None and account.apr_bps is not None:
+            self.apr.value = format_percent(account.apr_bps).rstrip("%")
+            self.apr.disabled = True
+            self.apr_note.visible = True
+        else:
+            self.apr.disabled = False
+            self.apr_note.visible = False
         self._property_visibility()
 
     def open(self) -> None:
@@ -722,7 +793,15 @@ class DebtEditor:
         self.ctx.page.update()
 
     def _save(self, _: ft.Event) -> None:
-        for field in (self.name, self.balance, self.apr, self.minimum, self.original):
+        for field in (
+            self.name,
+            self.balance,
+            self.apr,
+            self.minimum,
+            self.original,
+            self.maturity,
+            self.pi_payment,
+        ):
             field.error = None
         self.error.visible = False
         valid = True
@@ -775,6 +854,29 @@ class DebtEditor:
             if kind is DebtKind.MORTGAGE and self.property.value not in (None, "", "none")
             else None
         )
+        maturity = None
+        pi_payment = None
+        if kind is DebtKind.MORTGAGE:
+            try:
+                maturity = (
+                    parse_date(self.maturity.value)
+                    if (self.maturity.value or "").strip()
+                    else None
+                )
+            except ValueError as exc:
+                self.maturity.error = str(exc)
+                valid = False
+            try:
+                pi_payment = (
+                    parse_signed_money(self.pi_payment.value)
+                    if (self.pi_payment.value or "").strip()
+                    else None
+                )
+                if pi_payment is not None and pi_payment <= 0:
+                    raise ValueError("Payment must be greater than zero")
+            except ValueError as exc:
+                self.pi_payment.error = str(exc)
+                valid = False
         if not valid:
             self._refresh_dialog()
             return
@@ -783,13 +885,15 @@ class DebtEditor:
                 self.ctx.service.update_debt(
                     self.debt.id, name=name, kind=kind, balance_cents=balance, apr_bps=apr,
                     minimum_cents=minimum, original_balance_cents=original, account_id=link,
-                    property_account_id=property_link,
+                    property_account_id=property_link, maturity_date=maturity,
+                    pi_payment_cents=pi_payment,
                 )
             else:
                 self.ctx.service.create_debt(
                     name, kind, balance, apr, minimum,
                     original_balance_cents=original, account_id=link,
-                    property_account_id=property_link,
+                    property_account_id=property_link, maturity_date=maturity,
+                    pi_payment_cents=pi_payment,
                 )
         except RepositoryError as exc:
             self.error.value = str(exc)
@@ -804,17 +908,22 @@ class DebtEditor:
 class DebtPaymentDialog:
     """Record a real payment against a debt, moving money from a funding account."""
 
-    def __init__(self, ctx: AppContext, summary: DebtSummary) -> None:
+    def __init__(self, ctx: AppContext, summary: DebtSummary, extra_cents: int = 0) -> None:
         self.ctx = ctx
         self.summary = summary
         debt = summary.debt
+        loan_account = ctx.repo.get_account(debt.account_id) if debt.account_id is not None else None
+        self.is_loan_payment = loan_account is not None and loan_account.kind is AccountKind.LOAN
         self.amount = ft.TextField(
-            label="Amount",
+            label="Scheduled payment" if self.is_loan_payment else "Amount",
             prefix_icon=ft.Icons.ATTACH_MONEY,
             keyboard_type=ft.KeyboardType.NUMBER,
             autofocus=True,
             on_submit=self._save,
+            on_change=lambda _: self._total_changed(),
         )
+        if self.is_loan_payment and summary.effective_minimum_cents:
+            self.amount.value = f"{summary.effective_minimum_cents / 100:.2f}"
         funding = [
             a for a in ctx.repo.list_accounts()
             if not a.kind.is_liability and a.id != debt.account_id
@@ -828,9 +937,15 @@ class DebtPaymentDialog:
             options=[ft.DropdownOption(key=str(a.id), text=f"{a.name} ({a.kind.label})") for a in funding],
             value=str(default_funding.id) if default_funding else None,
         )
-        self.date = date_field(ctx.page, "Payment date", date.today())
+        self.date = date_field(
+            ctx.page,
+            "Payment date",
+            date.today(),
+            on_change=lambda _: self._total_changed(),
+        )
         self.note = ft.TextField(label="Note", hint_text="Optional")
-        categories = [c for c in ctx.repo.list_categories() if c.type is TransactionType.EXPENSE]
+        all_categories = ctx.repo.list_categories()
+        categories = [c for c in all_categories if c.type is TransactionType.EXPENSE]
         preferred = next(
             (c for c in categories if c.name == "Debt payments"),
             categories[0] if categories else None,
@@ -841,34 +956,71 @@ class DebtPaymentDialog:
             value=str(preferred.id) if preferred else None,
             visible=debt.account_id is None,
         )
+        self.split = (
+            LoanSplitFields(
+                all_categories,
+                lambda: self.amount.value,
+                on_change=self._split_changed,
+                interest_estimator=lambda: monthly_interest_cents(
+                    summary.balance_cents, summary.apr_bps
+                ),
+                escrow_estimator=self._escrow_estimate,
+                initial_extra_cents=extra_cents,
+            )
+            if self.is_loan_payment
+            else None
+        )
         self.error = ft.Text("", size=fs(13), color=EXPENSE_COLOR, visible=False)
 
+        content: list[ft.Control] = [
+            ft.Text(
+                f"{format_money(summary.balance_cents)} owed.",
+                size=fs(13),
+                color=ft.Colors.ON_SURFACE_VARIANT,
+            ),
+            self.amount,
+        ]
+        if self.split is not None:
+            content.append(self.split.control)
+        content += [self.funding, self.date, self.note, self.category, self.error]
         self.dialog = ft.AlertDialog(
             modal=True,
             title=ft.Text(f"Log payment — {debt.name}"),
-            content=ft.Container(width=420, content=ft.Column(
-                [
-                    ft.Text(
-                        f"{format_money(summary.balance_cents)} owed.",
-                        size=fs(13),
-                        color=ft.Colors.ON_SURFACE_VARIANT,
-                    ),
-                    self.amount,
-                    self.funding,
-                    self.date,
-                    self.note,
-                    self.category,
-                    self.error,
-                ],
+            content=ft.Container(width=460, content=ft.Column(
+                content,
                 spacing=14,
                 tight=True,
                 horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
+                scroll=ft.ScrollMode.AUTO,
             )),
             actions=[
                 ft.TextButton(content="Cancel", on_click=lambda _: ctx.page.pop_dialog()),
                 ft.FilledButton(content="Record payment", icon=ft.Icons.PAYMENT, on_click=self._save),
             ],
             actions_alignment=ft.MainAxisAlignment.END,
+        )
+
+    def _total_changed(self) -> None:
+        if self.split is not None:
+            self.split.refresh()
+
+    def _split_changed(self) -> None:
+        self.error.visible = False
+
+    def _payment_date(self) -> date:
+        try:
+            return parse_date(self.date.value)
+        except ValueError:
+            return date.today()
+
+    def _escrow_estimate(self, total_cents: int) -> int | None:
+        return escrow_from_amortization(
+            total_cents,
+            self.summary.balance_cents,
+            self.summary.apr_bps,
+            self.summary.maturity_date,
+            self._payment_date(),
+            pi_payment_cents=self.summary.pi_payment_cents,
         )
 
     def open(self) -> None:
@@ -879,6 +1031,9 @@ class DebtPaymentDialog:
         self.date.error = None
         self.funding.error_text = None
         self.error.visible = False
+        if self.split is not None:
+            self.split.interest_category.error_text = None
+            self.split.escrow_category.error_text = None
         valid = True
         try:
             amount = parse_money(self.amount.value)
@@ -899,25 +1054,62 @@ class DebtPaymentDialog:
             return
 
         debt = self.summary.debt
-        category_id = (
-            int(self.category.value)
-            if debt.account_id is None and self.category.value
-            else None
-        )
-        try:
-            self.ctx.service.record_debt_payment(
-                debt.id,
-                int(self.funding.value),
-                amount,
-                on_date,
-                category_id,
-                (self.note.value or "").strip(),
+        note = (self.note.value or "").strip()
+        if self.split is not None:
+            try:
+                interest, escrow, extra = self.split.amounts(amount)
+            except ValueError as exc:
+                self.error.value = str(exc)
+                self.error.visible = True
+                self.ctx.page.update()
+                return
+            interest_category, escrow_category = self.split.category_ids()
+            if interest and interest_category is None:
+                self.split.interest_category.error_text = "Choose a category"
+                self.ctx.page.update()
+                return
+            if escrow and escrow_category is None:
+                self.split.escrow_category.error_text = "Choose a category"
+                self.ctx.page.update()
+                return
+            try:
+                self.ctx.service.record_loan_payment(
+                    debt.id,
+                    int(self.funding.value),
+                    amount,
+                    interest,
+                    escrow,
+                    on_date,
+                    interest_category,
+                    escrow_category,
+                    note,
+                    extra_principal_cents=extra,
+                )
+            except RepositoryError as exc:
+                self.error.value = str(exc)
+                self.error.visible = True
+                self.ctx.page.update()
+                return
+        else:
+            category_id = (
+                int(self.category.value)
+                if debt.account_id is None and self.category.value
+                else None
             )
-        except RepositoryError as exc:
-            self.error.value = str(exc)
-            self.error.visible = True
-            self.ctx.page.update()
-            return
+            try:
+                self.ctx.service.record_debt_payment(
+                    debt.id,
+                    int(self.funding.value),
+                    amount,
+                    on_date,
+                    category_id,
+                    note,
+                )
+            except RepositoryError as exc:
+                self.error.value = str(exc)
+                self.error.visible = True
+                self.ctx.page.update()
+                return
         self.ctx.page.pop_dialog()
         self.ctx.notify(f"Payment of {format_money(amount)} recorded for '{debt.name}'")
         self.ctx.data_changed()
@@ -955,7 +1147,9 @@ class DebtHistoryDialog:
         ]
         if debt.account_id is not None:
             body.append(ft.Text(
-                "Payments made outside the Log payment dialog still change the balance but are not listed here.",
+                "Only the principal portion is listed here. Interest and escrow are recorded as "
+                "separate expense transactions, and payments made outside this dialog still "
+                "change the balance but are not listed here.",
                 size=fs(12),
                 color=ft.Colors.ON_SURFACE_VARIANT,
             ))

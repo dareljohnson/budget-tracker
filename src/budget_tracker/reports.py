@@ -674,6 +674,12 @@ class ReportService:
                         summary.debt,
                         summary.balance_cents,
                         summary.effective_minimum_cents,
+                        minimum_after_cents=summary.minimum_after_cents,
+                        minimum_after_month=(
+                            month_key(summary.minimum_after_date)
+                            if summary.minimum_after_date is not None
+                            else None
+                        ),
                     )
                 ],
                 extra_cents=0,

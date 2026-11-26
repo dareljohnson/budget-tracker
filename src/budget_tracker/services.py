@@ -188,6 +188,8 @@ class DebtSummary:
     property_value_cents: int | None = None
     maturity_date: date | None = None
     pi_payment_cents: int | None = None
+    minimum_after_cents: int | None = None
+    minimum_after_date: date | None = None
 
     @property
     def property_equity_cents(self) -> int | None:
@@ -1025,6 +1027,8 @@ class BudgetService:
         property_account_id: int | None = None,
         maturity_date: date | None = None,
         pi_payment_cents: int | None = None,
+        minimum_after_cents: int | None = None,
+        minimum_after_date: date | None = None,
         debt_id: int | None = None,
     ) -> None:
         name = (name or "").strip()
@@ -1044,6 +1048,10 @@ class BudgetService:
             raise RepositoryError("Original balance cannot be negative")
         if pi_payment_cents is not None and pi_payment_cents <= 0:
             raise RepositoryError("Principal and interest payment must be greater than zero")
+        if (minimum_after_cents is None) != (minimum_after_date is None):
+            raise RepositoryError("Set both the later minimum and the date it starts")
+        if minimum_after_cents is not None and minimum_after_cents <= 0:
+            raise RepositoryError("The later minimum must be greater than zero")
         if account_id is not None:
             account = self.repo.get_account(account_id)
             if account is None or not account.kind.is_liability:
@@ -1128,6 +1136,8 @@ class BudgetService:
             property_value_cents=property_value,
             maturity_date=debt.maturity_date,
             pi_payment_cents=debt.pi_payment_cents,
+            minimum_after_cents=debt.minimum_after_cents,
+            minimum_after_date=debt.minimum_after_date,
         )
 
     def list_debt_summaries(self, *, as_of: date | None = None) -> list[DebtSummary]:
@@ -1146,19 +1156,24 @@ class BudgetService:
         property_account_id: int | None = None,
         maturity_date: date | None = None,
         pi_payment_cents: int | None = None,
+        minimum_after_cents: int | None = None,
+        minimum_after_date: date | None = None,
     ) -> Debt:
         balance = self._card_owed(account_id) if account_id is not None else balance_cents
         self._validate_debt_record(name, kind, balance, apr_bps, minimum_cents,
                                    original_balance_cents, account_id,
                                    property_account_id=property_account_id,
                                    maturity_date=maturity_date,
-                                   pi_payment_cents=pi_payment_cents)
+                                   pi_payment_cents=pi_payment_cents,
+                                   minimum_after_cents=minimum_after_cents,
+                                   minimum_after_date=minimum_after_date)
         apr_bps = self._linked_apr(account_id, apr_bps)
         return self.repo.add_debt(Debt(
             name=name.strip(), kind=kind, balance_cents=balance, apr_bps=apr_bps,
             minimum_cents=minimum_cents, original_balance_cents=original_balance_cents,
             account_id=account_id, property_account_id=property_account_id,
             maturity_date=maturity_date, pi_payment_cents=pi_payment_cents,
+            minimum_after_cents=minimum_after_cents, minimum_after_date=minimum_after_date,
         ))
 
     def update_debt(
@@ -1175,6 +1190,8 @@ class BudgetService:
         property_account_id: int | None = None,
         maturity_date: date | None = None,
         pi_payment_cents: int | None = None,
+        minimum_after_cents: int | None = None,
+        minimum_after_date: date | None = None,
     ) -> None:
         existing = self.repo.get_debt(debt_id)
         if existing is None:
@@ -1189,7 +1206,9 @@ class BudgetService:
                                    original_balance_cents, account_id,
                                    property_account_id=property_account_id,
                                    maturity_date=maturity_date,
-                                   pi_payment_cents=pi_payment_cents, debt_id=debt_id)
+                                   pi_payment_cents=pi_payment_cents,
+                                   minimum_after_cents=minimum_after_cents,
+                                   minimum_after_date=minimum_after_date, debt_id=debt_id)
         apr_bps = self._linked_apr(account_id, apr_bps)
         if existing.account_id is None and account_id is not None:
             # Pre-link payments are superseded by the card's live balance snapshot.
@@ -1203,6 +1222,7 @@ class BudgetService:
             minimum_cents=minimum_cents, original_balance_cents=original_balance_cents,
             account_id=account_id, property_account_id=property_account_id,
             maturity_date=maturity_date, pi_payment_cents=pi_payment_cents,
+            minimum_after_cents=minimum_after_cents, minimum_after_date=minimum_after_date,
         ))
 
     def delete_debt(self, debt_id: int) -> None:
@@ -1372,7 +1392,17 @@ class BudgetService:
         if extra_cents < 0:
             raise RepositoryError("Extra payment cannot be negative")
         inputs = [
-            DebtInput(summary.debt, summary.balance_cents, summary.effective_minimum_cents)
+            DebtInput(
+                summary.debt,
+                summary.balance_cents,
+                summary.effective_minimum_cents,
+                minimum_after_cents=summary.minimum_after_cents,
+                minimum_after_month=(
+                    month_key(summary.minimum_after_date)
+                    if summary.minimum_after_date is not None
+                    else None
+                ),
+            )
             for summary in self.list_debt_summaries(as_of=as_of)
             if summary.balance_cents > 0
         ]
@@ -1410,12 +1440,25 @@ class BudgetService:
     ) -> dict[int, int]:
         """The plan's first-month extra for each debt, including the roll-over split."""
         inputs = [
-            DebtInput(summary.debt, summary.balance_cents, summary.effective_minimum_cents)
+            DebtInput(
+                summary.debt,
+                summary.balance_cents,
+                summary.effective_minimum_cents,
+                minimum_after_cents=summary.minimum_after_cents,
+                minimum_after_month=(
+                    month_key(summary.minimum_after_date)
+                    if summary.minimum_after_date is not None
+                    else None
+                ),
+            )
             for summary in self.list_debt_summaries(as_of=as_of)
             if summary.balance_cents > 0
         ]
         return next_month_extra_allocation(
-            inputs, extra_cents=extra_cents, strategy=strategy
+            inputs,
+            extra_cents=extra_cents,
+            strategy=strategy,
+            start_month=self.current_month(as_of),
         )
 
     def debt_extra_comparison(

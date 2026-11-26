@@ -1526,6 +1526,68 @@ class TestEditors(unittest.TestCase):
         dialog = MarkPaidDialog(self.ctx, bill)
         self.assertEqual(dialog.split.interest.value, "304.17")
 
+    def test_bill_editor_saves_a_temporary_amount_step(self):
+        from budget_tracker.models import TransactionType
+        from budget_tracker.ui.views.bills import BillEditor
+
+        category = next(c for c in self.repo.list_categories() if c.type is TransactionType.EXPENSE)
+        editor = BillEditor(self.ctx, None)
+        editor.name.value = "Rent"
+        editor.amount.value = "1000.00"
+        editor.category.value = str(category.id)
+        editor.reduced_until.value = "2028-12-31"
+        editor.amount_after.value = "1200.00"
+        editor._save(None)
+        bill = next(b for b in self.repo.list_bills() if b.name == "Rent")
+        self.assertEqual(
+            (bill.amount_cents, bill.amount_after_cents, bill.reduced_until),
+            (100_000, 120_000, date(2028, 12, 31)),
+        )
+
+    def test_debt_editor_saves_a_later_minimum(self):
+        from budget_tracker.models import Account, AccountKind, DebtKind
+        from budget_tracker.ui.views.debts import DebtEditor
+
+        loan = self.repo.add_account(Account("Mortgage", AccountKind.LOAN, -10_000_000))
+        debt = self.ctx.service.create_debt(
+            "Mortgage", DebtKind.MORTGAGE, 0, 365, 50_000, account_id=loan.id
+        )
+        editor = DebtEditor(self.ctx, debt)
+        editor.minimum_after.value = "756.18"
+        editor.minimum_after_date.value = "2029-01-01"
+        editor._save(None)
+        saved = self.repo.get_debt(debt.id)
+        self.assertEqual(
+            (saved.minimum_after_cents, saved.minimum_after_date),
+            (75_618, date(2029, 1, 1)),
+        )
+
+    def test_loan_payment_prefills_the_bill_total_not_the_minimum(self):
+        from budget_tracker.models import (
+            Account,
+            AccountKind,
+            Bill,
+            BillFrequency,
+            DebtKind,
+        )
+        from budget_tracker.ui.views.debts import DebtPaymentDialog
+
+        loan = self.repo.add_account(Account("Mortgage", AccountKind.LOAN, -10_000_000))
+        debt = self.ctx.service.create_debt(
+            "Mortgage", DebtKind.MORTGAGE, 0, 365, 50_000, account_id=loan.id
+        )
+        self.repo.add_bill(Bill(
+            "Mortgage - Chase",
+            105_549,
+            BillFrequency.MONTHLY,
+            date(2026, 11, 1),
+            self.accts["Checking"].id,
+            pay_to_account_id=loan.id,
+            anchor_day=1,
+        ))
+        dialog = DebtPaymentDialog(self.ctx, self.ctx.service.debt_summary(debt.id))
+        self.assertEqual(dialog.amount.value, "1055.49")
+
     def test_debts_view_splits_the_extra_across_accounts(self):
         from budget_tracker.debt_planner import DebtStrategy
         from budget_tracker.models import DebtKind

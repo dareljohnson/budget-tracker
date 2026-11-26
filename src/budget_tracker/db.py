@@ -359,6 +359,15 @@ MIGRATIONS: list[str] = [
     ALTER TABLE debts ADD COLUMN maturity_date TEXT;
     ALTER TABLE debts ADD COLUMN pi_payment_cents INTEGER;
     """,
+    # v17: temporary payment steps. A bill can carry a reduced amount until a date and a later
+    # amount; a debt can carry a later minimum from a date. This models a temporary mortgage
+    # reduction that reverts to the normal payment.
+    """
+    ALTER TABLE bills ADD COLUMN amount_after_cents INTEGER;
+    ALTER TABLE bills ADD COLUMN reduced_until TEXT;
+    ALTER TABLE debts ADD COLUMN minimum_after_cents INTEGER;
+    ALTER TABLE debts ADD COLUMN minimum_after_date TEXT;
+    """,
 ]
 
 FOREIGN_KEYS_OFF_MIGRATIONS = {8, 14}

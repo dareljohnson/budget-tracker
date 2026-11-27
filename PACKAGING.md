@@ -122,6 +122,8 @@ need different dependency pins because newer releases of some native packages ar
   Intel build.
 
 Build with `MACOS_ARCH=arm64` (the default) or `MACOS_ARCH=x86_64`; each produces its own `.dmg`.
+The Intel build also disables Flutter's Impeller renderer (`--no-impeller`) because Impeller has
+known text-corruption and flickering bugs on Intel Macs; it renders with Skia instead.
 
 All of them are normal runtime dependencies in `pyproject.toml`, so `flet build` bundles them
 automatically. Receipt capture reuses this same stack, so it needs no new dependency. Expect the OCR

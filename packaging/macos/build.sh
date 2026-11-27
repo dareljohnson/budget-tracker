@@ -36,8 +36,13 @@ fi
 
 FLET="$ROOT/.venv/bin/flet"; [[ -x "$FLET" ]] || FLET=flet
 if [[ "${1:-}" != "--skip-build" ]]; then
-  # --no-compile-packages keeps cv2/config.py; compiling it to .pyc breaks the OCR import.
-  "$FLET" build macos --arch "$ARCH" --python-version 3.13 --no-compile-packages --yes --no-rich-output
+  flet_args=(build macos --arch "$ARCH" --python-version 3.13 --no-compile-packages --yes --no-rich-output)
+  # Flutter's Impeller renderer corrupts and smears text on Intel Macs. Use
+  # Skia there; the Apple Silicon build keeps Impeller.
+  if [[ "$ARCH" == "x86_64" ]]; then
+    flet_args+=(--no-impeller)
+  fi
+  "$FLET" "${flet_args[@]}"
 fi
 [[ -d "$APP" ]] || { echo "$APP not found" >&2; exit 1; }
 

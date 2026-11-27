@@ -33,10 +33,20 @@ jobs:
         include:
           - os: windows-latest
             script: pwsh -File packaging/windows/build.ps1
+            artifact: installers-Windows
+            arch: ""
           - os: macos-latest
             script: bash packaging/macos/build.sh
+            artifact: installers-macOS
+            arch: arm64
+          - os: macos-latest
+            script: bash packaging/macos/build.sh
+            artifact: installers-macOS-Intel
+            arch: x86_64
           - os: ubuntu-24.04
             script: bash packaging/linux/build.sh
+            artifact: installers-Linux
+            arch: ""
     runs-on: ${{ matrix.os }}
     env:
       PYTHONUTF8: "1"
@@ -68,11 +78,13 @@ jobs:
           if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
 
       - name: Build
+        env:
+          MACOS_ARCH: ${{ matrix.arch }}
         run: ${{ matrix.script }}
 
       - uses: actions/upload-artifact@v4
         with:
-          name: installers-${{ runner.os }}
+          name: ${{ matrix.artifact }}
           path: build/installer/*
           if-no-files-found: error
 

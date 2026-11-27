@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 # Build the standalone macOS app (flet build macos) and package it as a drag-to-install .dmg.
 #
-# Output: build/macos/Budget Tracker.app and build/installer/BudgetTracker-<ver>-macos-arm64.dmg
-# The packaged app is Apple Silicon (arm64) only: upstream cryptography 47+ and
-# onnxruntime 1.31+ no longer publish x86_64 macOS wheels, so a universal build
-# cannot install its Intel slice without compiling those dependencies.
+# Output: build/macos/Budget Tracker.app and
+#         build/installer/BudgetTracker-<ver>-macos-<arch>.dmg
+#
+# Set MACOS_ARCH=arm64 (the default) for Apple Silicon or MACOS_ARCH=x86_64 for
+# Intel Macs. The Intel build uses packaging/macos/constraints-intel.txt because
+# the newest cryptography, ONNX Runtime and OpenCV releases no longer support
+# current Intel macOS releases.
 #
 # Prerequisites: Xcode (from the App Store) + `sudo xcode-select -s /Applications/Xcode.app`, and CocoaPods
 # (`brew install cocoapods`). Flutter is downloaded automatically by flet on first build.
@@ -16,14 +19,25 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
+ARCH="${MACOS_ARCH:-arm64}"
+case "$ARCH" in
+  arm64|x86_64) ;;
+  *) echo "MACOS_ARCH must be arm64 or x86_64 (got '$ARCH')" >&2; exit 1 ;;
+esac
 VERSION="$(sed -nE 's/^version *= *"([^"]+)"/\1/p' pyproject.toml | head -1)"
 APP="build/macos/Budget Tracker.app"
-DMG="build/installer/BudgetTracker-$VERSION-macos-arm64.dmg"
+DMG="build/installer/BudgetTracker-$VERSION-macos-$ARCH.dmg"
+
+# serious_python runs pip in a subprocess and passes the parent environment
+# through, so PIP_CONSTRAINT applies the Intel wheel pins to flet's package step.
+if [[ "$ARCH" == "x86_64" ]]; then
+  export PIP_CONSTRAINT="$ROOT/packaging/macos/constraints-intel.txt"
+fi
 
 FLET="$ROOT/.venv/bin/flet"; [[ -x "$FLET" ]] || FLET=flet
 if [[ "${1:-}" != "--skip-build" ]]; then
   # --no-compile-packages keeps cv2/config.py; compiling it to .pyc breaks the OCR import.
-  "$FLET" build macos --arch arm64 --python-version 3.13 --no-compile-packages --yes --no-rich-output
+  "$FLET" build macos --arch "$ARCH" --python-version 3.13 --no-compile-packages --yes --no-rich-output
 fi
 [[ -d "$APP" ]] || { echo "$APP not found" >&2; exit 1; }
 

@@ -1,0 +1,14 @@
+# Pins for the Intel (x86_64) macOS build. Applied through PIP_CONSTRAINT by
+# packaging/macos/build.sh, so the Apple Silicon build keeps current releases.
+# pdfminer.six requires cryptography>=36, and RapidOCR accepts these versions.
+
+# cryptography 49+ publishes arm64-only macOS wheels. 48.0.1 is universal2.
+cryptography<49
+
+# ONNX Runtime 1.24+ publishes arm64-only macOS wheels. 1.23.2 is the last
+# release with an x86_64 wheel (macOS 13+).
+onnxruntime==1.23.2
+
+# OpenCV 5.0's Intel wheel requires macOS 14 and 5.1's requires macOS 15.
+# 4.12.0.88 supports macOS 13+ on Intel, covering Sonoma.
+opencv-python==4.12.0.88

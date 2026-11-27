@@ -41,6 +41,25 @@ if [[ "${1:-}" != "--skip-build" ]]; then
 fi
 [[ -d "$APP" ]] || { echo "$APP not found" >&2; exit 1; }
 
+# Catch a mixed-architecture bundle before it becomes a download that dies at
+# startup with "mach-o file, but is an incompatible architecture".
+verify_arch() {
+  local file="$1" archs
+  archs="$(lipo -archs "$file" 2>/dev/null || true)"
+  if [[ " $archs " != *" $ARCH "* ]]; then
+    echo "Architecture mismatch: $file contains '${archs:-not a Mach-O file}', expected $ARCH" >&2
+    exit 1
+  fi
+}
+
+APP_EXE="$APP/Contents/MacOS/Budget Tracker"
+[[ -f "$APP_EXE" ]] || APP_EXE="$(find "$APP/Contents/MacOS" -maxdepth 1 -type f -perm -111 -print -quit)"
+[[ -n "$APP_EXE" ]] || { echo "Could not find the app executable" >&2; exit 1; }
+verify_arch "$APP_EXE"
+while IFS= read -r -d '' native; do
+  verify_arch "$native"
+done < <(find "$APP" -type f \( -name '*.so' -o -name '*.dylib' \) -print0)
+
 if [[ -n "${MACOS_SIGN_IDENTITY:-}" ]]; then
   # Keep the entitlements flet build applied (JIT / unsigned memory are required by the Python runtime).
   codesign --force --deep --options runtime --timestamp --preserve-metadata=entitlements \

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "budget-tracker"
-version = "1.29.0"
+version = "1.29.1"
 description = "A personal budget tracker desktop app built with Flet and SQLite"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -15,8 +15,9 @@ dependencies = [
     "fpdf2>=2.7,<3",
     "pdfplumber>=0.11,<1",
     # Local OCR: RapidOCR on ONNX Runtime, plus PDF rasterisation and image loading.
-    # ONNX Runtime 1.23 is the newest series with an x86_64 macOS wheel; flet builds a
-    # universal macOS app, so a higher floor breaks the Intel slice. RapidOCR needs >=1.7.
+    # ONNX Runtime 1.23 is the newest series with an x86_64 macOS wheel; the Intel
+    # macOS build pins it (and cryptography/OpenCV) in packaging/macos/constraints-intel.txt.
+    # RapidOCR needs >=1.7.
     "rapidocr-onnxruntime==1.2.3",
     "onnxruntime>=1.23,<2",
     "Pillow>=13,<14",

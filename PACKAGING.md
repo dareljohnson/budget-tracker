@@ -9,8 +9,8 @@ user needs nothing else installed.
 | Option | Windows 11 | macOS | Linux | Needs Python on the user's PC? |
 |---|---|---|---|---|
 | **Launcher** (run from source) | Start menu + desktop shortcut | `~/Applications/Budget Tracker.app` | App-menu `.desktop` entry | Yes (the project's `.venv`) |
-| **Native build** (`flet build`) | `BudgetTracker.exe` folder → Inno Setup `setup.exe` + portable `.zip` | `Budget Tracker.app` → `.dmg` | Bundle → `.tar.gz` (+ `.AppImage`) | No, Python is bundled |
-| **CI build** (GitHub Actions) | All three, built automatically for pull requests into `main` | | | No |
+| **Native build** (`flet build`) | `BudgetTracker.exe` folder → Inno Setup `setup.exe` + portable `.zip` | `Budget Tracker.app` → `.dmg` (Apple Silicon or Intel) | Bundle → `.tar.gz` (+ `.AppImage`) | No, Python is bundled |
+| **CI build** (GitHub Actions) | All platforms and both Mac architectures, built automatically for pull requests into `main` | | | No |
 
 **Each platform must be built on that platform** (or on a CI runner for it): Windows on Windows, macOS on a Mac,
 Linux on Linux or WSL. This is a Flutter restriction; `flet build` uses Flutter under the hood.
@@ -112,11 +112,16 @@ Statement import runs entirely locally and uses these runtime dependencies:
 - **RapidOCR (`rapidocr-onnxruntime`) on ONNX Runtime (`onnxruntime`)** — the bundled OCR engine for
   scans, photos, and PDFs with no usable text layer.
 
-The packaged macOS build is **Apple Silicon (arm64) only**. Upstream `cryptography` 47+ and
-`onnxruntime` 1.31+ no longer publish x86_64 macOS wheels, so a universal build cannot install its
-Intel slice without compiling those dependencies. `packaging/macos/build.sh` builds the arm64 slice
-with `--arch arm64`; `onnxruntime` keeps a `>=1.23` floor, which pip resolves to the latest release on
-Apple Silicon.
+The macOS app is built separately for **Apple Silicon (arm64)** and **Intel (x86_64)**. The architectures
+need different dependency pins because newer releases of some native packages are Apple-Silicon-only:
+
+- **Apple Silicon:** current `cryptography` and `onnxruntime` releases.
+- **Intel:** `packaging/macos/constraints-intel.txt` pins `cryptography` 48 (the newest universal2
+  release), `onnxruntime` 1.23.2 (the newest x86_64 release), and OpenCV 4.12 (OpenCV 5.x requires a
+  newer macOS than Sonoma). The pins are applied through `PIP_CONSTRAINT`, so they affect only the
+  Intel build.
+
+Build with `MACOS_ARCH=arm64` (the default) or `MACOS_ARCH=x86_64`; each produces its own `.dmg`.
 
 All of them are normal runtime dependencies in `pyproject.toml`, so `flet build` bundles them
 automatically. Receipt capture reuses this same stack, so it needs no new dependency. Expect the OCR
@@ -176,12 +181,20 @@ CocoaPods (`brew install cocoapods`).
 
 **Build**
 ```bash
+# Apple Silicon (default)
 bash packaging/macos/build.sh
+
+# Intel
+MACOS_ARCH=x86_64 bash packaging/macos/build.sh
 ```
 
-**Output:** `build/installer/BudgetTracker-<version>-macos-arm64.dmg`. The user opens it and drags *Budget Tracker* to
-*Applications*. The packaged app runs on Apple Silicon Macs; no Intel build is produced (see
-[Runtime dependencies](#runtime-dependencies)).
+**Output** (`build/installer/`):
+- `BudgetTracker-<version>-macos-arm64.dmg` for Apple Silicon Macs.
+- `BudgetTracker-<version>-macos-x86_64.dmg` for Intel Macs.
+
+The user opens the matching disk image and drags *Budget Tracker* to *Applications*. The Intel build
+uses the dependency pins described in [Runtime dependencies](#runtime-dependencies) and supports
+macOS 13 and newer, including Sonoma.
 
 **Signing and notarization.** Without them, Gatekeeper blocks the first launch and the user must right-click and
 choose *Open*. With an Apple Developer ID, set these before building:
@@ -232,10 +245,10 @@ Installers are built by `.github/workflows/build-installers.yml`, and only for p
 Don't build release installers locally.
 
 1. Push a branch and open a pull request into `main`.
-2. The **Build installers** run starts automatically. It runs the tests, then builds on `windows-latest`,
-   `macos-latest` and `ubuntu-24.04` in parallel.
+2. The **Build installers** run starts automatically. It runs the tests, then builds Windows, Linux,
+   Apple Silicon macOS and Intel macOS in parallel.
 3. Open the run from the pull request's **Checks** tab, then download `installers-Windows`,
-   `installers-macOS` and/or `installers-Linux` from **Artifacts**.
+   `installers-macOS`, `installers-macOS-Intel` and/or `installers-Linux` from **Artifacts**.
 
 There is no manual **Run workflow** button and no tag-triggered release. Each new pull request run replaces
 the previous run's artifacts for that PR.
@@ -339,10 +352,11 @@ packaging/
   windows/installer.iss              Inno Setup script
   windows/budget_tracker.ico         shortcut icon
   macos/make_launcher_app.sh         ~/Applications launcher .app
-  macos/build.sh                     flet build macos → .dmg (optional sign + notarize)
+  macos/build.sh                     flet build macos → arm64 or x86_64 .dmg (optional sign + notarize)
+  macos/constraints-intel.txt        Intel-only dependency pins for the macOS build
   linux/install_launcher.sh          app-menu launcher
   linux/build.sh                     flet build linux → .tar.gz (+ AppImage)
   linux/install-bundle.sh            install.sh shipped inside the tarball
   linux/budget_tracker.png           launcher icon
-.github/workflows/build-installers.yml  CI builds for all three platforms
+.github/workflows/build-installers.yml  CI builds for Windows, Linux, and both Mac architectures
 ```
